@@ -42,6 +42,7 @@ class BurgersSystem:
         assert 2 * freq_span <= n_space_grid
         # Configure constants
         self.nu = 0.2
+        self.xs = jnp.arange(n_space_grid) * (2 * jnp.pi / n_space_grid)
         self._wave_numbers = jnp.array(range(-freq_span, freq_span), dtype=jnp.int32)
         self._wave_nums_corresp = _brute_force_compute_wave_num_corresp(self._wave_numbers)
         self._dealias_selector = jnp.abs(self._wave_numbers) > (1 * freq_span / 3)
