@@ -41,7 +41,7 @@ class BurgersSystem:
     def __init__(self, nu=0.2, n_space_grid=1024, freq_span=512):
         assert 2 * freq_span <= n_space_grid
         # Configure constants
-        self.nu = 0.2
+        self.nu = nu
         self.xs = jnp.arange(n_space_grid) * (2 * jnp.pi / n_space_grid)
         self._wave_numbers = jnp.array(range(-freq_span, freq_span), dtype=jnp.int32)
         self._wave_nums_corresp = _brute_force_compute_wave_num_corresp(self._wave_numbers)
