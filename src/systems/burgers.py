@@ -15,7 +15,7 @@ def _brute_force_compute_wave_num_corresp(wave_numbers):
     wn_idx = {wn: i for i, wn in enumerate(wave_numbers)}
     corresp = [[] for _ in wave_numbers]
     # Find correspondences
-    for (ai, wa), (bi, wb) in itertools.combinations_with_replacement(enumerate(wave_numbers), 2):
+    for (ai, wa), (bi, wb) in itertools.product(enumerate(wave_numbers), repeat=2):
         if wa + wb in wn_idx:
             idx = wn_idx[wa + wb]
             corresp[idx].append((ai, bi))
@@ -45,7 +45,7 @@ class BurgersSystem:
         self.xs = jnp.arange(n_space_grid) * (2 * jnp.pi / n_space_grid)
         self._wave_numbers = jnp.array(range(-freq_span, freq_span), dtype=jnp.int32)
         self._wave_nums_corresp = _brute_force_compute_wave_num_corresp(self._wave_numbers)
-        self._dealias_selector = jnp.abs(self._wave_numbers) > (1 * freq_span / 3)
+        # self._dealias_selector = jnp.abs(self._wave_numbers) > (freq_span / 6)
 
         # Produce free functions
         @attach_to_object(self)
@@ -62,10 +62,11 @@ class BurgersSystem:
             indexing_freqs = jnp.pad(x, (0, 1))
             sub_term = (jnp.take(indexing_freqs, self._wave_nums_corresp[0], axis=0)
                         * jnp.take(indexing_freqs, self._wave_nums_corresp[1], axis=0))
-            term_2 = (-1j * self._wave_numbers) * jnp.sum(sub_term, axis=1)
+            term_2 = (-1j * self._wave_numbers / 2) * jnp.sum(sub_term, axis=1)
             return term_1 + term_2
 
         @attach_to_object(self)
         def step_postprocess(x):
-            x = x.at[self._dealias_selector].set(0)
+            # if freq_span >= 256:
+            #     x = x.at[self._dealias_selector].set(0)
             return x
