@@ -9,6 +9,7 @@ dependencies:
   - scipy
   - matplotlib-base
   - jupyterlab
+  - tqdm
   - git
   - pip
   - pip:
