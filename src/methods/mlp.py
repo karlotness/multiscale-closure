@@ -1,4 +1,4 @@
-from typing import Sequence
+from collections.abc import Sequence
 import jax.numpy as jnp
 import flax.linen as nn
 from ._defs import ACTIVATIONS
