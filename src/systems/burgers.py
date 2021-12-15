@@ -45,7 +45,6 @@ class BurgersSystem:
         self.xs = jnp.arange(n_space_grid) * (2 * jnp.pi / n_space_grid)
         self._wave_numbers = jnp.array(range(-freq_span, freq_span), dtype=jnp.int32)
         self._wave_nums_corresp = _brute_force_compute_wave_num_corresp(self._wave_numbers)
-        # self._dealias_selector = jnp.abs(self._wave_numbers) > (freq_span / 6)
 
         # Produce free functions
         @attach_to_object(self)
@@ -67,6 +66,4 @@ class BurgersSystem:
 
         @attach_to_object(self)
         def step_postprocess(x):
-            # if freq_span >= 256:
-            #     x = x.at[self._dealias_selector].set(0)
             return x
