@@ -4,7 +4,7 @@ channels:
   - nvidia
 dependencies:
   - python=3.9
-  - cudatoolkit>=11.1,<12
+  - cudatoolkit=11.4
   - numpy
   - scipy
   - matplotlib-base
@@ -13,6 +13,6 @@ dependencies:
   - pip
   - pip:
     - '--find-links=https://storage.googleapis.com/jax-releases/jax_releases.html'
-    - 'jax[cuda111]'
+    - 'jax[cuda]'
     - 'flax'
     - 'optax'
