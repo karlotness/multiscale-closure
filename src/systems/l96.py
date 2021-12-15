@@ -30,6 +30,10 @@ class MultiscaleL96System:
         attach_to_object(self)(step_postprocess)
 
         @attach_to_object(self)
+        def snapshot_to_small(x):
+            return x[0]
+
+        @attach_to_object(self)
         def time_derivative(x):
             assert x.shape[-1] > 3
             state_x = x[0]
