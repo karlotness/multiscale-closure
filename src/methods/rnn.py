@@ -8,6 +8,7 @@ from .cnn import CNN
 class RNN(nn.Module):
     cells: Sequence[nn.Module]
 
+    @nn.nowrap
     def initial_state(self, x):
         # Stack initial states for modules
         states = [c.initial_state(x) for c in self.cells]
@@ -30,6 +31,7 @@ class ConvLSTMCell(nn.Module):
     recurrent_activation: str = "hard_sigmoid"
     bias: bool = True
 
+    @nn.nowrap
     def initial_state(self, x):
         # Return (hidden, carry)
         hidden_shape = list(x.shape)
