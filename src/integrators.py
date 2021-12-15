@@ -1,4 +1,5 @@
 import jax
+import jax.numpy as jnp
 
 
 def euler_step(x, dt, time_deriv_func, postprocess_func=None):
@@ -41,10 +42,15 @@ def make_integrator(integrator, time_deriv_func, postprocess_func=None):
         integrator_func = INTEGRATORS[integrator]
     except KeyError as e:
         raise ValueError(f"Unknown integrator: {integrator}") from e
-    def integrate(x0, dt, num_steps):
+    def integrate(x0, dt, num_steps, subsample=1):
+        assert isinstance(subsample, int)
+        effective_dt = dt / subsample
         def step_function(step, _):
-            new_step = integrator_func(step, dt, time_deriv_func, postprocess_func)
-            return new_step, new_step
+            def inner_step_function(step, _):
+                new_step = integrator_func(step, effective_dt, time_deriv_func, postprocess_func)
+                return new_step, None
+            last_inner_step, _ = jax.lax.scan(inner_step_function, init=step, xs=None, length=subsample)
+            return last_inner_step, last_inner_step
         _, further_steps = jax.lax.scan(step_function, init=x0, xs=None, length=num_steps)
-        return further_steps
+        return jnp.concatenate((jnp.expand_dims(x0, axis=0), further_steps), axis=0)
     return integrate
