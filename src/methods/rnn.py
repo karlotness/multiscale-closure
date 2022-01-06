@@ -9,9 +9,9 @@ class RNN(nn.Module):
     cells: Sequence[nn.Module]
 
     @nn.nowrap
-    def initial_state(self, x):
+    def initial_state(self, x, y):
         # Stack initial states for modules
-        states = [c.initial_state(x) for c in self.cells]
+        states = [c.initial_state(x, y) for c in self.cells]
         return states
 
     @nn.compact
@@ -23,6 +23,38 @@ class RNN(nn.Module):
         return x, new_hiddens
 
 
+class ConvInitRNN(RNN):
+    init_conv_net: nn.Module
+    final_conv_kernel_size: int = 5
+
+    def setup(self):
+        super().setup()
+        final_conv_features = sum(c.filters for c in self.cells)
+        kernel_size = (self.final_conv_kernel_size, self.final_conv_kernel_size)
+        self.final_conv = nn.Conv(features=final_conv_features, kernel_size=kernel_size, strides=1, padding="SAME", use_bias=True)
+
+    def initial_state(self, x, y):
+        base_states = super().initial_state(x, y)
+        # Replace first (hidden) components with learned values
+        learned_init = self.final_conv(self.init_conv_net(y))
+        learned_init = jnp.mean(learned_init, axis=0)
+        split_locations = []
+        acc = 0
+        for h, c in base_states:
+            acc += h.shape[-1]
+            split_locations.append(acc)
+        splits = jnp.split(learned_init, split_locations, axis=-1)
+        states = [(h, c) for (_h, c), h in zip(base_states, splits)]
+        return states
+
+    def __call__(self, x, hidden):
+        return super().__call__(x, hidden)
+
+    def _init_both(self, x, y):
+        hidden = self.initial_state(x, y)
+        return self(x, hidden)
+
+
 class ConvLSTMCell(nn.Module):
     # Implementation after shi15
     filters: int
@@ -32,7 +64,7 @@ class ConvLSTMCell(nn.Module):
     bias: bool = True
 
     @nn.nowrap
-    def initial_state(self, x):
+    def initial_state(self, x, y):
         # Return (hidden, carry)
         hidden_shape = list(x.shape)
         hidden_shape[-1] = self.filters
