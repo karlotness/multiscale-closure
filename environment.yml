@@ -7,8 +7,10 @@ dependencies:
   - cudatoolkit=11.5
   - numpy
   - scipy
+  - scikit-learn
   - matplotlib-base
   - jupyterlab
+  - ipywidgets
   - tqdm
   - git
   - pip
