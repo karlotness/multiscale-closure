@@ -177,21 +177,21 @@ class PseudoSpectralKernel:
         def set_a(state, new_a):
             return _update_state(state, a=b.astype(DTYPE_COMPLEX))
 
-        @attach_to_object
+        @attach_to_object(self)
         def set_Ubg(state, new_Ubg):
             return _update_state(state, Ubg=new_Ubg)
 
-        @attach_to_object
+        @attach_to_object(self)
         def set_Qy(state, new_Qy):
             _ikQy = 1j * (jnp.expand_dims(state.kk, 0) * jnp.expand_dims(new_Qy, -1))
             return _update_state(state, Qy=new_Qy, _ikQy=_ikQy)
 
-        @attach_to_object
+        @attach_to_object(self)
         def set_q(state, new_q):
             qh = fft_q_to_qh(new_q)
             return _update_state(state, q=new_q, qh=qh)
 
-        @attach_to_object
+        @attach_to_object(self)
         def set_qh(state, new_qh):
             q = ifft_qh_to_q(new_qh)
             return _update_state(state, qh=new_qh, q=q)
@@ -218,7 +218,10 @@ class PseudoSpectralKernel:
             dq = _empty_real()
             dqh = _empty_com()
 
-        return PseudoSpectralKernelState(
+        Ubg = jnp.zeros((self.nk,), dtype=DTYPE_REAL)
+        Qy = jnp.zeros((self.nk,), dtype=DTYPE_REAL)
+
+        new_state = PseudoSpectralKernelState(
             # State arrays
             a=jnp.zeros((self.nz, self.nz, self.nl, self.nk), dtype=DTYPE_COMPLEX),
             kk=jnp.zeros((self.nk,), dtype=DTYPE_REAL),
@@ -254,7 +257,14 @@ class PseudoSpectralKernel:
             dqhdt = _empty_com(),
             dqhdt_p = _empty_com(),
             dqdhdt_pp = _empty_com(),
+            # Other parameters
+            Ubg=Ubg,
+            Qy=Qy,
+            _ikQy=None,
         )
+        new_state = self.set_Ubg(new_state, Ubg)
+        new_state = self.set_Qy(new_state, Qy)
+        return new_state
 
     def _invert(self, state):
         # Set ph to zero (skip, recompute fresh from sum below)
