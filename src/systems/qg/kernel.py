@@ -76,7 +76,7 @@ def _update_state(old_state, **kwargs):
     for k, v in kwargs.items():
         old_val = getattr(old_state, k)
         if hasattr(old_val, "shape"):
-            assert old_val.shape == v.shape
+            assert old_val.shape == v.shape, f"Shape mismatch on {k}: {old_val.shape} vs {v.shape}"
     return dataclasses.replace(old_state, **kwargs)
 
 
@@ -106,6 +106,7 @@ class PseudoSpectralKernel:
         self.nx = nx
         self.nl = ny
         self.nk = (nx // 2) + 1
+        assert nx == ny
         self.has_q_param = has_q_param
         self.has_uv_param = has_uv_param
         # Friction
@@ -281,7 +282,7 @@ class PseudoSpectralKernel:
 
     def _do_advection(self, state):
         # multiply to get advective flux in space
-        uq = (state.u + jnp.expand_dims(state.Ubg, (-1, -2))) * state.q
+        uq = (state.u + jnp.expand_dims(state.Ubg[:self.nz], (-1, -2))) * state.q
         vq = state.v  * state.q
         # transform to get spectral advective flux
         uqh = fft_uq_to_uqh(uq)
@@ -289,7 +290,7 @@ class PseudoSpectralKernel:
         # spectral divergence
         dqhdt = -1 * (jnp.expand_dims(state._ik, (0, 1)) * uqh +
                       jnp.expand_dims(state._il, (0, -1)) * vqh +
-                      jnp.expand_dims(state._ikQy, 1) * state.ph)
+                      jnp.expand_dims(state._ikQy[:self.nz], 1) * state.ph)
         return _update_state(state, uq=uq, vq=vq, uqh=uqh, vqh=vqh, dqhdt=dqhdt)
 
     def _do_uv_subgrid_parameterization(self, state, du, dv):
