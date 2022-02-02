@@ -15,6 +15,7 @@ slurm-*.out
 *.pkl
 *.pickle
 *.json
+*.flaxnn
 
 # Ignore IPython notebooks
 *.ipynb
