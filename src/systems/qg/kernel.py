@@ -198,7 +198,7 @@ class PseudoSpectralKernel:
 
     def _create_initial_state(self):
         def _empty_real():
-            return jnp.zeros((self.nz, self.ny, self.ny), dtype=DTYPE_REAL)
+            return jnp.zeros((self.nz, self.ny, self.nx), dtype=DTYPE_REAL)
         def _empty_com():
             return jnp.zeros((self.nz, self.nl, self.nk), dtype=DTYPE_COMPLEX)
 
