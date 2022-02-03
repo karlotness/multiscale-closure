@@ -111,7 +111,7 @@ class PseudoSpectralKernel:
         self.has_uv_param = has_uv_param
         # Friction
         self.rek = rek
-        self.dt = dt
+        self.dt = float(dt)
         self.filtr = filtr
 
         @attach_to_object(self)
@@ -321,24 +321,15 @@ class PseudoSpectralKernel:
             return state
 
     def _forward_timestep(self, state):
-        if state.ablevel == 0:
-            # forward Euler
-            dt1 = self.dt
-            dt2 = 0
-            dt3 = 0
-            ablevel = 1
-        elif state.ablevel == 1:
-            # AB2 at step 2
-            dt1 = 1.5 * self.dt
-            dt2 = -0.5 * self.dt
-            dt3 = 0
-            ablevel = 2
-        else:
-            # AB3 from step 3 on
-            dt1 = (23 / 12) * self.dt
-            dt2 = (-16 / 12) * self.dt
-            dt3 = (5 / 12) * self.dt
-            ablevel = 2
+
+        ablevel, dt1, dt2, dt3 = jax.lax.switch(
+            state.ablevel,
+            [
+                lambda: (1, self.dt, 0.0, 0.0),
+                lambda: (2, 1.5 * self.dt, -0.5 * self.dt, 0.0),
+                lambda: (2, (23 / 12) * self.dt, (-16 / 12) * self.dt, (5 / 12) * self.dt),
+            ]
+        )
 
         qh_new = jnp.expand_dims(self.filtr, 0) * (
             state.qh +
