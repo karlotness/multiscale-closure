@@ -1,0 +1,130 @@
+import jax
+import jax.numpy as jnp
+from . import kernel
+from .kernel import DTYPE_REAL, DTYPE_COMPLEX, attach_to_object
+
+
+class Model(kernel.PseudoSpectralKernel):
+
+    def __init__(
+            self,
+            # grid size parameters
+            nz=1,
+            nx=64,
+            ny=None,
+            L=1e6,
+            W=None,
+            # timestepping parameters
+            dt=7200.0,
+            tmax=1576800000.0,
+            tavestart=315360000.0,
+            taveint=86400.,
+            # friction parameters
+            rek=5.787e-7,
+            filterfac=23.6,
+            # constants
+            f=None,
+            g=9.81,
+            q_parameterization=None,
+            uv_parameterization=None,
+    ):
+        if ny is None:
+            ny = nx
+        super().__init__(
+            nz=nz,
+            ny=ny,
+            nx=nx,
+            dt=dt,
+            filtr=None,
+            has_q_param=(q_parameterization is not None),
+            has_uv_param=(uv_parameterization is not None),
+            rek=rek,
+        )
+
+        if W is None:
+            W = L
+        self.L = L
+        self.W = W
+        self.tmax = tmax
+        self.tavestart = tavestart
+        self.taveint = taveint
+        self.filterfac = filterfac
+        self.g = g
+        if f:
+            self.f = f
+            self.f2 = f**2
+
+        self.q_parameterization = q_parameterization
+        self.uv_parameterization = uv_parameterization
+
+        # Initialize grid
+        self.x, self.y = jnp.meshgrid(
+            jnp.arange(0.5, self.nx, 1.0) / (self.nx * self.L),
+            jnp.arange(0.5, self.ny, 1.0) / (self.ny * self.W)
+        )
+        self.dk = 2 * jnp.pi / self.L
+        self.dl = 2 * jnp.pi / self.W
+
+        self.ll = self.dl * jnp.append(jnp.arange(0.0, self.nx / 2), jnp.arange(-self.nx / 2, 0.0))
+        self._il = 1j * self.ll
+        self._k2l2 = (jnp.expand_dims(self.kk, 0)**2) + (jnp.expand_dims(self.ll, -1)**2)
+
+        self.kk = self.dk * jnp.arange(0.0, self.nk)
+        self._ik = 1j * self.kk
+        self._k2l2 = (jnp.expand_dims(self.kk, 0)**2) + (jnp.expand_dims(self.ll, -1)**2)
+
+        self.k, self.l = jnp.meshgrid(self.kk, self.ll)
+        self.ik = 1j * self.k
+        self.il = 1j * self.l
+        self.dx = self.L / self.nx
+        self.dy = self.W / self.ny
+        self.M = self.nx * self.ny
+        self.wv2 = self.k**2 + self.l**2
+        self.wv = jnp.sqrt(self.wv2)
+        iwv2 = self.wv2 != 0.0
+        self.wv2i = jnp.where((self.wv2 != 0), jnp.power(self.wv2, -1), self.wv2)
+
+        # initialize_background
+        # NOT IMPLEMENTED
+
+        # initialize forcing
+        # NOT IMPLEMENTED
+
+        # initialize filter
+        cphi = 0.65 * jnp.pi
+        wvx = jnp.sqrt((self.k * self.dx)**2 + (self.l * self.dy)**2)
+        filtr = jnp.exp(-self.filterfac * (wvx - cphi)**4)
+        self.filtr = jnp.where(wvx <= cphi, 1, filtr)
+
+        # initialize time
+        self.taveints = jnp.ceil(self.taveint / self.dt)
+
+        # initialize inversion matrix
+        # NOT IMPLEMENTED
+
+        # initialize diagnostics
+        # SKIPPED
+
+        @attach_to_object(self)
+        def _spec_var(ph):
+            var_dens = 2 * jnp.abs(ph)**2 / self.M**2
+            var_dens = jnp.at[..., 0].set(var_dens[..., 0] / 2)
+            var_dens = jnp.at[..., -1].set(var_dens[..., -1] / 2)
+            return var_dens.sum()
+
+        @attach_to_object(self)
+        def do_external_forcing(state):
+            return state
+
+        @attach_to_object(self)
+        def _step_forward(state):
+            state = self.invert(state)
+            state = self.do_advection(state)
+            state = self.do_friction(state)
+            state = self.do_external_forcing(state)
+            if self.uv_parameterization is not None:
+                state = self.do_uv_subgrid_parameterization(state)
+            if self.q_parameterization is not None:
+                state = self.do_q_subgrid_parameterization(state)
+            state = self.forward_timestep(state)
+            return state
