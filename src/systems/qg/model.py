@@ -59,8 +59,8 @@ class Model(kernel.PseudoSpectralKernel):
 
         # Initialize grid
         self.x, self.y = jnp.meshgrid(
-            jnp.arange(0.5, self.nx, 1.0) / (self.nx * self.L),
-            jnp.arange(0.5, self.ny, 1.0) / (self.ny * self.W)
+            (jnp.arange(0.5, self.nx, 1.0) / self.nx) * self.L,
+            (jnp.arange(0.5, self.ny, 1.0) / self.ny) * self.W
         )
         self.dk = 2 * jnp.pi / self.L
         self.dl = 2 * jnp.pi / self.W

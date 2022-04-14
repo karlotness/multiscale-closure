@@ -52,7 +52,8 @@ class QGModel(model.Model):
         a = jnp.zeros((self.nz, self.nz, self.nl, self.nk), dtype=DTYPE_REAL)
         # inverse determinant
         det_inv = self.wv2 * (self.wv2 + self.F1 + self.F2)
-        det_inv = jnp.where((det_inv != 0), jnp.power(det_inv, -1), det_inv)
+        det_inv_mask = (det_inv != 0)
+        det_inv = jnp.where(det_inv_mask, det_inv**-1, 0)
         a = a.at[0, 0].set(-(self.wv2 + self.F2) * det_inv)
         a = a.at[0, 1].set(-self.F1 * det_inv)
         a = a.at[1, 0].set(-self.F2 * det_inv)
