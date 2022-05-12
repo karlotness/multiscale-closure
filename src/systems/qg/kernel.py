@@ -33,16 +33,11 @@ def register_dataclass_pytree(cls):
 class PseudoSpectralKernelState:
     # FFT inputs & outputs
     q: jnp.ndarray
-    qh: jnp.ndarray
     ph: jnp.ndarray
     u: jnp.ndarray
-    uh: jnp.ndarray
     v: jnp.ndarray
-    vh: jnp.ndarray
     uq: jnp.ndarray
-    uqh: jnp.ndarray
     vq: jnp.ndarray
-    vqh: jnp.ndarray
     # Time stuff
     t: float
     tc: int
@@ -51,6 +46,46 @@ class PseudoSpectralKernelState:
     dqhdt: jnp.ndarray
     dqhdt_p: jnp.ndarray
     dqhdt_pp: jnp.ndarray
+
+    @property
+    def qh(self):
+        return fft_q_to_qh(self.q)
+
+    @qh.setter
+    def set_qh(self, qh):
+        self.q = ifft_qh_to_q(qh)
+
+    @property
+    def uh(self):
+        return fft_u_to_uh(self.u)
+
+    @uh.setter
+    def set_uh(self, uh):
+        self.u = ifft_uh_to_u(uh)
+
+    @property
+    def vh(self):
+        return fft_v_to_vh(self.v)
+
+    @vh.setter
+    def set_vh(self, vh):
+        self.v = ifft_vh_to_v(vh)
+
+    @property
+    def uqh(self):
+        return fft_uq_to_uqh(self.uq)
+
+    @uqh.setter
+    def set_uqh(self, uqh):
+        self.uq = ifft_uqh_to_uq(uqh)
+
+    @property
+    def vqh(self):
+        return fft_vq_to_vqh(self.vq)
+
+    @vqh.setter
+    def set_vqh(self, vqh):
+        self.vq = ifft_vqh_to_vq(vqh)
 
 
 def _update_state(old_state, **kwargs):
@@ -69,6 +104,8 @@ def _generic_irfftn(a):
 
 
 fft_q_to_qh = _generic_rfftn
+fft_u_to_uh = _generic_rfftn
+fft_v_to_vh = _generic_rfftn
 ifft_qh_to_q = _generic_irfftn
 ifft_uh_to_u = _generic_irfftn
 ifft_vh_to_v = _generic_irfftn
@@ -76,7 +113,9 @@ fft_du_to_duh = _generic_rfftn
 fft_dv_to_dvh = _generic_rfftn
 fft_dq_to_dqh = _generic_rfftn
 fft_uq_to_uqh = _generic_rfftn
+ifft_uqh_to_uq = _generic_irfftn
 fft_vq_to_vqh = _generic_rfftn
+ifft_vqh_to_vq = _generic_irfftn
 
 
 class PseudoSpectralKernel:
@@ -148,13 +187,12 @@ class PseudoSpectralKernel:
 
         @attach_to_object(self)
         def set_q(state, new_q):
-            qh = fft_q_to_qh(new_q)
-            return _update_state(state, q=new_q, qh=qh)
+            return _update_state(state, q=new_q)
 
         @attach_to_object(self)
         def set_qh(state, new_qh):
             q = ifft_qh_to_q(new_qh)
-            return _update_state(state, qh=new_qh, q=q)
+            return _update_state(state, q=q)
 
     def _create_initial_state(self):
         def _empty_real():
@@ -165,16 +203,11 @@ class PseudoSpectralKernel:
         new_state = PseudoSpectralKernelState(
             # FFT I/O
             q = _empty_real(),
-            qh = _empty_com(),
             ph = _empty_com(),
             u = _empty_real(),
-            uh = _empty_com(),
             v = _empty_real(),
-            vh = _empty_com(),
             uq = _empty_real(),
-            uqh = _empty_com(),
             vq = _empty_real(),
-            vqh = _empty_com(),
             # Time stuff
             t = 0.0,
             tc = 0,
@@ -197,7 +230,7 @@ class PseudoSpectralKernel:
         u = ifft_uh_to_u(uh)
         v = ifft_vh_to_v(vh)
         # Update state values
-        return _update_state(state, ph=ph, uh=uh, vh=vh, u=u, v=v)
+        return _update_state(state, ph=ph, u=u, v=v)
 
     def _do_advection(self, state):
         # multiply to get advective flux in space
@@ -210,7 +243,7 @@ class PseudoSpectralKernel:
         dqhdt = -1 * (jnp.expand_dims(self._ik, (0, 1)) * uqh +
                       jnp.expand_dims(self._il, (0, -1)) * vqh +
                       jnp.expand_dims(self._ikQy[:self.nz], 1) * state.ph)
-        return _update_state(state, uq=uq, vq=vq, uqh=uqh, vqh=vqh, dqhdt=dqhdt)
+        return _update_state(state, uq=uq, vq=vq, dqhdt=dqhdt)
 
     def _do_uv_subgrid_parameterization(self, state, uv_param_func):
         if uv_param_func is None:
@@ -224,7 +257,7 @@ class PseudoSpectralKernel:
             ((-1 * jnp.expand_dims(self._il, (0, -1))) * duh) +
             (jnp.expand_dims(self._ik, (0, 1)) * dvh)
         )
-        return _update_state(state, du=du, dv=dv, duh=duh, dvh=dvh, dqhdt=dqhdt)
+        return _update_state(state, dqhdt=dqhdt)
 
     def _do_q_subgrid_parameterization(self, state, q_param_func):
         if q_param_func is None:
@@ -273,4 +306,4 @@ class PseudoSpectralKernel:
         tc = state.tc + 1
         t = state.t + self.dt
 
-        return _update_state(state, ablevel=ablevel, qh=qh, dqhdt_pp=dqhdt_pp, dqhdt_p=dqhdt_p, q=q, tc=tc, t=t)
+        return _update_state(state, ablevel=ablevel, dqhdt_pp=dqhdt_pp, dqhdt_p=dqhdt_p, q=q, tc=tc, t=t)
