@@ -36,8 +36,6 @@ class Model(kernel.PseudoSpectralKernel):
             nx=nx,
             dt=dt,
             filtr=None,
-            has_q_param=(q_parameterization is not None),
-            has_uv_param=(uv_parameterization is not None),
             rek=rek,
         )
 
@@ -53,9 +51,6 @@ class Model(kernel.PseudoSpectralKernel):
         if f:
             self.f = f
             self.f2 = f**2
-
-        self.q_parameterization = q_parameterization
-        self.uv_parameterization = uv_parameterization
 
         # Initialize grid
         self.x, self.y = jnp.meshgrid(
@@ -117,14 +112,18 @@ class Model(kernel.PseudoSpectralKernel):
             return state
 
         @attach_to_object(self)
-        def _step_forward(state):
+        def step_forward(state, uv_param_func=None, q_param_func=None):
+            return self._step_forward(state, uv_param_func=uv_param_func, q_param_func=q_param_func)
+
+        @attach_to_object(self)
+        def _step_forward(state, uv_param_func=None, q_param_func=None):
+            if uv_param_func is not None and q_param_func is not None:
+                raise ValueError(f"Can only provide one parameterization function at a time!")
             state = self.invert(state)
             state = self.do_advection(state)
             state = self.do_friction(state)
             state = self.do_external_forcing(state)
-            if self.uv_parameterization is not None:
-                state = self.do_uv_subgrid_parameterization(state)
-            if self.q_parameterization is not None:
-                state = self.do_q_subgrid_parameterization(state)
+            state = self.do_uv_subgrid_parameterization(state, uv_param_func)
+            state = self.do_q_subgrid_parameterization(state, q_param_func)
             state = self.forward_timestep(state)
             return state

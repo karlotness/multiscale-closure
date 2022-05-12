@@ -43,14 +43,6 @@ class PseudoSpectralKernelState:
     uqh: jnp.ndarray
     vq: jnp.ndarray
     vqh: jnp.ndarray
-    # has_uv_param
-    du: jnp.ndarray
-    dv: jnp.ndarray
-    duh: jnp.ndarray
-    dvh: jnp.ndarray
-    # has_q_param
-    dq: jnp.ndarray
-    dqh: jnp.ndarray
     # Time stuff
     t: float
     tc: int
@@ -89,7 +81,7 @@ fft_vq_to_vqh = _generic_rfftn
 
 class PseudoSpectralKernel:
 
-    def __init__(self, nz, ny, nx, dt, filtr, has_q_param=False, has_uv_param=False, rek=0):
+    def __init__(self, nz, ny, nx, dt, filtr, rek=0):
         self.nz = nz
         self.ny = ny
         self.nx = nx
@@ -102,8 +94,6 @@ class PseudoSpectralKernel:
         self._il = jnp.zeros((self.nl), dtype=DTYPE_COMPLEX)
         self._k2l2 = jnp.zeros((self.nl, self.nk), dtype=DTYPE_REAL)
         assert nx == ny
-        self.has_q_param = has_q_param
-        self.has_uv_param = has_uv_param
         # Friction
         self.rek = rek
         self.dt = float(dt)
@@ -137,12 +127,12 @@ class PseudoSpectralKernel:
             return self._do_advection(state)
 
         @attach_to_object(self)
-        def do_uv_subgrid_parameterization(state):
-            return self._do_uv_subgrid_parameterization(state)
+        def do_uv_subgrid_parameterization(state, uv_param_func=None):
+            return self._do_uv_subgrid_parameterization(state, uv_param_func)
 
         @attach_to_object(self)
-        def do_q_subgrid_parameterization(state):
-            return self._do_q_subgrid_parameterization(state)
+        def do_q_subgrid_parameterization(state, q_param_func=None):
+            return self._do_q_subgrid_parameterization(state, q_param_func)
 
         @attach_to_object(self)
         def do_friction(state):
@@ -172,22 +162,6 @@ class PseudoSpectralKernel:
         def _empty_com():
             return jnp.zeros((self.nz, self.nl, self.nk), dtype=DTYPE_COMPLEX)
 
-        du = None
-        dv = None
-        duh = None
-        dvh = None
-        if self.has_uv_param:
-            du = _empty_real()
-            dv = _empty_real()
-            duh = _empty_com()
-            dvh = _empty_com()
-
-        dq = None
-        dqh = None
-        if self.has_q_param:
-            dq = _empty_real()
-            dqh = _empty_com()
-
         new_state = PseudoSpectralKernelState(
             # FFT I/O
             q = _empty_real(),
@@ -201,14 +175,6 @@ class PseudoSpectralKernel:
             uqh = _empty_com(),
             vq = _empty_real(),
             vqh = _empty_com(),
-            # if has_uv_param
-            du=du,
-            dv=dv,
-            duh=duh,
-            dvh=dvh,
-            # if has_q_param
-            dq=dq,
-            dqh=dqh,
             # Time stuff
             t = 0.0,
             tc = 0,
@@ -246,9 +212,11 @@ class PseudoSpectralKernel:
                       jnp.expand_dims(self._ikQy[:self.nz], 1) * state.ph)
         return _update_state(state, uq=uq, vq=vq, uqh=uqh, vqh=vqh, dqhdt=dqhdt)
 
-    def _do_uv_subgrid_parameterization(self, state):
+    def _do_uv_subgrid_parameterization(self, state, uv_param_func):
+        if uv_param_func is None:
+            return state
         # convert to spectral space
-        du, dv = self.uv_parameterization(state)
+        du, dv = uv_param_func(state)
         duh = fft_du_to_duh(du)
         dvh = fft_dv_to_dvh(dv)
         qdhdt = (
@@ -258,11 +226,13 @@ class PseudoSpectralKernel:
         )
         return _update_state(state, du=du, dv=dv, duh=duh, dvh=dvh, dqhdt=dqhdt)
 
-    def _do_q_subgrid_parameterization(self, state):
-        dq = self.q_parameterization(state)
+    def _do_q_subgrid_parameterization(self, state, q_param_func):
+        if q_param_func is None:
+            return state
+        dq = q_param_func(state)
         dqh = fft_dq_to_dqh(dq)
         dqhdt = state.dqhdt + dqh
-        return _update_state(state, dq=dq, dqh=dqh, dqhdt=dqhdt)
+        return _update_state(state, dqhdt=dqhdt)
 
     def _do_friction(self, state):
         # Apply Beckman friction to lower layer tendency
