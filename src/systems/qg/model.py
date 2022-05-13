@@ -115,15 +115,14 @@ class Model(kernel.PseudoSpectralKernel):
         def step_forward(state, uv_param_func=None, q_param_func=None):
             return self._step_forward(state, uv_param_func=uv_param_func, q_param_func=q_param_func)
 
-        @attach_to_object(self)
-        def _step_forward(state, uv_param_func=None, q_param_func=None):
-            if uv_param_func is not None and q_param_func is not None:
-                raise ValueError(f"Can only provide one parameterization function at a time!")
-            state = self.invert(state)
-            state = self.do_advection(state)
-            state = self.do_friction(state)
-            state = self.do_external_forcing(state)
-            state = self.do_uv_subgrid_parameterization(state, uv_param_func)
-            state = self.do_q_subgrid_parameterization(state, q_param_func)
-            state = self.forward_timestep(state)
-            return state
+    def _step_forward(self, state, uv_param_func=None, q_param_func=None):
+        if uv_param_func is not None and q_param_func is not None:
+            raise ValueError(f"Can only provide one parameterization function at a time!")
+        state = self.invert(state)
+        state = self.do_advection(state)
+        state = self.do_friction(state)
+        state = self.do_external_forcing(state)
+        state = self.do_uv_subgrid_parameterization(state, uv_param_func)
+        state = self.do_q_subgrid_parameterization(state, q_param_func)
+        state = self.forward_timestep(state)
+        return state
