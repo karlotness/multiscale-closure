@@ -252,7 +252,7 @@ class PseudoSpectralKernel:
         du, dv = uv_param_func(state)
         duh = fft_du_to_duh(du)
         dvh = fft_dv_to_dvh(dv)
-        qdhdt = (
+        dqhdt = (
             state.dqhdt +
             ((-1 * jnp.expand_dims(self._il, (0, -1))) * duh) +
             (jnp.expand_dims(self._ik, (0, 1)) * dvh)
