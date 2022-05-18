@@ -25,8 +25,6 @@ class Model(kernel.PseudoSpectralKernel):
             # constants
             f=None,
             g=9.81,
-            q_parameterization=None,
-            uv_parameterization=None,
     ):
         if ny is None:
             ny = nx
