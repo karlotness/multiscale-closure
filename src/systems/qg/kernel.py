@@ -126,7 +126,6 @@ class PseudoSpectralKernel:
         self.nx = nx
         self.nl = ny
         self.nk = (nx // 2) + 1
-        self.a = jnp.zeros((self.nz, self.nz, self.nl, self.nk), dtype=DTYPE_COMPLEX)
         self.kk = jnp.zeros((self.nk), dtype=DTYPE_REAL)
         self._ik = jnp.zeros((self.nk), dtype=DTYPE_COMPLEX)
         self.ll = jnp.zeros((self.nl), dtype=DTYPE_REAL)
@@ -219,10 +218,15 @@ class PseudoSpectralKernel:
         )
         return new_state
 
+    def _apply_a_ph(self, state):
+        a = jnp.zeros((self.nz, self.nz, self.nl, self.nk), dtype=DTYPE_COMPLEX)
+        ph = jnp.sum(a * jnp.expand_dims(state.qh, 0), axis=1)
+        return ph
+
     def _invert(self, state):
         # Set ph to zero (skip, recompute fresh from sum below)
         # invert qh to find ph
-        ph = jnp.sum(self.a * jnp.expand_dims(state.qh, 0), axis=1)
+        ph = self._apply_a_ph(state)
         # calculate spectral velocities
         uh = (-1 * jnp.expand_dims(self._il, (0, -1))) * ph
         vh = jnp.expand_dims(self._ik, (0, 1)) * ph

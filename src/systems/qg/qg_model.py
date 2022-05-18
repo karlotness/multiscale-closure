@@ -49,16 +49,26 @@ class QGModel(model.Model):
         self.del2 = (self.delta + 1) ** -1
 
         # INITIALIZE INVERSION MATRIX
-        a = jnp.zeros((self.nz, self.nz, self.nl, self.nk), dtype=DTYPE_REAL)
-        # inverse determinant
-        det_inv = self.wv2 * (self.wv2 + self.F1 + self.F2)
-        det_inv_mask = (det_inv != 0)
-        det_inv = jnp.where(det_inv_mask, det_inv**-1, 0)
-        a = a.at[0, 0].set(-(self.wv2 + self.F2) * det_inv)
-        a = a.at[0, 1].set(-self.F1 * det_inv)
-        a = a.at[1, 0].set(-self.F2 * det_inv)
-        a = a.at[1, 1].set(-(self.wv2 + self.F1) * det_inv)
-        self.a = jnp.where(jnp.isfinite(a), a, 0).astype(DTYPE_COMPLEX)
+        self.inv_mat2 = jnp.moveaxis(
+            jnp.array(
+                [
+                    [
+                        # 0, 0
+                    -(self.wv2 + self.F1),
+                        # 0, 1
+                    self.F1 * jnp.ones_like(self.wv2),
+                    ],
+                    [
+                        # 1, 0
+                    self.F2 * jnp.ones_like(self.wv2),
+                        # 1, 1
+                    -(self.wv2 + self.F2),
+                    ],
+                ]
+            ),
+            (0, 1),
+            (-2, -1)
+        )
 
         # INITIALIZE FORCING
         pass # nothing to do
@@ -89,6 +99,11 @@ class QGModel(model.Model):
         @attach_to_object(self)
         def create_initial_state(rng):
             return self._create_initial_state(rng)
+
+    def _apply_a_ph(self, state):
+        qh = jnp.moveaxis(state.qh, 0, -1)
+        ph = jnp.linalg.solve(self.inv_mat2, qh)
+        return jnp.moveaxis(ph, -1, 0)
 
     def _create_initial_state(self, rng):
         state = super()._create_initial_state()
