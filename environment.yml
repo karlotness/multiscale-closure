@@ -1,10 +1,8 @@
 name: closure
 channels:
   - conda-forge
-  - nvidia
 dependencies:
-  - python=3.9
-  - cudatoolkit=11.5
+  - python=3.10
   - numpy
   - scipy
   - scikit-learn
@@ -15,9 +13,7 @@ dependencies:
   - pyqg
   - h5py
   - git
-  - pip
-  - pip:
-    - '--find-links=https://storage.googleapis.com/jax-releases/jax_releases.html'
-    - 'jax[cuda]'
-    - 'flax'
-    - 'optax'
+  - jax
+  - flax
+  - optax
+  - jaxlib=*=*cuda*
