@@ -1,0 +1,16 @@
+Bootstrap: docker
+From: continuumio/miniconda3
+
+%files
+environment.yml /opt/environment.yml
+
+%post
+chmod 444 /opt/environment.yml
+conda shell.bash hook >> $SINGULARITY_ENVIRONMENT
+CONDA_OVERRIDE_CUDA="11.2" conda env create -f /opt/environment.yml
+conda shell.bash activate closure >> $SINGULARITY_ENVIRONMENT
+conda clean --all
+
+%runscript
+#! /bin/bash
+exec "${@:-/bin/bash}"
