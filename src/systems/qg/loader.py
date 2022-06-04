@@ -110,7 +110,7 @@ class ThreadedQGLoader:
                 "num_steps": num_steps,
             },
             name=f"{logger_name}_worker",
-            daemon=True
+            daemon=True,
         )
         self._worker_thread.start()
 
@@ -138,5 +138,3 @@ class ThreadedQGLoader:
         except queue.Empty:
             # Ignore the exception now that queue is empty
             pass
-        # Wait for the thread to quit
-        self._worker_thread.join()
