@@ -97,6 +97,8 @@ class ThreadedQGLoader:
         self._logger.info("loading dataset with %d trajectories of %d steps each", num_trajs, num_steps)
         self.num_trajs = num_trajs
         self.num_steps = num_steps
+        self.rollout_steps = rollout_steps
+        self.batch_size = batch_size
 
         self._worker_thread = threading.Thread(
             target=_worker_func,
