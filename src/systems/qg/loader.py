@@ -2,6 +2,7 @@ import threading
 import dataclasses
 import logging
 import queue
+import operator
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -81,8 +82,9 @@ class ThreadedQGLoader:
             self._logger = base_logger.getChild(logger_name)
         else:
             self._logger = logging.getLogger(logger_name)
-
-        self._queue = queue.Queue(maxsize=buffer_size)
+        if operator.index(buffer_size) < 1:
+            raise ValueError(f"invalid buffer size {buffer_size}, must be at least 1")
+        self._queue = queue.Queue(maxsize=operator.index(buffer_size))
         self._stop_event = threading.Event()
 
         # Determine some basic statistics
@@ -120,7 +122,12 @@ class ThreadedQGLoader:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
+    def __del__(self):
+        self.close()
+
     def next_batch(self):
+        if self._stop_event.is_set():
+            raise ValueError("Closed dataset, cannot load batches")
         return self._queue.get()
 
     def iter_batches(self):
