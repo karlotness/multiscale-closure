@@ -32,41 +32,45 @@ def _worker_func(
         num_trajs,
         num_steps,
 ):
-    logger.debug("worker thread started")
-    rng = np.random.default_rng(seed=seed)
-    per_traj_valid_steps = num_steps - rollout_steps
-    total_valid_starts = (per_traj_valid_steps + 1) * num_trajs
-    data_fields = frozenset(f.name for f in dataclasses.fields(kernel.PseudoSpectralKernelState))
-    with h5py.File(file_path, "r") as h5_file:
-        logger.debug("opened hdf5 file %s", file_path)
-        trajs_group = h5_file["trajs"]
-        while True:
-            if stop_event.is_set():
-                logger.debug("worker was signaled to quit")
-                # We are signaled to stop
-                return
-            # Produce next samples
-            samples = rng.integers(0, total_valid_starts, size=batch_size, dtype=np.uint64)
-            batch_trajs, batch_steps = np.divmod(samples, per_traj_valid_steps + 1)
-            # Load samples from the dataset
-            np_dict = {k: [] for k in data_fields}
-            for traj, step in zip(batch_trajs, batch_steps):
-                traj_group = trajs_group[f"traj{traj:05d}"]
-                for field in data_fields:
-                    if field in {"dqhdt", "dqhdt_p", "dqhdt_pp"}:
-                        # Special handling
-                        continue
-                    np_dict[field].append(traj_group[field][int(step):int(step + rollout_steps)])
-                # Do special handling of dqhdt fields
-                full_dqhdt_ds = traj_group["full_dqhdt"]
-                dqhdt_and_p = full_dqhdt_ds[int(step+1):int(step+rollout_steps+1)]
-                np_dict["dqhdt"].append(dqhdt_and_p)
-                np_dict["dqhdt_p"].append(dqhdt_and_p)
-                np_dict["dqhdt_pp"].append(full_dqhdt_ds[int(step):int(step + rollout_steps)])
-            # Stack all samples
-            np_dict = {k: np.stack(v) for k, v in np_dict.items()}
-            # Move to device, pack and add to queue
-            queue.put(kernel.PseudoSpectralKernelState(**{k: jax.device_put(v) for k, v in np_dict.items()}))
+    try:
+        logger.debug("worker thread started")
+        rng = np.random.default_rng(seed=seed)
+        per_traj_valid_steps = num_steps - rollout_steps
+        total_valid_starts = (per_traj_valid_steps + 1) * num_trajs
+        data_fields = frozenset(f.name for f in dataclasses.fields(kernel.PseudoSpectralKernelState))
+        with h5py.File(file_path, "r") as h5_file:
+            logger.debug("opened hdf5 file %s", file_path)
+            trajs_group = h5_file["trajs"]
+            while True:
+                if stop_event.is_set():
+                    logger.debug("worker was signaled to quit")
+                    # We are signaled to stop
+                    return
+                # Produce next samples
+                samples = rng.integers(0, total_valid_starts, size=batch_size, dtype=np.uint64)
+                batch_trajs, batch_steps = np.divmod(samples, per_traj_valid_steps + 1)
+                # Load samples from the dataset
+                np_dict = {k: [] for k in data_fields}
+                for traj, step in zip(batch_trajs, batch_steps):
+                    traj_group = trajs_group[f"traj{traj:05d}"]
+                    for field in data_fields:
+                        if field in {"dqhdt", "dqhdt_p", "dqhdt_pp"}:
+                            # Special handling
+                            continue
+                        np_dict[field].append(traj_group[field][int(step):int(step + rollout_steps)])
+                    # Do special handling of dqhdt fields
+                    full_dqhdt_ds = traj_group["full_dqhdt"]
+                    dqhdt_and_p = full_dqhdt_ds[int(step+1):int(step+rollout_steps+1)]
+                    np_dict["dqhdt"].append(dqhdt_and_p)
+                    np_dict["dqhdt_p"].append(dqhdt_and_p)
+                    np_dict["dqhdt_pp"].append(full_dqhdt_ds[int(step):int(step + rollout_steps)])
+                # Stack all samples
+                np_dict = {k: np.stack(v) for k, v in np_dict.items()}
+                # Move to device, pack and add to queue
+                queue.put(kernel.PseudoSpectralKernelState(**{k: jax.device_put(v) for k, v in np_dict.items()}))
+    except Exception:
+        logger.exception("exception inside worker thread, terminating worker")
+        raise
 
 
 class ThreadedQGLoader:
@@ -154,6 +158,4 @@ class ThreadedQGLoader:
         except queue.Empty:
             # Ignore the exception now that queue is empty
             pass
-        self._worker_thread.join(timeout=10.0)
-        if self._worker_thread.is_alive():
-            raise RuntimeError(f"worker thread failed to exit on time")
+        self._worker_thread.join()
