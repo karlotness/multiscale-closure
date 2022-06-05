@@ -136,7 +136,9 @@ class ThreadedQGLoader:
         self.close()
 
     def __del__(self):
-        self.close()
+        if not self._stop_event.is_set():
+            # We didn't close before, salvage things
+            self.close()
 
     def next_batch(self):
         if self._stop_event.is_set():
