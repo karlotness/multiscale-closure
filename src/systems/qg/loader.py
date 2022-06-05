@@ -8,9 +8,16 @@ import jax.numpy as jnp
 import numpy as np
 import h5py
 from . import kernel
+from .qg_model import QGModel
 
 
-__all__ = ["ThreadedQGLoader"]
+__all__ = ["ThreadedQGLoader", "qg_model_from_hdf5"]
+
+
+def qg_model_from_hdf5(file_path, model="small"):
+    with h5py.File(file_path, "r") as h5_file:
+        params = h5_file["params"][f"{model}_model"].asstr()[()]
+        return QGModel.from_param_json(params)
 
 
 # Create the worker thread
