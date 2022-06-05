@@ -154,3 +154,6 @@ class ThreadedQGLoader:
         except queue.Empty:
             # Ignore the exception now that queue is empty
             pass
+        self._worker_thread.join(timeout=10.0)
+        if self._worker_thread.is_alive():
+            raise RuntimeError(f"worker thread failed to exit on time")
