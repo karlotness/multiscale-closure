@@ -41,6 +41,11 @@ def gen_qg(out_dir, args, base_logger):
     logger.info("Generating %d trajectories with %d steps", args.num_trajs, num_steps)
     dedups = {k: None for k in {"t", "tc", "ablevel"}}
     with h5py.File(out_dir / "data.hdf5", "w", libver="latest") as out_file:
+        # Store model parameters
+        param_group = out_file.create_group("params")
+        param_group.create_dataset("big_model", data=big_model.param_json())
+        param_group.create_dataset("small_model", data=small_model.param_json())
+        # Generate trajectories
         root_group = out_file.create_group("trajs")
         for traj_num in range(args.num_trajs):
             group = root_group.create_group(f"traj{traj_num:05d}")
