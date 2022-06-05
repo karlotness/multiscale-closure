@@ -1,4 +1,5 @@
 import dataclasses
+import json
 import jax
 import jax.numpy as jnp
 import jax.random
@@ -23,6 +24,7 @@ class QGModel(model.Model):
         self.Hi = jnp.array([H1, H1/delta])
         self.U1 = U1
         self.U2 = U2
+        self.H1 = H1
 
         # initialize background, inversion matrix, forcing
 
@@ -113,3 +115,22 @@ class QGModel(model.Model):
         q2 = jnp.zeros_like(self.x)
         state = self._set_q1q2(state, q1, q2)
         return state
+
+    def param_json(self):
+        super_params = json.loads(super().param_json())
+        del super_params["nz"]
+        super_params.update(
+            {
+                "beta": self.beta,
+                "rd": self.rd,
+                "delta": self.delta,
+                "H1": self.H1,
+                "U1": self.U1,
+                "U2": self.U2,
+            }
+        )
+        return json.dumps(super_params)
+
+    @classmethod
+    def from_param_json(cls, param_str):
+        return cls(**json.loads(param_str))

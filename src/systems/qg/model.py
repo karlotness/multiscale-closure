@@ -1,3 +1,4 @@
+import json
 import jax
 import jax.numpy as jnp
 from . import kernel
@@ -124,3 +125,26 @@ class Model(kernel.PseudoSpectralKernel):
         state = self.do_q_subgrid_parameterization(state, q_param_func)
         state = self.forward_timestep(state)
         return state
+
+    def param_json(self):
+        params = {
+            "nz": self.nz,
+            "nx": self.nx,
+            "ny": self.ny,
+            "L": self.L,
+            "W": self.W,
+            "dt": self.dt,
+            "tmax": self.tmax,
+            "tavestart": self.tavestart,
+            "taveint": self.taveint,
+            "rek": self.rek,
+            "filterfac": self.filterfac,
+            "g": self.g,
+        }
+        if hasattr(self, "f"):
+            params["f"] = self.f
+        return json.dumps(params)
+
+    @classmethod
+    def from_param_json(cls, param_str):
+        return cls(**json.loads(param_str))

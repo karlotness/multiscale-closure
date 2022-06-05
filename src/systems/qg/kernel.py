@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 import dataclasses
+import json
 
 
 def attach_to_object(self):
@@ -311,3 +312,22 @@ class PseudoSpectralKernel:
         t = state.t + self.dt
 
         return _update_state(state, ablevel=ablevel, dqhdt_pp=dqhdt_pp, dqhdt_p=dqhdt_p, q=q, tc=tc, t=t)
+
+    def param_json(self):
+        return json.dumps(
+            {
+                "nz": self.nz,
+                "ny": self.ny,
+                "nx": self.nx,
+                "dt": self.dt,
+                "filtr": self.filtr.to_py().tolist() if self.filter is not None else None,
+                "rek": self.rek,
+            }
+        )
+
+    @classmethod
+    def from_param_json(cls, param_str):
+        params = json.loads(param_str)
+        if params["filtr"] is not None:
+            params["filtr"] = jnp.asarray(params["filtr"])
+        return cls(**params)
