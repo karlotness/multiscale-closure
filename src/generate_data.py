@@ -97,3 +97,4 @@ if __name__ == "__main__":
         gen_qg(out_dir, args, logger)
     else:
         raise ValueError(f"invalid system: {args.system}")
+    logger.info("Finished generating data")
