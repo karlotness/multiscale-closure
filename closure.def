@@ -1,15 +1,27 @@
 Bootstrap: docker
-From: continuumio/miniconda3
+From: nvidia/cuda:11.4.2-devel-ubuntu20.04
 
 %files
-environment.yml /opt/environment.yml
+requirements.txt /opt/requirements.txt
 
 %post
-chmod 444 /opt/environment.yml
-conda shell.bash hook >> $SINGULARITY_ENVIRONMENT
-CONDA_OVERRIDE_CUDA="11.4" conda env create -f /opt/environment.yml
-conda shell.bash activate closure >> $SINGULARITY_ENVIRONMENT
-conda clean --all
+chmod 444 /opt/requirements.txt
+DEBIAN_FRONTEND="noninteractive" apt -y update
+DEBIAN_FRONTEND="noninteractive" apt -y install software-properties-common
+DEBIAN_FRONTEND="noninteractive" add-apt-repository ppa:deadsnakes/ppa
+DEBIAN_FRONTEND="noninteractive" apt -y update
+DEBIAN_FRONTEND="noninteractive" apt -y upgrade
+DEBIAN_FRONTEND="noninteractive" apt -y install python3.10 python3.10-venv git bash
+DEBIAN_FRONTEND="noninteractive" apt -y autoremove
+DEBIAN_FRONTEND="noninteractive" apt -y clean
+
+# Configure virtualenv
+mkdir -p /opt/closure_venv/
+python3.10 -m venv --prompt=closure /opt/closure_venv/
+cat /opt/closure_venv/bin/activate >> $SINGULARITY_ENVIRONMENT
+bash -c "source /opt/closure_venv/bin/activate; python -m pip install --upgrade pip"
+bash -c "source /opt/closure_venv/bin/activate; python -m pip install --requirement /opt/requirements.txt"
+bash -c "source /opt/closure_venv/bin/activate; python -m pip cache purge"
 
 %runscript
 #! /bin/bash
