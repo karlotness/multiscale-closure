@@ -104,7 +104,9 @@ def _worker_func(
                     "rollout_steps": rollout_steps,
                     "arr_dtype": arr_dtype,
                     "arr_byte_size": arr_byte_size,
-                }
+                },
+                name=f"loader_proc_worker_{i:d}",
+                daemon=True,
             )
             for i in range(num_procs)
         ]
