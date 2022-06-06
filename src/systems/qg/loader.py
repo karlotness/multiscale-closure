@@ -52,18 +52,11 @@ def _worker_func(
                 # Load samples from the dataset
                 np_dict = {k: [] for k in data_fields}
                 for traj, step in zip(batch_trajs, batch_steps):
-                    traj_group = trajs_group[f"traj{traj:05d}"]
+                    # Slice the data from hdf5
+                    traj_slice = trajs_group[f"traj{traj:05d}"][int(step):int(step + rollout_steps)]
+                    # Now separate the fields
                     for field in data_fields:
-                        if field in {"dqhdt", "dqhdt_p", "dqhdt_pp"}:
-                            # Special handling
-                            continue
-                        np_dict[field].append(traj_group[field][int(step):int(step + rollout_steps)])
-                    # Do special handling of dqhdt fields
-                    full_dqhdt_ds = traj_group["full_dqhdt"]
-                    dqhdt_and_p = full_dqhdt_ds[int(step+1):int(step+rollout_steps+1)]
-                    np_dict["dqhdt"].append(dqhdt_and_p)
-                    np_dict["dqhdt_p"].append(dqhdt_and_p)
-                    np_dict["dqhdt_pp"].append(full_dqhdt_ds[int(step):int(step + rollout_steps)])
+                        np_dict[field].append(traj_slice[field])
                 # Stack all samples
                 np_dict = {k: np.stack(v) for k, v in np_dict.items()}
                 # Move to device, pack and add to queue

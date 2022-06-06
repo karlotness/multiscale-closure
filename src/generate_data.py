@@ -39,7 +39,6 @@ def gen_qg(out_dir, args, base_logger):
     num_steps = math.ceil(args.tmax / args.dt)
     traj_gen = qg_utils.make_gen_traj(big_model=big_model, spectral_coarsener=spectral_coarsener)
     logger.info("Generating %d trajectories with %d steps", args.num_trajs, num_steps)
-    dedups = {k: None for k in {"t", "tc", "ablevel"}}
     with h5py.File(out_dir / "data.hdf5", "w", libver="latest") as out_file:
         # Store model parameters
         param_group = out_file.create_group("params")
@@ -47,33 +46,25 @@ def gen_qg(out_dir, args, base_logger):
         param_group.create_dataset("small_model", data=small_model.param_json())
         # Generate trajectories
         root_group = out_file.create_group("trajs")
+        compound_dtype = None
         for traj_num in range(args.num_trajs):
-            group = root_group.create_group(f"traj{traj_num:05d}")
             rng, rng_ctr = jax.random.split(rng_ctr, 2)
             logger.info("Starting trajectory %d", traj_num)
             traj = traj_gen(rng=rng, num_steps=num_steps)
             logger.info("Finished generating trajectory %d", traj_num)
-            for k, v in dataclasses.asdict(traj).items():
-                if k in {"dqhdt", "dqhdt_p", "dqhdt_pp"}:
-                    # Handled specially for temporal reasons
-                    continue
-                if k in dedups.keys():
-                    # Special deduplication handling
-                    if dedups[k] is not None and np.all(v == np.array(dedups[k])):
-                        # Deduplication match, create link
-                        group[k] = dedups[k]
+            if compound_dtype is None:
+                dtype_fields = []
+                for k, v in dataclasses.asdict(traj).items():
+                    if v.ndim > 1:
+                        dtype_fields.append((k, v.dtype, v.shape[1:]))
                     else:
-                        # Update the deduplication match
-                        ds = group.create_dataset(k, data=v)
-                        dedups[k] = ds
-                else:
-                    group.create_dataset(k, data=v)
-            # Handle dqdhdt{,_p,_pp} specially (sliding window)
-            full_dqdhdt = np.concatenate([traj.dqhdt_pp[:1], traj.dqhdt], axis=0)
-            group.create_dataset("full_dqhdt", data=full_dqdhdt)
-            # assert np.all(full_dqdhdt[:-1] == traj.dqhdt_pp)
-            # assert np.all(full_dqdhdt[1:] == traj.dqhdt_p)
-            # assert np.all(full_dqdhdt[1:] == traj.dqhdt)
+                        dtype_fields.append((k, v.dtype))
+                compound_dtype = np.dtype(dtype_fields)
+            data_arr = np.empty(num_steps, dtype=compound_dtype)
+            for k, v in dataclasses.asdict(traj).items():
+                data_arr[k] = v
+            # Store results
+            root_group.create_dataset(f"traj{traj_num:05d}", data=data_arr)
             logger.info("Finished storing trajectory %d", traj_num)
 
 
