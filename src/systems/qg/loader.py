@@ -30,25 +30,17 @@ def _get_series_details(file_path, rollout_steps):
         return arr.dtype, arr.nbytes
 
 
-# Create the worker thread
-def _worker_func(
-        queue,
+def _proc_worker_func(
+        in_queue,
+        out_queue,
         logger,
         file_path,
-        stop_event,
-        batch_size,
         rollout_steps,
-        seed,
-        num_trajs,
-        num_steps,
+        arr_dtype,
+        arr_byte_size,
 ):
-    try:
-        logger.debug("worker thread started")
-        num_procs = batch_size
-        arr_dtype, arr_byte_size = _get_series_details(file_path=file_path, rollout_steps=rollout_steps)
-        # Spawn processes
-        procs = [
-            subprocess.Popen(
+    # Spawn worker's process
+    proc = subprocess.Popen(
                 [
                     sys.executable,
                     str(pathlib.Path(__file__).parent / "_loader.py"),
@@ -58,43 +50,99 @@ def _worker_func(
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
             )
-            for _ in range(num_procs)
-        ]
-        logger.debug("spawned %d processes", num_procs)
-        # Compute needed information
-        rng = np.random.default_rng(seed=seed)
-        per_traj_valid_steps = num_steps - rollout_steps
-        total_valid_starts = (per_traj_valid_steps + 1) * num_trajs
-        data_fields = frozenset(f.name for f in dataclasses.fields(kernel.PseudoSpectralKernelState))
+    try:
         while True:
-            if stop_event.is_set():
-                logger.debug("worker was signaled to quit")
-                # Ask all processes to stop
-                for proc in procs:
-                    proc.stdin.write(b"exit\n")
-                    proc.stdin.flush()
-                    return_code = proc.wait()
-                    if return_code != 0:
-                        logger.error("worker exited abnormally with code %d", return_code)
-                logger.debug("done stopping workers, exiting")
+            job = in_queue.get()
+            if job is None:
+                # This is our stop signal
+                logger.debug("process worker signaled to stop")
                 return
-            # Continuing with data load
-            samples = rng.integers(0, total_valid_starts, size=batch_size, dtype=np.uint64)
-            batch_trajs, batch_steps = np.divmod(samples, per_traj_valid_steps + 1)
-            # Assign each process a trajectory
-            for proc, traj, step in zip(procs, batch_trajs, batch_steps, strict=True):
-                proc.stdin.write(f"{traj:d} {step:d}\n".encode("utf8"))
-                proc.stdin.flush()
-            arr_stack = []
-            # For each process, wait until it's ready then read the result
-            for proc in procs:
-                text = proc.stdout.readline()
-                if text != b"done\n":
-                    raise ValueError(f"got invalid result from worker {text}")
-                arr_stack.append(np.frombuffer(proc.stdout.read(arr_byte_size), dtype=arr_dtype))
-            # Stack and split arrays, push to GPU and place in queue
-            arr_stack = np.stack(arr_stack)
-            queue.put(kernel.PseudoSpectralKernelState(**{k: jax.device_put(arr_stack[k]) for k in data_fields}))
+            traj, step = job
+            proc.stdin.write(f"{traj:d} {step:d}\n".encode("utf8"))
+            proc.stdin.flush()
+            text = proc.stdout.readline()
+            if text != b"done\n":
+                raise ValueError(f"got invalid result from worker {text}")
+            out_queue.put(np.frombuffer(proc.stdout.read(arr_byte_size), dtype=arr_dtype))
+    except Exception:
+        logger.exception("error in process worker")
+        raise
+    finally:
+        proc.stdin.write(b"exit\n")
+        proc.stdin.flush()
+        return_code = proc.wait()
+        if return_code != 0:
+            logger.error("worker exited abnormally with code %d", return_code)
+        else:
+            logger.debug("stopped worker process")
+
+def _worker_func(
+        out_queue,
+        logger,
+        file_path,
+        stop_event,
+        batch_size,
+        rollout_steps,
+        seed,
+        num_trajs,
+        num_steps,
+        num_procs=10,
+):
+    try:
+        logger.debug("worker thread started")
+        arr_dtype, arr_byte_size = _get_series_details(file_path=file_path, rollout_steps=rollout_steps)
+        submit_queue = queue.SimpleQueue()
+        recieve_queue = queue.SimpleQueue()
+        sub_threads = [
+            threading.Thread(
+                target=_proc_worker_func,
+                kwargs={
+                    "in_queue": submit_queue,
+                    "out_queue": recieve_queue,
+                    "logger": logger.getChild(f"proc{i}"),
+                    "file_path": file_path,
+                    "rollout_steps": rollout_steps,
+                    "arr_dtype": arr_dtype,
+                    "arr_byte_size": arr_byte_size,
+                }
+            )
+            for i in range(num_procs)
+        ]
+        for thread in sub_threads:
+            thread.start()
+        try:
+            # Compute needed information
+            rng = np.random.default_rng(seed=seed)
+            per_traj_valid_steps = num_steps - rollout_steps
+            total_valid_starts = (per_traj_valid_steps + 1) * num_trajs
+            data_fields = frozenset(f.name for f in dataclasses.fields(kernel.PseudoSpectralKernelState))
+            while True:
+                if stop_event.is_set():
+                    logger.debug("worker was signaled to quit")
+                    return
+                # Continuing with data load
+                samples = rng.integers(0, total_valid_starts, size=batch_size, dtype=np.uint64)
+                batch_trajs, batch_steps = np.divmod(samples, per_traj_valid_steps + 1)
+                # Assign each process a trajectory
+                for traj, step in zip(batch_trajs, batch_steps, strict=True):
+                    submit_queue.put((traj, step))
+                # Retrieve results
+                arr_stack = []
+                for _i in range(batch_size):
+                    arr_stack.append(recieve_queue.get())
+                # Stack and split arrays, push to GPU and place in queue
+                arr_stack = np.stack(arr_stack)
+                out_queue.put(kernel.PseudoSpectralKernelState(**{k: jax.device_put(arr_stack[k]) for k in data_fields}))
+        except Exception:
+            logger.exception("exception inside worker thread, terminating worker and processes")
+            raise
+        finally:
+            # Signal our workers to stop
+            for _i in range(num_procs):
+                submit_queue.put(None)
+            for thread in sub_threads:
+                thread.join()
+            logger.debug("finished stopping all workers")
     except Exception:
         logger.exception("exception inside worker thread, terminating worker")
         raise
@@ -110,6 +158,7 @@ class ThreadedQGLoader:
             base_logger=None,
             buffer_size=1,
             seed=None,
+            num_workers=10,
     ):
         self.split_name = split_name
         if split_name is not None:
@@ -141,7 +190,7 @@ class ThreadedQGLoader:
         self._worker_thread = threading.Thread(
             target=_worker_func,
             kwargs={
-                "queue": self._queue,
+                "out_queue": self._queue,
                 "logger": self._logger.getChild("worker"),
                 "file_path": file_path,
                 "stop_event": self._stop_event,
@@ -150,6 +199,7 @@ class ThreadedQGLoader:
                 "seed": seed,
                 "num_trajs": num_trajs,
                 "num_steps": num_steps,
+                "num_procs": num_workers,
             },
             name=f"{logger_name}_worker",
             daemon=True,
