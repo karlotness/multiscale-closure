@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+import jax
 import jax.numpy as jnp
 import flax.linen as nn
 from ._defs import ACTIVATIONS
@@ -19,6 +20,8 @@ class CNN(nn.Module):
 
 
 class ClosureCnnV1(nn.Module):
+    nz: int = 2
+
     @nn.compact
     def __call__(self, u, v):
         x = jnp.concatenate([u, v], axis=0)
@@ -35,7 +38,7 @@ class ClosureCnnV1(nn.Module):
         # Step 4
         x = nn.Conv(features=64, kernel_size=(3, 3))(x)
         # No fixed convs
-        x = nn.Conv(features=2 * small_model.nz, kernel_size=(3, 3))(x)
+        x = nn.Conv(features=2 * self.nz, kernel_size=(3, 3))(x)
         x = jnp.moveaxis(x, -1, 0)
         # Split and return
         sx, sy = jnp.split(x, 2, axis=0)
