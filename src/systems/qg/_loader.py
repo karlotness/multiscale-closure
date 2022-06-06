@@ -1,0 +1,31 @@
+import sys
+import argparse
+import h5py
+
+parser = argparse.ArgumentParser(description="Internal worker script for data loader")
+parser.add_argument("file_path", type=str, help="Path to hdf5 data file")
+parser.add_argument("rollout_steps", type=int, help="Number of rollout steps to gather")
+
+def main(args):
+    rollout_steps = args.rollout_steps
+    with h5py.File(args.file_path, "r") as h5_file:
+        trajs_group = h5_file["trajs"]
+        # Do work here
+        while True:
+            line = sys.stdin.readline()
+            if line == "exit\n":
+                # Orderly exit
+                sys.exit(0)
+            line_parts = line.split()
+            traj = int(line_parts[0])
+            step = int(line_parts[1])
+            arr_bytes = trajs_group[f"traj{traj:05d}"][step:step + rollout_steps].tobytes()
+            sys.stdout.write("done\n")
+            sys.stdout.flush()
+            sys.stdout.buffer.write(arr_bytes)
+            sys.stdout.buffer.flush()
+            arr_bytes = None
+
+
+if __name__ == "__main__":
+    main(parser.parse_args())

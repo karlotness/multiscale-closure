@@ -1,8 +1,12 @@
 import threading
+import sys
 import dataclasses
+import pathlib
 import logging
 import queue
 import operator
+import subprocess
+import contextlib
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -20,6 +24,12 @@ def qg_model_from_hdf5(file_path, model="small"):
         return QGModel.from_param_json(params)
 
 
+def _get_series_details(file_path, rollout_steps):
+    with h5py.File(file_path, "r") as h5_file:
+        arr = h5_file["trajs"]["traj00000"][:int(rollout_steps)]
+        return arr.dtype, arr.nbytes
+
+
 # Create the worker thread
 def _worker_func(
         queue,
@@ -34,33 +44,57 @@ def _worker_func(
 ):
     try:
         logger.debug("worker thread started")
+        num_procs = batch_size
+        arr_dtype, arr_byte_size = _get_series_details(file_path=file_path, rollout_steps=rollout_steps)
+        # Spawn processes
+        procs = [
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    str(pathlib.Path(__file__).parent / "_loader.py"),
+                    str(file_path),
+                    f"{rollout_steps:d}",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+            )
+            for _ in range(num_procs)
+        ]
+        logger.debug("spawned %d processes", num_procs)
+        # Compute needed information
         rng = np.random.default_rng(seed=seed)
         per_traj_valid_steps = num_steps - rollout_steps
         total_valid_starts = (per_traj_valid_steps + 1) * num_trajs
         data_fields = frozenset(f.name for f in dataclasses.fields(kernel.PseudoSpectralKernelState))
-        with h5py.File(file_path, "r") as h5_file:
-            logger.debug("opened hdf5 file %s", file_path)
-            trajs_group = h5_file["trajs"]
-            while True:
-                if stop_event.is_set():
-                    logger.debug("worker was signaled to quit")
-                    # We are signaled to stop
-                    return
-                # Produce next samples
-                samples = rng.integers(0, total_valid_starts, size=batch_size, dtype=np.uint64)
-                batch_trajs, batch_steps = np.divmod(samples, per_traj_valid_steps + 1)
-                # Load samples from the dataset
-                np_dict = {k: [] for k in data_fields}
-                for traj, step in zip(batch_trajs, batch_steps):
-                    # Slice the data from hdf5
-                    traj_slice = trajs_group[f"traj{traj:05d}"][int(step):int(step + rollout_steps)]
-                    # Now separate the fields
-                    for field in data_fields:
-                        np_dict[field].append(traj_slice[field])
-                # Stack all samples
-                np_dict = {k: np.stack(v) for k, v in np_dict.items()}
-                # Move to device, pack and add to queue
-                queue.put(kernel.PseudoSpectralKernelState(**{k: jax.device_put(v) for k, v in np_dict.items()}))
+        while True:
+            if stop_event.is_set():
+                logger.debug("worker was signaled to quit")
+                # Ask all processes to stop
+                for proc in procs:
+                    proc.stdin.write(b"exit\n")
+                    proc.stdin.flush()
+                    return_code = proc.wait()
+                    if return_code != 0:
+                        logger.error("worker exited abnormally with code %d", return_code)
+                logger.debug("done stopping workers, exiting")
+                return
+            # Continuing with data load
+            samples = rng.integers(0, total_valid_starts, size=batch_size, dtype=np.uint64)
+            batch_trajs, batch_steps = np.divmod(samples, per_traj_valid_steps + 1)
+            # Assign each process a trajectory
+            for proc, traj, step in zip(procs, batch_trajs, batch_steps, strict=True):
+                proc.stdin.write(f"{traj:d} {step:d}\n".encode("utf8"))
+                proc.stdin.flush()
+            arr_stack = []
+            # For each process, wait until it's ready then read the result
+            for proc in procs:
+                text = proc.stdout.readline()
+                if text != b"done\n":
+                    raise ValueError(f"got invalid result from worker {text}")
+                arr_stack.append(np.frombuffer(proc.stdout.read(arr_byte_size), dtype=arr_dtype))
+            # Stack and split arrays, push to GPU and place in queue
+            arr_stack = np.stack(arr_stack)
+            queue.put(kernel.PseudoSpectralKernelState(**{k: jax.device_put(arr_stack[k]) for k in data_fields}))
     except Exception:
         logger.exception("exception inside worker thread, terminating worker")
         raise
