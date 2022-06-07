@@ -62,9 +62,6 @@ def _proc_worker_func(
             traj, step = job
             proc.stdin.write(f"{traj:d} {step:d}\n".encode("utf8"))
             proc.stdin.flush()
-            text = proc.stdout.readline()
-            if text != b"done\n":
-                raise ValueError(f"got invalid result from worker {text}")
             out_queue.put(np.frombuffer(proc.stdout.read(arr_byte_size), dtype=arr_dtype))
     except Exception:
         logger.exception("error in process worker")
