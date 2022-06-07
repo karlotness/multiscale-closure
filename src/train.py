@@ -5,6 +5,7 @@ import re
 import random
 import itertools
 import contextlib
+import json
 import jax
 import jax.numpy as jnp
 import optax
@@ -113,14 +114,17 @@ def do_epoch(train_state, epoch_num, num_batches, batch_iter, logger):
     return train_state, loss
 
 
-def save_network(output_path, params, base_logger=None):
+def save_network(output_name, output_dir, net, params, base_logger=None):
     if base_logger is None:
         logger = logging.getLogger("save")
     else:
         logger = base_logger.getChild("save")
-    with open(output_path, "wb") as out_file:
+    output_dir = pathlib.Path(output_dir)
+    with open(output_dir / f"{output_name}.flaxnn", "wb") as out_file:
         out_file.write(flax.serialization.to_bytes(params))
-        logger.info("Saved network parameters to %s", output_path)
+    with open(output_dir / f"{output_name}.json", "w", encoding="utf8") as out_file:
+        json.dump(net.net_description(), out_file)
+    logger.info("Saved network parameters to %s in %s", output_name, output_dir)
 
 
 def main():
@@ -186,7 +190,7 @@ def main():
 
             # If validation improved, store snapshot
     # Store final weights
-    save_network(out_dir / "final_net.flaxnn", params=train_state.params, base_logger=logger)
+    save_network("final_net", out_dir, net=net, params=train_state.params, base_logger=logger)
     end = time.perf_counter()
     # Finished training
     logger.info("Finished training in %f sec", end - start)

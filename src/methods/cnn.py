@@ -22,6 +22,14 @@ class CNN(nn.Module):
 class ClosureCnnV1(nn.Module):
     nz: int = 2
 
+    def net_description(self):
+        return {
+            "architecture": "closure-cnn-v1",
+            "params": {
+                "nz": self.nz,
+            },
+        }
+
     @nn.compact
     def __call__(self, u, v):
         x = jnp.concatenate([u, v], axis=0)
