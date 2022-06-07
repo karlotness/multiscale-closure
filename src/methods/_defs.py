@@ -7,4 +7,5 @@ ACTIVATIONS = {
     "hard_sigmoid": jax.nn.hard_sigmoid,
     "tanh": jnp.tanh,
     "sigmoid": nn.sigmoid,
+    "selu": jax.nn.selu,
 }
