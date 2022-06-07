@@ -55,7 +55,7 @@ def init_network(architecture, lr, weight_decay, rng, small_model):
     )
 
 
-def epoch_batch_iterators(train_file, batch_size, rollout_length_str, seed=None, base_logger=None, max_buffer_steps=5000):
+def epoch_batch_iterators(train_file, batch_size, rollout_length_str, seed=None, base_logger=None, max_buffer_steps=100000):
     if base_logger is None:
         logger = logging.getLogger("epoch_iter")
     else:
