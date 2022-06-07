@@ -172,15 +172,17 @@ def main():
                 base_logger=logger,
             )
     ) as epoch_batch_iter:
-        for epoch, batch_iter in zip(range(args.train_epochs), epoch_batch_iter):
-            train_state, mean_train_loss = do_epoch(
-                train_state=train_state,
-                epoch_num=epoch,
-                num_batches=args.batches_per_epoch,
-                batch_iter=batch_iter,
-                logger=logger.getChild("train_epoch"),
-            )
-            # Run validation
+        for epoch, raw_batch_iter in zip(range(args.train_epochs), epoch_batch_iter):
+            with contextlib.closing(raw_batch_iter) as batch_iter:
+                # Do training phase
+                train_state, mean_train_loss = do_epoch(
+                    train_state=train_state,
+                    epoch_num=epoch,
+                    num_batches=args.batches_per_epoch,
+                    batch_iter=batch_iter,
+                    logger=logger.getChild("train_epoch"),
+                )
+            # Run validation phase
 
             # If validation improved, store snapshot
     # Store final weights
