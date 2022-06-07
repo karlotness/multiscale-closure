@@ -95,7 +95,7 @@ def epoch_batch_iterators(train_file, batch_size, rollout_length_str, seed=None,
                 batch_size=batch_size,
                 rollout_steps=rollout_steps,
                 split_name="train",
-                base_logger=logger.getChild(f"rollout{rollout_steps:d}"),
+                base_logger=logger,
                 buffer_size=buffer_size,
                 seed=loader_seed,
         ) as loader:

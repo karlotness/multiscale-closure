@@ -39,6 +39,7 @@ def _proc_worker_func(
         arr_dtype,
         arr_byte_size,
 ):
+    logger.debug("process worker started")
     # Spawn worker's process
     proc = subprocess.Popen(
                 [
@@ -50,6 +51,7 @@ def _proc_worker_func(
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
             )
+    logger.debug("spawned subprocess")
     try:
         while True:
             job = in_queue.get()
