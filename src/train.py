@@ -105,13 +105,12 @@ def epoch_batch_iterators(train_file, batch_size, rollout_length_str, seed=None,
 
 
 def do_epoch(train_state, epoch_num, num_batches, batch_iter, logger):
-    logger.info("Starting epoch %d for %d batches", epoch_num, num_batches)
-    start = time.perf_counter()
+    losses = []
     for batch in itertools.islice(batch_iter, num_batches):
         loss = 0
-    end = time.perf_counter()
-    logger.info("Finished epoch %d in %f sec", epoch_num, end - start)
-    return train_state, loss
+        losses.append(loss)
+
+    return train_state, 0#, jnp.mean(losses)
 
 
 def save_network(output_name, output_dir, net, params, base_logger=None):
@@ -167,6 +166,7 @@ def main():
     )
     # Begin training
     start = time.perf_counter()
+    epoch_stats = []
     with contextlib.closing(
             epoch_batch_iterators(
                 train_file=train_file,
@@ -179,6 +179,8 @@ def main():
         for epoch, raw_batch_iter in zip(range(args.train_epochs), epoch_batch_iter):
             with contextlib.closing(raw_batch_iter) as batch_iter:
                 # Do training phase
+                logger.info("Starting epoch %d of %d (%d batches)", epoch, args.train_epochs, args.batches_per_epoch)
+                train_start = time.perf_counter()
                 train_state, mean_train_loss = do_epoch(
                     train_state=train_state,
                     epoch_num=epoch,
@@ -186,14 +188,29 @@ def main():
                     batch_iter=batch_iter,
                     logger=logger.getChild("train_epoch"),
                 )
+                train_elapsed = time.perf_counter() - train_start
+                logger.info("Finished epoch %d in %f sec", epoch, train_elapsed)
             # Run validation phase
 
             # If validation improved, store snapshot
+
+            # Record some training statistics
+            epoch_stats.append(
+                {
+                    "epoch": epoch,
+                    "train_elapsed_secs": train_elapsed,
+                    "mean_train_loss": mean_train_loss,
+                }
+            )
     # Store final weights
     save_network("final_net", out_dir, net=net, params=train_state.params, base_logger=logger)
     end = time.perf_counter()
     # Finished training
     logger.info("Finished training in %f sec", end - start)
+    # Save train statistics
+    with open(out_dir / "epoch_stats.json", "w", encoding="utf8") as stats_file:
+        json.dump(epoch_stats, stats_file)
+    logger.info("Recorded epoch statistics to %s", out_dir / "epoch_stats.json")
 
 
 if __name__ == "__main__":
