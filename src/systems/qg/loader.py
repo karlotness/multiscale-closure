@@ -177,7 +177,7 @@ class ThreadedQGLoader:
 
         # Determine some basic statistics
         with h5py.File(file_path, "r") as h5_file:
-            num_steps = h5_file["trajs"]["traj00000"]["q"].shape[0]
+            num_steps = h5_file["trajs"]["traj00000"].shape[0]
             num_trajs = 0
             for k in h5_file["trajs"].keys():
                 if k.startswith("traj"):
@@ -239,3 +239,37 @@ class ThreadedQGLoader:
             # Ignore the exception now that queue is empty
             pass
         self._worker_thread.join()
+
+
+class SimpleQGLoader:
+    def __init__(self, file_path):
+        self._h5_file = h5py.File(file_path, "r")
+        self._trajs_group = self._h5_file["trajs"]
+        self._data_fields = frozenset(f.name for f in dataclasses.fields(kernel.PseudoSpectralKernelState))
+        num_traj = 0
+        for k in self._trajs_group.keys():
+            if k.startswith("traj"):
+                num_traj += 1
+        self.num_trajectories = num_traj
+        self.num_steps = self._trajs_group["traj00000"].shape[0]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        self.close()
+
+    def close(self):
+        if self._trajs_group is not None:
+            self._trajs_group = None
+            self._h5_file.close()
+
+    def get_trajectory(self, traj, start=0, end=None):
+        start = operator.index(start)
+        if end is not None:
+            end = operator.index(end)
+        traj_data = self._trajs_group[f"traj{traj:05d}"][start:end]
+        return kernel.PseudoSpectralKernelState(**{k: jax.device_put(traj_data[k]) for k in self._data_fields})
