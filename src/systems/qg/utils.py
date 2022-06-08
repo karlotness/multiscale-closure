@@ -84,6 +84,24 @@ def slice_kernel_state(state, slicer):
     return PseudoSpectralKernelState(**{k: getattr(state, k)[slicer] for k in data_fields})
 
 
+def get_online_rollout(start_state, num_steps, apply_fn, params, small_model):
+    def apply_net(state):
+        sx, sy = apply_fn(params, state.u, state.v)
+        return sx, sy
+
+    def do_steps(carry_state, _):
+        new_state = small_model.step_forward(carry_state, uv_param_func=apply_net)
+        return new_state, new_state
+
+    _last_step, new_states = jax.lax.scan(
+        do_steps,
+        start_state,
+        None,
+        length=num_steps,
+    )
+    return new_states
+
+
 def get_online_batch_loss(real_traj, apply_fn, params, small_model, loss_fn):
 
     def apply_net(state):
