@@ -2,6 +2,7 @@ import functools
 import dataclasses
 import jax
 import jax.numpy as jnp
+from .kernel import PseudoSpectralKernelState
 
 
 def make_gen_traj(big_model, spectral_coarsener):
@@ -76,3 +77,27 @@ class SpectralCoarsener:
         partial_state = dataclasses.replace(replace_into, **new_vals)
         new_vals["ph"] = self.small_model._apply_a_ph(partial_state)
         return dataclasses.replace(replace_into, **new_vals)
+
+
+def slice_kernel_state(state, slicer):
+    data_fields = frozenset(f.name for f in dataclasses.fields(PseudoSpectralKernelState))
+    return PseudoSpectralKernelState(**{k: getattr(state, k)[slicer] for k in data_fields})
+
+
+def get_online_batch_loss(real_traj, apply_fn, params, small_model, loss_fn):
+
+    def apply_net(state):
+        sx, sy = apply_fn(params, state.u, state.v)
+        return sx, sy
+
+    def do_steps(carry_state, true_step):
+        new_state = small_model.step_forward(carry_state, uv_param_func=apply_net)
+        loss = loss_fn(real_step=true_step.q, est_step=new_state.q)
+        return new_state, loss
+
+    _last_step, losses = jax.lax.scan(
+        do_steps,
+        slice_kernel_state(real_traj, 0),
+        slice_kernel_state(real_traj, slice(1, None))
+    )
+    return losses
