@@ -20,6 +20,8 @@ from systems.qg.loader import ThreadedQGLoader, SimpleQGLoader, qg_model_from_hd
 import utils
 from methods import ARCHITECTURES
 
+MEAN_QG_VAL_VALUE = 2.716908e-07
+
 parser = argparse.ArgumentParser(description="Train neural networks for closure")
 parser.add_argument("out_dir", type=str, help="Directory to store output (created if non-existing)")
 parser.add_argument("train_set", type=str, help="Directory with training examples")
@@ -36,6 +38,14 @@ parser.add_argument("--val_samples", type=int, default=10, help="Number of batch
 parser.add_argument("--seed", type=int, default=None, help="Seed to use with RNG (if None, select automatically)")
 parser.add_argument("--architecture", type=str, default="closure-cnn-v1", help="Choose architecture to train", choices=sorted(ARCHITECTURES.keys()))
 
+
+def mean_l1err_loss(real_step, est_step):
+    err = jnp.abs(est_step - real_step)
+    return jnp.mean(err)
+
+def qg_mean_l1err_loss(real_step, est_step):
+    err = jnp.abs(est_step - real_step)
+    return jnp.mean(err) * (1 / MEAN_QG_VAL_VALUE)
 
 def relerr_loss(real_step, est_step):
     err = jnp.abs(est_step - real_step)
