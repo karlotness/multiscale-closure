@@ -161,7 +161,16 @@ def make_val_computer(small_model, loss_fn):
             small_model,
             loss_fn
         )
-        return jnp.nan_to_num(step_losses[0], nan=jnp.inf, posinf=jnp.inf, neginf=jnp.inf)
+        step_losses = jnp.nan_to_num(step_losses[0], nan=jnp.inf, posinf=jnp.inf, neginf=jnp.inf)
+        uncorrected_step_losses = batch_loss_func(
+            traj,
+            lambda params, u, v: (jnp.zeros_like(u), jnp.zeros_like(v)),
+            None,
+            small_model,
+            loss_fn
+        )
+        uncorrected_step_losses = jnp.nan_to_num(uncorrected_step_losses[0], nan=jnp.inf, posinf=jnp.inf, neginf=jnp.inf)
+        return step_losses, uncorrected_step_losses
 
     return do_traj
 
@@ -180,10 +189,13 @@ def do_epoch(train_state, train_func, epoch_num, num_batches, batch_iter, logger
 
 def do_validation(val_batch_iter, train_state, val_func, val_file, logger):
     traj_losses = []
+    uncorrected_losses = []
     for batch in val_batch_iter:
         logger.debug("Doing validation")
-        traj_losses.append(val_func(batch, train_state))
-    return np.mean(traj_losses, axis=0)
+        traj_loss, uncorrected_loss = val_func(batch, train_state)
+        traj_losses.append(traj_loss)
+        uncorrected_losses.append(uncorrected_loss)
+    return np.mean(traj_losses, axis=0), np.mean(uncorrected_losses, axis=0)
 
 
 def save_network(output_name, output_dir, net, params, base_logger=None):
@@ -296,7 +308,7 @@ def main():
             with contextlib.closing(val_loader.iter_batches()) as val_batch_iter:
                 logger.info("Starting validation after epoch %d", epoch + 1)
                 val_start = time.perf_counter()
-                val_loss_horizons = do_validation(
+                val_loss_horizons, uncorr_loss_horizons = do_validation(
                     val_batch_iter=itertools.islice(val_batch_iter, args.val_samples),
                     train_state=train_state,
                     val_func=val_func,
@@ -306,12 +318,25 @@ def main():
                 val_elapsed = time.perf_counter() - val_start
                 logger.info("Finished validation for epoch %d in %f sec.", epoch + 1, val_elapsed)
             val_report_horizons = {
-                "end": val_loss_horizons[-1]
+                "end": {
+                    "val": float(np.mean(val_loss_horizons)),
+                    "uncorr": float(np.mean(uncorr_loss_horizons)),
+                }
             }
-            for horizon in sorted({10, 25, 50, 100, 250, 500, 750, 1000}):
+            for horizon in sorted({5, 10, 25, 50, 100, 250, 500, 750, 1000}):
                 if horizon - 1 < val_loss_horizons.shape[0]:
-                    val_report_horizons[f"{horizon:d}"] = float(val_loss_horizons[horizon - 1])
-                    logger.info("Validation horizon %d steps: %f", horizon, float(val_loss_horizons[horizon - 1]))
+                    horiz_val = float(np.mean(val_loss_horizons[:horizon]))
+                    uncorr_val = float(np.mean(uncorr_loss_horizons[:horizon]))
+                    val_report_horizons[f"{horizon:d}"] = {
+                        "val": horiz_val,
+                        "uncorr": uncorr_val,
+                    }
+                    logger.info(
+                        "Validation horizon %d steps: %f%% (vs. %f%%)",
+                        horizon,
+                        horiz_val * 100,
+                        uncorr_val * 100,
+                    )
             # If validation improved, store snapshot
             if best_val_loss is None or compare_val_loss(val_loss_horizons, best_val_loss) < 0:
                 logger.info("Validation performance improved, saving weights")
