@@ -235,6 +235,7 @@ def main():
     logger.info("Using seed %d", seed)
     # Configure required elements for training
     rng_ctr = jax.random.PRNGKey(seed=seed)
+    loader_rng_init = random.Random(seed)
     train_file = pathlib.Path(args.train_set) / "data.hdf5"
     val_file = pathlib.Path(args.val_set) / "data.hdf5"
     train_small_model = qg_model_from_hdf5(file_path=train_file, model="small")
@@ -274,7 +275,7 @@ def main():
                     train_file=train_file,
                     batch_size=args.batch_size,
                     rollout_length_str=args.rollout_length,
-                    seed=seed,
+                    seed=loader_rng_init.randint(0, 2**32),
                     base_logger=logger,
                 )
             )
@@ -287,7 +288,7 @@ def main():
                 split_name="val",
                 base_logger=logger,
                 buffer_size=args.val_samples,
-                seed=seed,
+                seed=loader_rng_init.randint(0, 2**32),
                 num_workers=1,
             )
         )
