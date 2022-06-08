@@ -30,7 +30,7 @@ parser.add_argument("--weight_decay", type=float, default=0.0001, help="Weight d
 parser.add_argument("--batch_size", type=int, default=25, help="Batch size")
 parser.add_argument("--train_epochs", type=int, default=700, help="Number of training epochs")
 parser.add_argument("--batches_per_epoch", type=int, default=100, help="Number of batches per epoch (with replacement)")
-parser.add_argument("--rollout_length", type=str, default="40", help="Schedule for rollout length (a space-separated list of <start_epoch>@<length>, if start_epoch omitted, it is implicitly zero)")
+parser.add_argument("--rollout_length", type=str, default="5 300@10 500@20 600@40", help="Schedule for rollout length (a space-separated list of <start_epoch>@<length>, if start_epoch omitted, it is implicitly zero)")
 parser.add_argument("--val_steps", type=int, default=500, help="Number of steps to run in validation")
 parser.add_argument("--val_samples", type=int, default=10, help="Number of batches to run in a validation pass")
 parser.add_argument("--seed", type=int, default=None, help="Seed to use with RNG (if None, select automatically)")
