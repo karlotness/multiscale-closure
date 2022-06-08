@@ -239,6 +239,8 @@ def main():
     val_file = pathlib.Path(args.val_set) / "data.hdf5"
     train_small_model = qg_model_from_hdf5(file_path=train_file, model="small")
     val_small_model = qg_model_from_hdf5(file_path=val_file, model="small")
+    weights_dir = out_dir / "weights"
+    weights_dir.mkdir(exist_ok=True)
     # Construct neural net
     rng, rng_ctr = jax.random.split(rng_ctr, 2)
     logger.info("Training network %s", args.architecture)
@@ -340,7 +342,7 @@ def main():
             # If validation improved, store snapshot
             if best_val_loss is None or compare_val_loss(val_loss_horizons, best_val_loss) < 0:
                 logger.info("Validation performance improved, saving weights")
-                save_network("best_val", out_dir, net=net, params=train_state.params, base_logger=logger)
+                save_network("best_val", weights_dir, net=net, params=train_state.params, base_logger=logger)
                 best_val_loss = val_loss_horizons
                 new_best_val = True
             else:
@@ -356,7 +358,7 @@ def main():
                 }
             )
     # Store final weights
-    save_network("final_net", out_dir, net=net, params=train_state.params, base_logger=logger)
+    save_network("final_net", weights_dir, net=net, params=train_state.params, base_logger=logger)
     end = time.perf_counter()
     # Finished training
     logger.info("Finished training in %f sec", end - start)
