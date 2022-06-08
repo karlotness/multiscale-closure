@@ -15,7 +15,8 @@ import numpy as np
 import logging
 import time
 from systems.qg.qg_model import QGModel
-from systems.qg.loader import ThreadedQGLoader, qg_model_from_hdf5
+from systems.qg import utils as qg_utils
+from systems.qg.loader import ThreadedQGLoader, SimpleQGLoader, qg_model_from_hdf5
 import utils
 from methods import ARCHITECTURES
 
@@ -30,8 +31,24 @@ parser.add_argument("--batch_size", type=int, default=25, help="Batch size")
 parser.add_argument("--train_epochs", type=int, default=700, help="Number of training epochs")
 parser.add_argument("--batches_per_epoch", type=int, default=100, help="Number of batches per epoch (with replacement)")
 parser.add_argument("--rollout_length", type=str, default="40", help="Schedule for rollout length (a space-separated list of <start_epoch>@<length>, if start_epoch omitted, it is implicitly zero)")
+parser.add_argument("--val_steps", type=int, default=500, help="Number of steps to run in validation")
+parser.add_argument("--val_samples", type=int, default=10, help="Number of batches to run in a validation pass")
 parser.add_argument("--seed", type=int, default=None, help="Seed to use with RNG (if None, select automatically)")
 parser.add_argument("--architecture", type=str, default="closure-cnn-v1", help="Choose architecture to train", choices=sorted(ARCHITECTURES.keys()))
+
+
+def relerr_loss(real_step, est_step):
+    err = jnp.abs(est_step - real_step)
+    return jnp.mean(err / jnp.abs(real_step))
+
+
+def compare_val_loss(a, b):
+    for av, bv in zip(reversed(a), reversed(b)):
+        if av > bv:
+            return 1
+        elif av < bv:
+            return -1
+    return 0
 
 
 def init_network(architecture, lr, weight_decay, rng, small_model):
@@ -48,7 +65,6 @@ def init_network(architecture, lr, weight_decay, rng, small_model):
         new_params.append(jax.random.normal(rng_use, shape=p.shape) * 1e-5)
     params = jax.tree_util.tree_unflatten(tree, new_params)
     optim = optax.adamw(learning_rate=lr, weight_decay=weight_decay)
-    #optim = optax.sgd(learning_rate=lr)
     return net, TrainState.create(
         apply_fn=net.apply,
         params=params,
@@ -104,13 +120,60 @@ def epoch_batch_iterators(train_file, batch_size, rollout_length_str, seed=None,
                 yield loader.iter_batches()
 
 
-def do_epoch(train_state, epoch_num, num_batches, batch_iter, logger):
+def make_train_batch_computer(small_model, loss_fn):
+    def do_batch(batch, train_state):
+        batch_loss_func = jax.vmap(qg_utils.get_online_batch_loss, in_axes=(0, None, None, None, None))
+        def _get_losses(params):
+            step_losses = batch_loss_func(batch, train_state.apply_fn, params, small_model, loss_fn)
+            return jnp.mean(step_losses)
+
+        loss, grads = jax.value_and_grad(_get_losses)(train_state.params)
+        new_train_state = jax.lax.cond(
+            jnp.isfinite(jnp.abs(loss)),
+            lambda: train_state.apply_gradients(grads=grads),
+            lambda: train_state,
+        )
+        return new_train_state, loss
+
+    return do_batch
+
+
+def make_val_computer(small_model, loss_fn):
+    def do_traj(traj, train_state):
+        batch_loss_func = jax.vmap(
+            qg_utils.get_online_batch_loss,
+            in_axes=(0, None, None, None, None)
+        )
+        step_losses = batch_loss_func(
+            traj,
+            train_state.apply_fn,
+            train_state.params,
+            small_model,
+            loss_fn
+        )
+        return jnp.nan_to_num(step_losses[0], nan=jnp.inf, posinf=jnp.inf, neginf=jnp.inf)
+
+    return do_traj
+
+
+def do_epoch(train_state, train_func, epoch_num, num_batches, batch_iter, logger):
     losses = []
     for batch in itertools.islice(batch_iter, num_batches):
-        loss = 0
+        train_state, loss = train_func(batch, train_state)
         losses.append(loss)
+    losses = np.array(losses)
+    num_skipped = np.count_nonzero(np.logical_not(np.isfinite(losses)))
+    if num_skipped > 0:
+        logger.warning("Skipped %d batches due to nan/inf loss", num_skipped)
+    return train_state, float(np.nanmean(losses))
 
-    return train_state, 0#, jnp.mean(losses)
+
+def do_validation(val_batch_iter, train_state, val_func, val_file, logger):
+    traj_losses = []
+    for batch in val_batch_iter:
+        logger.debug("Doing validation")
+        traj_losses.append(val_func(batch, train_state))
+    return np.mean(traj_losses, axis=0)
 
 
 def save_network(output_name, output_dir, net, params, base_logger=None):
@@ -164,42 +227,97 @@ def main():
         rng=rng,
         small_model=train_small_model,
     )
+    train_func = jax.jit(
+        make_train_batch_computer(
+            small_model=train_small_model,
+            loss_fn=relerr_loss,
+        )
+    )
+    val_func = jax.jit(
+        make_val_computer(
+            small_model=val_small_model,
+            loss_fn=relerr_loss,
+        )
+    )
     # Begin training
     start = time.perf_counter()
     epoch_stats = []
-    with contextlib.closing(
-            epoch_batch_iterators(
-                train_file=train_file,
-                batch_size=args.batch_size,
-                rollout_length_str=args.rollout_length,
-                seed=seed,
-                base_logger=logger,
+    best_val_loss = None
+    with contextlib.ExitStack() as train_process_context:
+        epoch_batch_iter = train_process_context.enter_context(
+            contextlib.closing(
+                epoch_batch_iterators(
+                    train_file=train_file,
+                    batch_size=args.batch_size,
+                    rollout_length_str=args.rollout_length,
+                    seed=seed,
+                    base_logger=logger,
+                )
             )
-    ) as epoch_batch_iter:
+        )
+        val_loader = train_process_context.enter_context(
+            ThreadedQGLoader(
+                file_path=val_file,
+                batch_size=1,
+                rollout_steps=args.val_steps,
+                split_name="val",
+                base_logger=logger,
+                buffer_size=args.val_samples,
+                seed=seed,
+                num_workers=1,
+            )
+        )
         for epoch, raw_batch_iter in zip(range(args.train_epochs), epoch_batch_iter):
             with contextlib.closing(raw_batch_iter) as batch_iter:
                 # Do training phase
-                logger.info("Starting epoch %d of %d (%d batches)", epoch, args.train_epochs, args.batches_per_epoch)
+                logger.info("Starting epoch %d of %d (%d batches)", epoch + 1, args.train_epochs, args.batches_per_epoch)
                 train_start = time.perf_counter()
                 train_state, mean_train_loss = do_epoch(
                     train_state=train_state,
+                    train_func=train_func,
                     epoch_num=epoch,
                     num_batches=args.batches_per_epoch,
                     batch_iter=batch_iter,
                     logger=logger.getChild("train_epoch"),
                 )
                 train_elapsed = time.perf_counter() - train_start
-                logger.info("Finished epoch %d in %f sec", epoch, train_elapsed)
+                logger.info("Finished epoch %d in %f sec. train_loss=%f", epoch + 1, train_elapsed, mean_train_loss)
             # Run validation phase
-
+            with contextlib.closing(val_loader.iter_batches()) as val_batch_iter:
+                logger.info("Starting validation after epoch %d", epoch + 1)
+                val_start = time.perf_counter()
+                val_loss_horizons = do_validation(
+                    val_batch_iter=itertools.islice(val_batch_iter, args.val_samples),
+                    train_state=train_state,
+                    val_func=val_func,
+                    val_file=val_file,
+                    logger=logger.getChild("validate"),
+                )
+                val_elapsed = time.perf_counter() - val_start
+                logger.info("Finished validation for epoch %d in %f sec.", epoch + 1, val_elapsed)
+            val_report_horizons = {
+                "end": val_loss_horizons[-1]
+            }
+            for horizon in sorted({10, 25, 50, 100, 250, 500, 750, 1000}):
+                if horizon - 1 < val_loss_horizons.shape[0]:
+                    val_report_horizons[f"{horizon:d}"] = float(val_loss_horizons[horizon - 1])
+                    logger.info("Validation horizon %d steps: %f", horizon, float(val_loss_horizons[horizon - 1]))
             # If validation improved, store snapshot
-
+            if best_val_loss is None or compare_val_loss(val_loss_horizons, best_val_loss) < 0:
+                logger.info("Validation performance improved, saving weights")
+                save_network("best_val", out_dir, net=net, params=train_state.params, base_logger=logger)
+                best_val_loss = val_loss_horizons
+                new_best_val = True
+            else:
+                new_best_val = False
             # Record some training statistics
             epoch_stats.append(
                 {
                     "epoch": epoch,
                     "train_elapsed_secs": train_elapsed,
                     "mean_train_loss": mean_train_loss,
+                    "mean_val_losses": val_report_horizons,
+                    "new_best_val": new_best_val,
                 }
             )
     # Store final weights
