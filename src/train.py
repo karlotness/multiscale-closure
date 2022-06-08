@@ -10,10 +10,13 @@ import jax
 import jax.numpy as jnp
 import optax
 import flax.serialization
-from flax.training.train_state import TrainState
+import flax.training.train_state
+import flax.struct
 import numpy as np
 import logging
 import time
+import functools
+from typing import Callable
 from systems.qg.qg_model import QGModel
 from systems.qg import utils as qg_utils
 from systems.qg.loader import ThreadedQGLoader, SimpleQGLoader, qg_model_from_hdf5
@@ -37,6 +40,10 @@ parser.add_argument("--val_steps", type=int, default=500, help="Number of steps 
 parser.add_argument("--val_samples", type=int, default=10, help="Number of batches to run in a validation pass")
 parser.add_argument("--seed", type=int, default=None, help="Seed to use with RNG (if None, select automatically)")
 parser.add_argument("--architecture", type=str, default="closure-cnn-v1", help="Choose architecture to train", choices=sorted(ARCHITECTURES.keys()))
+
+
+class RecurrentTrainState(flax.training.train_state.TrainState):
+    memory_init_fn: Callable = flax.struct.field(pytree_node=False)
 
 
 def mean_l1err_loss(real_step, est_step):
@@ -75,8 +82,9 @@ def init_network(architecture, lr, weight_decay, rng, small_model):
         new_params.append(jax.random.normal(rng_use, shape=p.shape) * 1e-5)
     params = jax.tree_util.tree_unflatten(tree, new_params)
     optim = optax.adamw(learning_rate=lr, weight_decay=weight_decay)
-    return net, TrainState.create(
-        apply_fn=net.apply,
+    return net, RecurrentTrainState.create(
+        apply_fn=functools.partial(net.apply, method=net.parameterization),
+        memory_init_fn=functools.partial(net.apply, method=net.init_memory),
         params=params,
         tx=optim,
     )
@@ -132,9 +140,9 @@ def epoch_batch_iterators(train_file, batch_size, rollout_length_str, seed=None,
 
 def make_train_batch_computer(small_model, loss_fn):
     def do_batch(batch, train_state):
-        batch_loss_func = jax.vmap(qg_utils.get_online_batch_loss, in_axes=(0, None, None, None, None))
+        batch_loss_func = jax.vmap(qg_utils.get_online_batch_loss, in_axes=(0, None, None, None, None, None))
         def _get_losses(params):
-            step_losses = batch_loss_func(batch, train_state.apply_fn, params, small_model, loss_fn)
+            step_losses = batch_loss_func(batch, train_state.apply_fn, params, small_model, loss_fn, train_state.memory_init_fn)
             return jnp.mean(step_losses)
 
         loss, grads = jax.value_and_grad(_get_losses)(train_state.params)
@@ -152,22 +160,24 @@ def make_val_computer(small_model, loss_fn):
     def do_traj(traj, train_state):
         batch_loss_func = jax.vmap(
             qg_utils.get_online_batch_loss,
-            in_axes=(0, None, None, None, None)
+            in_axes=(0, None, None, None, None, None)
         )
         step_losses = batch_loss_func(
             traj,
             train_state.apply_fn,
             train_state.params,
             small_model,
-            loss_fn
+            loss_fn,
+            train_state.memory_init_fn,
         )
         step_losses = jnp.nan_to_num(step_losses[0], nan=jnp.inf, posinf=jnp.inf, neginf=jnp.inf)
         uncorrected_step_losses = batch_loss_func(
             traj,
-            lambda params, u, v: (jnp.zeros_like(u), jnp.zeros_like(v)),
+            lambda params, u, v, memory: (jnp.zeros_like(u), jnp.zeros_like(v), None),
             None,
             small_model,
-            loss_fn
+            loss_fn,
+            lambda params, u, v: None,
         )
         uncorrected_step_losses = jnp.nan_to_num(uncorrected_step_losses[0], nan=jnp.inf, posinf=jnp.inf, neginf=jnp.inf)
         return step_losses, uncorrected_step_losses

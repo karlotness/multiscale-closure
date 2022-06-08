@@ -84,38 +84,48 @@ def slice_kernel_state(state, slicer):
     return PseudoSpectralKernelState(**{k: getattr(state, k)[slicer] for k in data_fields})
 
 
-def get_online_rollout(start_state, num_steps, apply_fn, params, small_model):
-    def apply_net(state):
-        sx, sy = apply_fn(params, state.u, state.v)
-        return sx, sy
+def get_online_rollout(start_state, num_steps, apply_fn, params, small_model, memory_init_fn):
+    memory = memory_init_fn(params, start_state.u, start_state.v)
 
     def do_steps(carry_state, _):
-        new_state = small_model.step_forward(carry_state, uv_param_func=apply_net)
-        return new_state, new_state
+        old_state, memory = carry_state
 
-    _last_step, new_states = jax.lax.scan(
+        def apply_net(state):
+            nonlocal memory
+            sx, sy, memory = apply_fn(params, state.u, state.v, memory)
+            return sx, sy
+
+        new_state = small_model.step_forward(old_state, uv_param_func=apply_net)
+        return (new_state, memory), new_state
+
+    (_last_step, last_memory), new_states = jax.lax.scan(
         do_steps,
         start_state,
         None,
         length=num_steps,
     )
-    return new_states
+    return new_states, last_memory
 
 
-def get_online_batch_loss(real_traj, apply_fn, params, small_model, loss_fn):
-
-    def apply_net(state):
-        sx, sy = apply_fn(params, state.u, state.v)
-        return sx, sy
+def get_online_batch_loss(real_traj, apply_fn, params, small_model, loss_fn, memory_init_fn):
+    first_step = slice_kernel_state(real_traj, 0)
+    memory = memory_init_fn(params, first_step.u, first_step.v)
 
     def do_steps(carry_state, true_step):
-        new_state = small_model.step_forward(carry_state, uv_param_func=apply_net)
-        loss = loss_fn(real_step=true_step.q, est_step=new_state.q)
-        return new_state, loss
+        old_state, memory = carry_state
 
-    _last_step, losses = jax.lax.scan(
+        def apply_net(state):
+            nonlocal memory
+            sx, sy, memory = apply_fn(params, state.u, state.v, memory)
+            return sx, sy
+
+        new_state = small_model.step_forward(old_state, uv_param_func=apply_net)
+        loss = loss_fn(real_step=true_step.q, est_step=new_state.q)
+        return (new_state, memory), loss
+
+    (_last_step, _last_memory), losses = jax.lax.scan(
         do_steps,
-        slice_kernel_state(real_traj, 0),
+        (first_step, memory),
         slice_kernel_state(real_traj, slice(1, None))
     )
     return losses

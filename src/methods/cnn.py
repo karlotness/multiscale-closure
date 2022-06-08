@@ -43,8 +43,12 @@ class ClosureCnnV1(nn.Module):
             },
         }
 
+    def init_memory(self, u, v):
+        return None
+
     @nn.compact
-    def __call__(self, u, v):
+    def parameterization(self, u, v, memory):
+        assert memory is None
         u = (u - self.u_mean) / self.u_std
         v = (v - self.v_mean) / self.v_std
         x = jnp.concatenate([u, v], axis=0)
@@ -68,4 +72,7 @@ class ClosureCnnV1(nn.Module):
         sx, sy = jnp.split(x, 2, axis=0)
         sx = sx * self.u_std
         sy = sy * self.v_std
-        return sx, sy
+        return sx, sy, None
+
+    def __call__(self, u, v):
+        return self.parameterization(u, v, None)
