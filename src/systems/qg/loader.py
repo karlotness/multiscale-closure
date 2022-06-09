@@ -59,10 +59,10 @@ def _proc_worker_func(
                 # This is our stop signal
                 logger.debug("process worker signaled to stop")
                 return
-            traj, step = job
+            i, traj, step = job
             proc.stdin.write(f"{traj:d} {step:d}\n".encode("utf8"))
             proc.stdin.flush()
-            out_queue.put(np.frombuffer(proc.stdout.read(arr_byte_size), dtype=arr_dtype))
+            out_queue.put((i, np.frombuffer(proc.stdout.read(arr_byte_size), dtype=arr_dtype)))
     except Exception:
         logger.exception("error in process worker")
         raise
@@ -92,6 +92,8 @@ def _worker_func(
         arr_dtype, arr_byte_size = _get_series_details(file_path=file_path, rollout_steps=rollout_steps)
         submit_queue = queue.SimpleQueue()
         recieve_queue = queue.SimpleQueue()
+        sort_key_func = operator.itemgetter(0)
+        undecorate_func = operator.itemgetter(1)
         sub_threads = [
             threading.Thread(
                 target=_proc_worker_func,
@@ -125,14 +127,15 @@ def _worker_func(
                 samples = rng.integers(0, total_valid_starts, size=batch_size, dtype=np.uint64)
                 batch_trajs, batch_steps = np.divmod(samples, per_traj_valid_steps + 1)
                 # Assign each process a trajectory
-                for traj, step in zip(batch_trajs, batch_steps, strict=True):
-                    submit_queue.put((traj, step))
+                for i, (traj, step) in enumerate(zip(batch_trajs, batch_steps, strict=True)):
+                    submit_queue.put((i, traj, step))
                 # Retrieve results
                 arr_stack = []
                 for _i in range(batch_size):
                     arr_stack.append(recieve_queue.get())
+                arr_stack.sort(key=sort_key_func)
                 # Stack and split arrays, push to GPU and place in queue
-                arr_stack = np.stack(arr_stack)
+                arr_stack = np.stack(list(map(undecorate_func, arr_stack)))
                 out_queue.put(kernel.PseudoSpectralKernelState(**{k: jax.device_put(arr_stack[k]) for k in data_fields}))
         except Exception:
             logger.exception("exception inside worker thread, terminating worker and processes")
