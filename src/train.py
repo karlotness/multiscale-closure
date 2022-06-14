@@ -59,13 +59,10 @@ def relerr_loss(real_step, est_step):
     return jnp.mean(err / jnp.abs(real_step))
 
 
-def compare_val_loss(a, b):
-    for av, bv in zip(reversed(a), reversed(b)):
-        if av > bv:
-            return 1
-        elif av < bv:
-            return -1
-    return 0
+def compare_val_loss(a, b, rollout_len):
+    l_a = np.mean(a[:rollout_len])
+    l_b = np.mean(b[:rollout_len])
+    return l_a - l_b
 
 
 def init_network(architecture, lr, weight_decay, rng, small_model):
@@ -135,7 +132,7 @@ def epoch_batch_iterators(train_file, batch_size, rollout_length_str, seed=None,
                 seed=loader_seed,
         ) as loader:
             for _step in step_iter:
-                yield loader.iter_batches()
+                yield rollout_steps, loader.iter_batches()
 
 
 def make_train_batch_computer(small_model, loss_fn):
@@ -302,7 +299,7 @@ def main():
                 num_workers=1,
             )
         )
-        for epoch, raw_batch_iter in zip(range(args.train_epochs), epoch_batch_iter):
+        for epoch, (train_rollout_len, raw_batch_iter) in zip(range(args.train_epochs), epoch_batch_iter):
             with contextlib.closing(raw_batch_iter) as batch_iter:
                 # Do training phase
                 logger.info("Starting epoch %d of %d (%d batches)", epoch + 1, args.train_epochs, args.batches_per_epoch)
@@ -351,7 +348,7 @@ def main():
                         uncorr_val * 100,
                     )
             # If validation improved, store snapshot
-            if best_val_loss is None or compare_val_loss(val_loss_horizons, best_val_loss) < 0:
+            if best_val_loss is None or compare_val_loss(val_loss_horizons, best_val_loss, rollout_len=train_rollout_len) < 0:
                 logger.info("Validation performance improved, saving weights")
                 save_network("best_val", weights_dir, net=net, params=train_state.params, base_logger=logger)
                 best_val_loss = val_loss_horizons
