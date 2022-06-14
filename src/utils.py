@@ -3,6 +3,7 @@ import subprocess
 import codecs
 import dataclasses
 import os
+import pathlib
 
 
 def set_up_logging(level="info", out_file=None):
@@ -24,14 +25,15 @@ class CommitInfo:
 
 
 def get_git_info(base_logger=None):
+    git_dir = pathlib.Path(__file__).parent
     if base_logger:
         logger = base_logger.getChild("gitinfo")
     else:
         logger = logging.getLogger("gitinfo")
     try:
-        commit_id_out = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, check=True)
+        commit_id_out = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, check=True, cwd=git_dir)
         commit_id = codecs.decode(commit_id_out.stdout).strip()
-        clean_tree_out = subprocess.run(["git", "status", "--porcelain"], capture_output=True, check=True)
+        clean_tree_out = subprocess.run(["git", "status", "--porcelain"], capture_output=True, check=True, cwd=git_dir)
         clean_worktree = len(clean_tree_out.stdout) == 0
         return CommitInfo(hash=commit_id, clean_worktree=clean_worktree)
     except Exception:
