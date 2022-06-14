@@ -26,8 +26,6 @@ class ClosureCnnV1(UVParameterization):
     u_std:  float = 0.009262884
     v_mean: float = 1.0549827e-13
     v_std:  float = 0.009245564
-    q_mean: float = 2.716908e-07
-    q_std:  float = 1.7318747e-06
 
     def net_description(self):
         return {
@@ -38,8 +36,6 @@ class ClosureCnnV1(UVParameterization):
                 "u_std": self.u_std,
                 "v_mean": self.v_mean,
                 "v_std": self.v_std,
-                "q_mean": self.q_mean,
-                "q_std": self.q_std,
             },
         }
 
