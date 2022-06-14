@@ -100,7 +100,7 @@ def get_online_rollout(start_state, num_steps, apply_fn, params, small_model, me
 
     (_last_step, last_memory), new_states = jax.lax.scan(
         do_steps,
-        start_state,
+        (start_state, memory),
         None,
         length=num_steps,
     )
