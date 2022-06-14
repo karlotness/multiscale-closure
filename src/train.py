@@ -38,6 +38,7 @@ parser.add_argument("--batches_per_epoch", type=int, default=100, help="Number o
 parser.add_argument("--rollout_length", type=str, default="5 300@10 500@20 600@40", help="Schedule for rollout length (a space-separated list of <start_epoch>@<length>, if start_epoch omitted, it is implicitly zero)")
 parser.add_argument("--val_steps", type=int, default=500, help="Number of steps to run in validation")
 parser.add_argument("--val_samples", type=int, default=10, help="Number of batches to run in a validation pass")
+parser.add_argument("--save_interval", type=int, default=10, help="Number of epochs between saves")
 parser.add_argument("--seed", type=int, default=None, help="Seed to use with RNG (if None, select automatically)")
 parser.add_argument("--architecture", type=str, default="closure-cnn-v1", help="Choose architecture to train", choices=sorted(ARCHITECTURES.keys()))
 
@@ -314,6 +315,8 @@ def main():
                 )
                 train_elapsed = time.perf_counter() - train_start
                 logger.info("Finished epoch %d in %f sec. train_loss=%f", epoch + 1, train_elapsed, mean_train_loss)
+            if epoch % args.save_interval == 0:
+                save_network("interval", weights_dir, net=net, params=train_state.params, base_logger=logger)
             # Run validation phase
             with contextlib.closing(val_loader.iter_batches()) as val_batch_iter:
                 logger.info("Starting validation after epoch %d", epoch + 1)
