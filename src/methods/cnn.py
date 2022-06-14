@@ -2,7 +2,7 @@ from collections.abc import Sequence
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
-from ._defs import ACTIVATIONS
+from ._defs import ACTIVATIONS, UVParameterization
 
 class CNN(nn.Module):
     features_kernels: Sequence[tuple[int, int]]
@@ -19,7 +19,7 @@ class CNN(nn.Module):
         return x
 
 
-class ClosureCnnV1(nn.Module):
+class ClosureCnnV1(UVParameterization):
     nz: int = 2
     # Constants from QG validation set
     u_mean: float = -1.05890814e-13
@@ -42,9 +42,6 @@ class ClosureCnnV1(nn.Module):
                 "q_std": self.q_std,
             },
         }
-
-    def init_memory(self, u, v):
-        return None
 
     @nn.compact
     def parameterization(self, u, v, memory):
@@ -73,6 +70,3 @@ class ClosureCnnV1(nn.Module):
         sx = sx * self.u_std
         sy = sy * self.v_std
         return sx, sy, None
-
-    def __call__(self, u, v):
-        return self.parameterization(u, v, None)
