@@ -173,7 +173,7 @@ async def _worker_coro(
                 arr_stack.sort(key=sort_key_func)
                 # Stack and split arrays, push to GPU and place in queue
                 arr_stack = np.stack(list(map(undecorate_func, arr_stack)))
-                out_result = kernel.PseudoSpectralKernelState(**{k: jax.device_put(arr_stack[k]) for k in data_fields})
+                out_result = jax.device_put(kernel.PseudoSpectralKernelState(**{k: arr_stack[k] for k in data_fields}))
                 async with queue_wait_cond:
                     while True:
                         try:
