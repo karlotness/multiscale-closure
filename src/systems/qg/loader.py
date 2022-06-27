@@ -349,4 +349,4 @@ class SimpleQGLoader:
         if end is not None:
             end = operator.index(end)
         traj_data = self._trajs_group[f"traj{traj:05d}"][start:end]
-        return kernel.PseudoSpectralKernelState(**{k: jax.device_put(traj_data[k]) for k in self._data_fields})
+        return jax.device_put(kernel.PseudoSpectralKernelState(**{k: traj_data[k] for k in self._data_fields}))
