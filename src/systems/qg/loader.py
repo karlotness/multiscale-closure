@@ -113,6 +113,7 @@ async def _proc_worker_task(
         logger.exception("error in process worker")
         raise
     finally:
+        await out_queue.put(None)
         proc.stdin.write_eof()
         return_code = await proc.wait()
         if return_code != 0:
@@ -175,6 +176,9 @@ async def _worker_coro(
                 arr_stack = []
                 for _i in range(batch_size):
                     arr_stack.append(await recieve_queue.get())
+                if not all(arr_stack):
+                    logger.error("worker died prematurely, exiting")
+                    return
                 arr_stack.sort(key=sort_key_func)
                 # Stack and split arrays, push to GPU and place in queue
                 arr_stack = np.stack(list(map(undecorate_func, arr_stack)))
