@@ -20,6 +20,7 @@ __all__ = ["ThreadedQGLoader", "qg_model_from_hdf5"]
 
 _WORK_LOOP = None
 _WORK_LOOP_MUTEX = threading.Lock()
+_PENDING_TASKS = set()
 
 
 def qg_model_from_hdf5(file_path, model="small"):
@@ -69,8 +70,13 @@ async def _signal_condition_cb(cond):
     async with cond:
         cond.notify()
 
+def _add_signal_task(cond):
+    task = asyncio.create_task(_signal_condition_cb(cond))
+    _PENDING_TASKS.add(task)
+    task.add_done_callback(_PENDING_TASKS.discard)
+
 def _signal_work_loop_cond(loop, cond):
-    loop.call_soon_threadsafe(asyncio.create_task, _signal_condition_cb(cond))
+    loop.call_soon_threadsafe(_add_signal_task, cond)
 
 async def _proc_worker_task(
         in_queue,
