@@ -142,7 +142,7 @@ async def _worker_coro(
         recieve_queue = asyncio.Queue()
         sort_key_func = operator.itemgetter(0)
         undecorate_func = operator.itemgetter(1)
-        sub_tasks = [
+        sub_tasks = {
             asyncio.create_task(
                 _proc_worker_task(
                     in_queue=submit_queue,
@@ -155,7 +155,7 @@ async def _worker_coro(
                 )
             )
             for i in range(num_procs)
-        ]
+        }
         try:
             # Compute needed information
             rng = np.random.default_rng(seed=seed)
