@@ -113,8 +113,7 @@ async def _proc_worker_task(
         logger.exception("error in process worker")
         raise
     finally:
-        proc.stdin.write(b"exit\n")
-        await proc.stdin.drain()
+        proc.stdin.write_eof()
         return_code = await proc.wait()
         if return_code != 0:
             logger.error("worker exited abnormally with code %d", return_code)

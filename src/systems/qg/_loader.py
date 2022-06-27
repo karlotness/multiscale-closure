@@ -11,16 +11,15 @@ def main(args):
     with h5py.File(args.file_path, "r") as h5_file:
         trajs_group = h5_file["trajs"]
         # Do work here
-        while True:
-            line = sys.stdin.readline()
-            if line == "exit\n":
-                # Orderly exit
-                sys.exit(0)
+        while line := sys.stdin.readline():
             line_parts = line.split()
             traj = int(line_parts[0])
             step = int(line_parts[1])
             sys.stdout.buffer.write(trajs_group[f"traj{traj:05d}"][step:step + rollout_steps].tobytes())
             sys.stdout.buffer.flush()
+        else:
+            # Orderly exit
+            sys.exit(0)
 
 
 if __name__ == "__main__":
