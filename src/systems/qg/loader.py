@@ -202,6 +202,15 @@ async def _worker_coro(
     except Exception:
         logger.exception("exception inside worker thread, terminating worker")
         raise
+    finally:
+        # Signal that we've exited by placing None in the queue
+        async with queue_wait_cond:
+            while True:
+                try:
+                    out_queue.put_nowait(None)
+                    break
+                except queue.Full:
+                    await queue_wait_cond.wait()
 
 
 class ThreadedQGLoader:
@@ -284,6 +293,9 @@ class ThreadedQGLoader:
             raise ValueError("Closed dataset, cannot load batches")
         res = self._queue.get()
         _signal_work_loop_cond(self._work_loop, self._queue_wait_cond)
+        if res is None:
+            self._logger.error("background worker stopped prematurely")
+            raise RuntimeError("background worker stopped prematurely")
         return res
 
     def iter_batches(self):
