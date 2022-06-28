@@ -38,9 +38,29 @@ def _get_series_details(file_path, rollout_steps):
 def _get_work_loop():
     global _WORK_LOOP
 
-    def _start_loop(loop):
-        asyncio.set_event_loop(loop)
-        loop.run_forever()
+    def _start_loop(loop, logger):
+        try:
+            asyncio.set_event_loop(loop)
+            loop.run_forever()
+        except Exception:
+            logger.exception("event loop quit unexpectedly")
+            raise
+        finally:
+            with _WORK_LOOP_MUTEX:
+                _WORK_LOOP = None
+            try:
+                # Cancel tasks
+                to_cancel = asyncio.all_tasks(loop)
+                if to_cancel:
+                    for task in to_cancel:
+                        task.cancel()
+                    loop.run_until_complete(asyncio.gather(*to_cancel, return_exceptions=True))
+                # Shut down everything else
+                loop.run_until_complete(loop.shutdown_asyncgens())
+                loop.run_until_complete(loop.shutdown_default_executor())
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
 
     with _WORK_LOOP_MUTEX:
         if _WORK_LOOP is None:
@@ -49,6 +69,7 @@ def _get_work_loop():
                 target=_start_loop,
                 kwargs={
                     "loop": _WORK_LOOP,
+                    "logger": logging.getLogger("loader_event_loop"),
                 },
                 name="loader_worker",
                 daemon=True,
