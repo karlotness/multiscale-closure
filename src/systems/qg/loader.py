@@ -295,6 +295,7 @@ class ThreadedQGLoader:
         _signal_work_loop_cond(self._work_loop, self._queue_wait_cond)
         if res is None:
             self._logger.error("background worker stopped prematurely")
+            self.close()
             raise RuntimeError("background worker stopped prematurely")
         return res
 
