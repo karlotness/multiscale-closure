@@ -55,6 +55,11 @@ def _get_work_loop():
                     for task in to_cancel:
                         task.cancel()
                     loop.run_until_complete(asyncio.gather(*to_cancel, return_exceptions=True))
+                    for task in to_cancel:
+                        if task.cancelled():
+                            continue
+                        if task.exception() is not None:
+                            logger.warning("event loop shutdown found a task %r with unhandled exception %r", task, task.exception())
                 # Shut down everything else
                 loop.run_until_complete(loop.shutdown_asyncgens())
                 loop.run_until_complete(loop.shutdown_default_executor())
