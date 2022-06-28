@@ -88,38 +88,41 @@ async def _proc_worker_task(
         arr_byte_size,
 ):
     logger.debug("process worker started")
-    # Spawn worker's process
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        str(pathlib.Path(__file__).parent / "_loader.py"),
-        str(file_path),
-        f"{rollout_steps:d}",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-    )
-    logger.debug("spawned subprocess")
     try:
-        while True:
-            job = await in_queue.get()
-            if job is None:
-                # This is our stop signal
-                logger.debug("process worker signaled to stop")
-                return
-            i, traj, step = job
-            proc.stdin.write(f"{traj:d} {step:d}\n".encode("utf8"))
-            await proc.stdin.drain()
-            await out_queue.put((i, np.frombuffer(await proc.stdout.readexactly(arr_byte_size), dtype=arr_dtype)))
+        # Spawn worker's process
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(pathlib.Path(__file__).parent / "_loader.py"),
+            str(file_path),
+            f"{rollout_steps:d}",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+        )
+        logger.debug("spawned subprocess")
+        try:
+            while True:
+                job = await in_queue.get()
+                if job is None:
+                    # This is our stop signal
+                    logger.debug("process worker signaled to stop")
+                    return
+                i, traj, step = job
+                proc.stdin.write(f"{traj:d} {step:d}\n".encode("utf8"))
+                await proc.stdin.drain()
+                await out_queue.put((i, np.frombuffer(await proc.stdout.readexactly(arr_byte_size), dtype=arr_dtype)))
+        finally:
+            proc.stdin.write_eof()
+            return_code = await proc.wait()
+            if return_code != 0:
+                logger.error("worker exited abnormally with code %d", return_code)
+            else:
+                logger.debug("stopped worker process")
     except Exception:
         logger.exception("error in process worker")
         raise
     finally:
+        # Signal our exit
         await out_queue.put(None)
-        proc.stdin.write_eof()
-        return_code = await proc.wait()
-        if return_code != 0:
-            logger.error("worker exited abnormally with code %d", return_code)
-        else:
-            logger.debug("stopped worker process")
 
 async def _worker_coro(
         out_queue,
