@@ -4,6 +4,14 @@ import dataclasses
 import json
 
 
+def _generic_rfftn(a):
+    return jnp.fft.rfftn(a, axes=(-2, -1))
+
+
+def _generic_irfftn(a):
+    return jnp.fft.irfftn(a, axes=(-2, -1))
+
+
 def attach_to_object(self):
     def decorator(func):
         setattr(self, func.__name__, func)
@@ -29,8 +37,26 @@ def register_dataclass_pytree(cls):
     return cls
 
 
+def add_fft_properties(fields):
+
+    def add_properties(cls):
+        for field in fields:
+            setattr(
+                cls,
+                f"{field}h",
+                property(
+                    fget=lambda self: _generic_rfftn(getattr(self, field)),
+                    fset=lambda self, val: setattr(self, field, _generic_irfftn(val)),
+                )
+            )
+        return cls
+
+    return add_properties
+
+
 @register_dataclass_pytree
 @dataclasses.dataclass
+@add_fft_properties(["q", "u", "v", "uq", "vq"])
 class PseudoSpectralKernelState:
     # FFT inputs & outputs
     q: jnp.ndarray
@@ -48,46 +74,6 @@ class PseudoSpectralKernelState:
     dqhdt_p: jnp.ndarray
     dqhdt_pp: jnp.ndarray
 
-    @property
-    def qh(self):
-        return fft_q_to_qh(self.q)
-
-    @qh.setter
-    def set_qh(self, qh):
-        self.q = ifft_qh_to_q(qh)
-
-    @property
-    def uh(self):
-        return fft_u_to_uh(self.u)
-
-    @uh.setter
-    def set_uh(self, uh):
-        self.u = ifft_uh_to_u(uh)
-
-    @property
-    def vh(self):
-        return fft_v_to_vh(self.v)
-
-    @vh.setter
-    def set_vh(self, vh):
-        self.v = ifft_vh_to_v(vh)
-
-    @property
-    def uqh(self):
-        return fft_uq_to_uqh(self.uq)
-
-    @uqh.setter
-    def set_uqh(self, uqh):
-        self.uq = ifft_uqh_to_uq(uqh)
-
-    @property
-    def vqh(self):
-        return fft_vq_to_vqh(self.vq)
-
-    @vqh.setter
-    def set_vqh(self, vqh):
-        self.vq = ifft_vqh_to_vq(vqh)
-
 
 def _update_state(old_state, **kwargs):
     for k, v in kwargs.items():
@@ -95,13 +81,6 @@ def _update_state(old_state, **kwargs):
         if hasattr(old_val, "shape"):
             assert old_val.shape == v.shape, f"Shape mismatch on {k}: {old_val.shape} vs {v.shape}"
     return dataclasses.replace(old_state, **kwargs)
-
-
-def _generic_rfftn(a):
-    return jnp.fft.rfftn(a, axes=(-2, -1))
-
-def _generic_irfftn(a):
-    return jnp.fft.irfftn(a, axes=(-2, -1))
 
 
 fft_q_to_qh = _generic_rfftn
