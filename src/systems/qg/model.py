@@ -2,7 +2,6 @@ import json
 import jax
 import jax.numpy as jnp
 from . import kernel
-from .kernel import DTYPE_REAL, DTYPE_COMPLEX, attach_to_object
 
 
 class Model(kernel.PseudoSpectralKernel):
@@ -99,22 +98,16 @@ class Model(kernel.PseudoSpectralKernel):
         # initialize diagnostics
         # SKIPPED
 
-        @attach_to_object(self)
-        def _spec_var(ph):
-            var_dens = 2 * jnp.abs(ph)**2 / self.M**2
-            var_dens = jnp.at[..., 0].set(var_dens[..., 0] / 2)
-            var_dens = jnp.at[..., -1].set(var_dens[..., -1] / 2)
-            return var_dens.sum()
+    def _spec_var(self, ph):
+        var_dens = 2 * jnp.abs(ph)**2 / self.M**2
+        var_dens = jnp.at[..., 0].set(var_dens[..., 0] / 2)
+        var_dens = jnp.at[..., -1].set(var_dens[..., -1] / 2)
+        return var_dens.sum()
 
-        @attach_to_object(self)
-        def do_external_forcing(state):
-            return state
+    def do_external_forcing(self, state):
+        return state
 
-        @attach_to_object(self)
-        def step_forward(state, uv_param_func=None, q_param_func=None):
-            return self._step_forward(state, uv_param_func=uv_param_func, q_param_func=q_param_func)
-
-    def _step_forward(self, state, uv_param_func=None, q_param_func=None):
+    def step_forward(self, state, uv_param_func=None, q_param_func=None):
         if uv_param_func is not None and q_param_func is not None:
             raise ValueError(f"Can only provide one parameterization function at a time!")
         state = self.invert(state)

@@ -12,13 +12,6 @@ def _generic_irfftn(a):
     return jnp.fft.irfftn(a, axes=(-2, -1))
 
 
-def attach_to_object(self):
-    def decorator(func):
-        setattr(self, func.__name__, func)
-        return func
-    return decorator
-
-
 DTYPE_COMPLEX = jnp.complex64
 DTYPE_REAL = jnp.float32
 
@@ -113,64 +106,11 @@ class PseudoSpectralKernel:
         self.filtr = filtr
         self.Ubg = jnp.zeros((self.nk,), dtype=DTYPE_REAL)
 
-        @attach_to_object(self)
-        def create_initial_state():
-            return self._create_initial_state()
+    def create_initial_state(self):
 
-        @attach_to_object(self)
-        def fft(v):
-            # v - 3dim array
-            assert v.ndim == 3
-            assert isinstance(v.dtype, jnp.floating)
-            return jnp.fft.rfftn(v, axes=(-2, -1))
-
-        @attach_to_object(self)
-        def ifft(v):
-            # v - 3dim array
-            assert v.ndim == 3
-            assert isinstance(v.dtype, jnp.complexfloating)
-            return jnp.fft.irfftn(v, axes=(-2, -1))
-
-        @attach_to_object(self)
-        def invert(state):
-            return self._invert(state)
-
-        @attach_to_object(self)
-        def do_advection(state):
-            return self._do_advection(state)
-
-        @attach_to_object(self)
-        def do_uv_subgrid_parameterization(state, uv_param_func=None):
-            return self._do_uv_subgrid_parameterization(state, uv_param_func)
-
-        @attach_to_object(self)
-        def do_q_subgrid_parameterization(state, q_param_func=None):
-            return self._do_q_subgrid_parameterization(state, q_param_func)
-
-        @attach_to_object(self)
-        def do_friction(state):
-            return self._do_friction(state)
-
-        @attach_to_object(self)
-        def forward_timestep(state):
-            return self._forward_timestep(state)
-
-        @attach_to_object(self)
-        def set_dt(state, new_dt):
-            return _update_state(state, dt=new_dt, ablevel=0)
-
-        @attach_to_object(self)
-        def set_q(state, new_q):
-            return _update_state(state, q=new_q)
-
-        @attach_to_object(self)
-        def set_qh(state, new_qh):
-            q = ifft_qh_to_q(new_qh)
-            return _update_state(state, q=q)
-
-    def _create_initial_state(self):
         def _empty_real():
             return jnp.zeros((self.nz, self.ny, self.nx), dtype=DTYPE_REAL)
+
         def _empty_com():
             return jnp.zeros((self.nz, self.nl, self.nk), dtype=DTYPE_COMPLEX)
 
@@ -193,12 +133,7 @@ class PseudoSpectralKernel:
         )
         return new_state
 
-    def _apply_a_ph(self, state):
-        a = jnp.zeros((self.nz, self.nz, self.nl, self.nk), dtype=DTYPE_COMPLEX)
-        ph = jnp.sum(a * jnp.expand_dims(state.qh, 0), axis=1)
-        return ph
-
-    def _invert(self, state):
+    def invert(self, state):
         # Set ph to zero (skip, recompute fresh from sum below)
         # invert qh to find ph
         ph = self._apply_a_ph(state)
@@ -211,7 +146,7 @@ class PseudoSpectralKernel:
         # Update state values
         return _update_state(state, ph=ph, u=u, v=v)
 
-    def _do_advection(self, state):
+    def do_advection(self, state):
         # multiply to get advective flux in space
         uq = (state.u + jnp.expand_dims(self.Ubg[:self.nz], (-1, -2))) * state.q
         vq = state.v  * state.q
@@ -224,7 +159,7 @@ class PseudoSpectralKernel:
                       jnp.expand_dims(self._ikQy[:self.nz], 1) * state.ph)
         return _update_state(state, uq=uq, vq=vq, dqhdt=dqhdt)
 
-    def _do_uv_subgrid_parameterization(self, state, uv_param_func):
+    def do_uv_subgrid_parameterization(self, state, uv_param_func=None):
         if uv_param_func is None:
             return state
         # convert to spectral space
@@ -238,7 +173,7 @@ class PseudoSpectralKernel:
         )
         return _update_state(state, dqhdt=dqhdt)
 
-    def _do_q_subgrid_parameterization(self, state, q_param_func):
+    def do_q_subgrid_parameterization(self, state, q_param_func=None):
         if q_param_func is None:
             return state
         dq = q_param_func(state)
@@ -246,7 +181,7 @@ class PseudoSpectralKernel:
         dqhdt = state.dqhdt + dqh
         return _update_state(state, dqhdt=dqhdt)
 
-    def _do_friction(self, state):
+    def do_friction(self, state):
         # Apply Beckman friction to lower layer tendency
         k = self.nz - 1
         if self.rek:
@@ -257,8 +192,7 @@ class PseudoSpectralKernel:
         else:
             return state
 
-    def _forward_timestep(self, state):
-
+    def forward_timestep(self, state):
         ablevel, dt1, dt2, dt3 = jax.lax.switch(
             state.ablevel,
             [
@@ -286,6 +220,21 @@ class PseudoSpectralKernel:
         t = state.t + self.dt
 
         return _update_state(state, ablevel=ablevel, dqhdt_pp=dqhdt_pp, dqhdt_p=dqhdt_p, q=q, tc=tc, t=t)
+
+    def set_dt(self, state, new_dt):
+        return _update_state(state, dt=new_dt, ablevel=0)
+
+    def set_q(self, state, new_q):
+        return _update_state(state, q=new_q)
+
+    def set_qh(self, state, new_qh):
+        q = ifft_qh_to_q(new_qh)
+        return _update_state(state, q=q)
+
+    def _apply_a_ph(self, state):
+        a = jnp.zeros((self.nz, self.nz, self.nl, self.nk), dtype=DTYPE_COMPLEX)
+        ph = jnp.sum(a * jnp.expand_dims(state.qh, 0), axis=1)
+        return ph
 
     def param_json(self):
         return json.dumps(

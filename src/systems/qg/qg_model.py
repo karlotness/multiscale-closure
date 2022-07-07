@@ -4,7 +4,6 @@ import jax
 import jax.numpy as jnp
 import jax.random
 from . import model
-from .kernel import DTYPE_REAL, DTYPE_COMPLEX, attach_to_object, PseudoSpectralKernelState, register_dataclass_pytree
 
 class QGModel(model.Model):
     def __init__(
@@ -72,49 +71,40 @@ class QGModel(model.Model):
             (-2, -1)
         )
 
-        # INITIALIZE FORCING
-        pass # nothing to do
+        # INITIALIZE FORCING (nothing to do)
 
-        # calc cfl
-        @attach_to_object(self)
-        def _calc_cfl(state):
-            return jnp.abs(
-                jnp.hstack([state.u + jnp.expand_dims(self.Ubg, axis=(1, 2)), state.v])
-            ).max() * self.dt / self.dx
+    # calc cfl
+    def _calc_cfl(self, state):
+        return jnp.abs(
+            jnp.hstack([state.u + jnp.expand_dims(self.Ubg, axis=(1, 2)), state.v])
+        ).max() * self.dt / self.dx
 
-        # calc ke
-        @attach_to_object(self)
-        def _calc_ke(state):
-            ke1 = 0.5 * self.Hi[0] * self.spec_var(self.wv * state.ph[0])
-            ke2 = 0.5 * self.Hi[1] * self.spec_var(self.wv * state.ph[1])
-            return (ke1.sum() + ke2.sum()) / self.H
+    # calc ke
+    def _calc_ke(self, state):
+        ke1 = 0.5 * self.Hi[0] * self.spec_var(self.wv * state.ph[0])
+        ke2 = 0.5 * self.Hi[1] * self.spec_var(self.wv * state.ph[1])
+        return (ke1.sum() + ke2.sum()) / self.H
 
-        @attach_to_object(self)
-        def _calc_eddy_time(state):
-            ens = 0.5 * self.Hi[0] * self.spec_var(self.wv2 * self.ph1) + 0.5 * self.Hi[1] * self.spec_var(self.wv2 * self.ph2)
-            return 2 * jnp.pi * jnp.sqrt(self.H / ens) / 86400
+    def _calc_eddy_time(self, state):
+        ens = 0.5 * self.Hi[0] * self.spec_var(self.wv2 * self.ph1) + 0.5 * self.Hi[1] * self.spec_var(self.wv2 * self.ph2)
+        return 2 * jnp.pi * jnp.sqrt(self.H / ens) / 86400
 
-        @attach_to_object(self)
-        def _set_q1q2(state, q1, q2):
-            return self.set_q(state, jnp.vstack([jnp.expand_dims(q1, axis=0), jnp.expand_dims(q2, axis=0)]))
+    def _set_q1q2(self, state, q1, q2):
+        return self.set_q(state, jnp.vstack([jnp.expand_dims(q1, axis=0), jnp.expand_dims(q2, axis=0)]))
 
-        @attach_to_object(self)
-        def create_initial_state(rng):
-            return self._create_initial_state(rng)
-
-    def _apply_a_ph(self, state):
-        qh = jnp.moveaxis(state.qh, 0, -1)
-        ph = jnp.linalg.solve(self.inv_mat2, qh)
-        return jnp.moveaxis(ph, -1, 0)
-
-    def _create_initial_state(self, rng):
-        state = super()._create_initial_state()
+    def create_initial_state(self, rng):
+        state = super().create_initial_state()
         # initial conditions (pv anomalies)
         rng_a, rng_b = jax.random.split(rng, num=2)
         q1 = 1e-7 * jax.random.uniform(rng_a, shape=(self.ny, self.nx)) + 1e-6 * (jnp.ones((self.ny, 1)) * jax.random.uniform(rng_b, shape=(1, self.nx)))
         q2 = jnp.zeros_like(self.x)
         state = self._set_q1q2(state, q1, q2)
         return state
+
+    def _apply_a_ph(self, state):
+        qh = jnp.moveaxis(state.qh, 0, -1)
+        ph = jnp.linalg.solve(self.inv_mat2, qh)
+        return jnp.moveaxis(ph, -1, 0)
 
     def param_json(self):
         super_params = json.loads(super().param_json())
