@@ -76,16 +76,6 @@ def _update_state(old_state, **kwargs):
     return dataclasses.replace(old_state, **kwargs)
 
 
-ifft_qh_to_q = _generic_irfftn
-ifft_uh_to_u = _generic_irfftn
-ifft_vh_to_v = _generic_irfftn
-fft_du_to_duh = _generic_rfftn
-fft_dv_to_dvh = _generic_rfftn
-fft_dq_to_dqh = _generic_rfftn
-fft_uq_to_uqh = _generic_rfftn
-fft_vq_to_vqh = _generic_rfftn
-
-
 class PseudoSpectralKernel:
 
     def __init__(self, nz, ny, nx, dt, filtr, rek=0):
@@ -141,8 +131,8 @@ class PseudoSpectralKernel:
         uh = (-1 * jnp.expand_dims(self._il, (0, -1))) * ph
         vh = jnp.expand_dims(self._ik, (0, 1)) * ph
         # transform to get u and v
-        u = ifft_uh_to_u(uh)
-        v = ifft_vh_to_v(vh)
+        u = _generic_irfftn(uh)
+        v = _generic_irfftn(vh)
         # Update state values
         return _update_state(state, ph=ph, u=u, v=v)
 
@@ -151,8 +141,8 @@ class PseudoSpectralKernel:
         uq = (state.u + jnp.expand_dims(self.Ubg[:self.nz], (-1, -2))) * state.q
         vq = state.v  * state.q
         # transform to get spectral advective flux
-        uqh = fft_uq_to_uqh(uq)
-        vqh = fft_vq_to_vqh(vq)
+        uqh = _generic_rfftn(uq)
+        vqh = _generic_rfftn(vq)
         # spectral divergence
         dqhdt = -1 * (jnp.expand_dims(self._ik, (0, 1)) * uqh +
                       jnp.expand_dims(self._il, (0, -1)) * vqh +
@@ -164,8 +154,8 @@ class PseudoSpectralKernel:
             return state
         # convert to spectral space
         du, dv = uv_param_func(state)
-        duh = fft_du_to_duh(du)
-        dvh = fft_dv_to_dvh(dv)
+        duh = _generic_rfftn(du)
+        dvh = _generic_rfftn(dv)
         dqhdt = (
             state.dqhdt +
             ((-1 * jnp.expand_dims(self._il, (0, -1))) * duh) +
@@ -177,7 +167,7 @@ class PseudoSpectralKernel:
         if q_param_func is None:
             return state
         dq = q_param_func(state)
-        dqh = fft_dq_to_dqh(dq)
+        dqh = _generic_rfftn(dq)
         dqhdt = state.dqhdt + dqh
         return _update_state(state, dqhdt=dqhdt)
 
@@ -213,7 +203,7 @@ class PseudoSpectralKernel:
         dqhdt_p = state.dqhdt
 
         # do FFT of new qh
-        q = ifft_qh_to_q(qh)
+        q = _generic_irfftn(qh)
 
         # Update time tracking parameters
         tc = state.tc + 1
@@ -228,7 +218,7 @@ class PseudoSpectralKernel:
         return _update_state(state, q=new_q)
 
     def set_qh(self, state, new_qh):
-        q = ifft_qh_to_q(new_qh)
+        q = _generic_irfftn(new_qh)
         return _update_state(state, q=q)
 
     def _apply_a_ph(self, state):
