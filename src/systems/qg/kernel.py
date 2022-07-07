@@ -83,9 +83,6 @@ def _update_state(old_state, **kwargs):
     return dataclasses.replace(old_state, **kwargs)
 
 
-fft_q_to_qh = _generic_rfftn
-fft_u_to_uh = _generic_rfftn
-fft_v_to_vh = _generic_rfftn
 ifft_qh_to_q = _generic_irfftn
 ifft_uh_to_u = _generic_irfftn
 ifft_vh_to_v = _generic_irfftn
@@ -93,9 +90,7 @@ fft_du_to_duh = _generic_rfftn
 fft_dv_to_dvh = _generic_rfftn
 fft_dq_to_dqh = _generic_rfftn
 fft_uq_to_uqh = _generic_rfftn
-ifft_uqh_to_uq = _generic_irfftn
 fft_vq_to_vqh = _generic_rfftn
-ifft_vqh_to_vq = _generic_irfftn
 
 
 class PseudoSpectralKernel:
