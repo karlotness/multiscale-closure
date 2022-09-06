@@ -149,7 +149,8 @@ def make_train_batch_computer(small_model, loss_fn, param_type):
     def do_batch(batch, train_state):
         batch_loss_func = jax.vmap(qg_utils.get_online_batch_loss, in_axes=(0, None, None, None, None, None, None))
         def _get_losses(params):
-            step_losses = batch_loss_func(batch, train_state.apply_fn, params, small_model, loss_fn, train_state.memory_init_fn, param_type)
+            apply_fn = functools.partial(train_state.apply_fn, train=True)
+            step_losses = batch_loss_func(batch, apply_fn, params, small_model, loss_fn, train_state.memory_init_fn, param_type)
             return jnp.mean(step_losses)
 
         loss, grads = jax.value_and_grad(_get_losses)(train_state.params)
@@ -169,9 +170,10 @@ def make_val_computer(small_model, loss_fn, param_type):
             qg_utils.get_online_batch_loss,
             in_axes=(0, None, None, None, None, None, None)
         )
+        apply_fn = functools.partial(train_state.apply_fn, train=False)
         step_losses = batch_loss_func(
             traj,
-            train_state.apply_fn,
+            apply_fn,
             train_state.params,
             small_model,
             loss_fn,

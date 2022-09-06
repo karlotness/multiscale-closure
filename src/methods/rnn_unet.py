@@ -190,7 +190,7 @@ class RNNUNetUV(UVParameterization):
     def init_memory(self, u, v):
         return self.unet.initial_state(self._init_process_states(u, v))
 
-    def parameterization(self, u, v, memory):
+    def parameterization(self, u, v, memory, train):
         x = self._init_process_states(u, v)
         y, memory = self.unet(x, memory)
         y = jnp.moveaxis(y, -1, 0)

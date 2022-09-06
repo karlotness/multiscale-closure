@@ -40,7 +40,7 @@ class ClosureCnnV1(UVParameterization):
         }
 
     @nn.compact
-    def parameterization(self, u, v, memory):
+    def parameterization(self, u, v, memory, train):
         assert memory is None
         u = (u - self.u_mean) / self.u_std
         v = (v - self.v_mean) / self.v_std
