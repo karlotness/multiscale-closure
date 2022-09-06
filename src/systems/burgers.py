@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 import itertools
 
 
@@ -11,7 +12,7 @@ def attach_to_object(self):
 
 
 def _brute_force_compute_wave_num_corresp(wave_numbers):
-    wave_numbers = wave_numbers.to_py().tolist()
+    wave_numbers = np.asarray(wave_numbers).tolist()
     wn_idx = {wn: i for i, wn in enumerate(wave_numbers)}
     corresp = [[] for _ in wave_numbers]
     # Find correspondences
