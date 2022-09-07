@@ -45,7 +45,7 @@ parser.add_argument("--architecture", type=str, default="closure-cnn-v1", help="
 
 
 class RecurrentTrainState(flax.training.train_state.TrainState):
-    param_type: str
+    param_type: str = flax.struct.field(pytree_node=False)
     memory_init_fn: Callable = flax.struct.field(pytree_node=False)
     batch_stats: dict
 
