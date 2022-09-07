@@ -301,7 +301,7 @@ def main():
     train_func = jax.jit(
         make_train_batch_computer(
             small_model=train_small_model,
-            loss_fn=qg_mean_l1err_loss,
+            loss_fn=mse_loss,
             param_type=net.param_type,
         )
     )
