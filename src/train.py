@@ -2,6 +2,7 @@ import argparse
 import pathlib
 import math
 import re
+import os
 import random
 import itertools
 import contextlib
@@ -240,10 +241,20 @@ def save_network(output_name, output_dir, net, params, base_logger=None):
     else:
         logger = base_logger.getChild("save")
     output_dir = pathlib.Path(output_dir)
-    with open(output_dir / f"{output_name}.flaxnn", "wb") as out_file:
+    with open(output_dir / f"{output_name}.flaxnn.PART", "wb") as out_file:
         out_file.write(flax.serialization.to_bytes(params))
-    with open(output_dir / f"{output_name}.json", "w", encoding="utf8") as out_file:
+    with open(output_dir / f"{output_name}.json.PART", "w", encoding="utf8") as out_file:
         json.dump(net.net_description(), out_file)
+    try:
+        os.remove(output_dir / f"{output_name}.flaxnn")
+    except FileNotFoundError:
+        pass
+    try:
+        os.remove(output_dir / f"{output_name}.json")
+    except FileNotFoundError:
+        pass
+    os.rename(output_dir / f"{output_name}.flaxnn.PART", output_dir / f"{output_name}.flaxnn")
+    os.rename(output_dir / f"{output_name}.json.PART", output_dir / f"{output_name}.json")
     logger.info("Saved network parameters to %s in %s", output_name, output_dir)
 
 
