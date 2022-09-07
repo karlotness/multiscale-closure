@@ -84,7 +84,7 @@ def slice_kernel_state(state, slicer):
     return PseudoSpectralKernelState(**{k: getattr(state, k)[slicer] for k in data_fields})
 
 
-def get_online_rollout(start_state, num_steps, apply_fn, params, small_model, memory_init_fn, param_type="uv"):
+def get_online_rollout(start_state, num_steps, apply_fn, params, small_model, memory_init_fn, batch_stats, param_type="uv", train=False):
     match param_type:
         case "uv":
             memory = memory_init_fn(params, start_state.u, start_state.v)
@@ -94,16 +94,24 @@ def get_online_rollout(start_state, num_steps, apply_fn, params, small_model, me
             raise ValueError(f"invalid parameterization type {param_type}")
 
     def do_steps(carry_state, _):
-        old_state, memory = carry_state
+        old_state, memory, stats = carry_state
 
         def apply_net_uv(state):
-            nonlocal memory
-            sx, sy, memory = apply_fn(params, state.u, state.v, memory)
+            nonlocal memory, stats
+            net_param = {"params": params, "batch_stats": stats}
+            if train:
+                (sx, sy, memory), stats = apply_fn(net_param, state.u, state.v, memory, train, mutable=["batch_stats"])
+            else:
+                sx, sy, memory = apply_fn(net_param, state.u, state.v, memory, train)
             return sx, sy
 
         def apply_net_q(state):
-            nonlocal memory
-            dq, memory = apply_fn(params, state.q, state.u, state.v, memory)
+            nonlocal memory, stats
+            net_param = {"params": params, "batch_stats": stats}
+            if train:
+                (dq, memory), stats = apply_fn(net_param, state.q, state.u, state.v, memory, train, mutable=["batch_stats"])
+            else:
+                dq, memory = apply_fn(net_param, state.q, state.u, state.v, memory, train)
             return dq
 
         match param_type:
@@ -115,18 +123,21 @@ def get_online_rollout(start_state, num_steps, apply_fn, params, small_model, me
                 raise ValueError(f"invalid parameterization type {param_type}")
 
         new_state = small_model.step_forward(old_state, **kw)
-        return (new_state, memory), new_state
+        return (new_state, memory, stats), new_state
 
-    (_last_step, last_memory), new_states = jax.lax.scan(
+    (_last_step, last_memory, last_batch_stats), new_states = jax.lax.scan(
         do_steps,
-        (start_state, memory),
+        (start_state, memory, batch_stats),
         None,
         length=num_steps,
     )
-    return new_states, last_memory
+    if train:
+        return new_states, last_memory, last_batch_stats
+    else:
+        return new_states, last_memory
 
 
-def get_online_batch_loss(real_traj, apply_fn, params, small_model, loss_fn, memory_init_fn, param_type="uv"):
+def get_online_batch_loss(real_traj, apply_fn, params, small_model, loss_fn, memory_init_fn, batch_stats, param_type="uv", train=False):
     first_step = slice_kernel_state(real_traj, 0)
 
     match param_type:
@@ -138,16 +149,24 @@ def get_online_batch_loss(real_traj, apply_fn, params, small_model, loss_fn, mem
             raise ValueError(f"invalid parameterization type {param_type}")
 
     def do_steps(carry_state, true_step):
-        old_state, memory = carry_state
+        old_state, memory, stats = carry_state
 
         def apply_net_uv(state):
-            nonlocal memory
-            sx, sy, memory = apply_fn(params, state.u, state.v, memory)
+            nonlocal memory, stats
+            net_param = {"params": params, "batch_stats": stats}
+            if train:
+                (sx, sy, memory), stats = apply_fn(net_param, state.u, state.v, memory, train, mutable=["batch_stats"])
+            else:
+                sx, sy, memory = apply_fn(net_param, state.u, state.v, memory, train)
             return sx, sy
 
         def apply_net_q(state):
-            nonlocal memory
-            dq, memory = apply_fn(params, state.q, state.u, state.v, memory)
+            nonlocal memory, stats
+            net_param = {"params": params, "batch_stats": stats}
+            if train:
+                (dq, memory), stats = apply_fn(net_param, state.q, state.u, state.v, memory, train, mutable=["batch_stats"])
+            else:
+                dq, memory = apply_fn(net_param, state.q, state.u, state.v, memory, train)
             return dq
 
         match param_type:
@@ -160,11 +179,14 @@ def get_online_batch_loss(real_traj, apply_fn, params, small_model, loss_fn, mem
 
         new_state = small_model.step_forward(old_state, **kw)
         loss = loss_fn(real_step=true_step.q, est_step=new_state.q)
-        return (new_state, memory), loss
+        return (new_state, memory, stats), loss
 
-    (_last_step, _last_memory), losses = jax.lax.scan(
+    (_last_step, _last_memory, last_batch_stats), losses = jax.lax.scan(
         do_steps,
-        (first_step, memory),
+        (first_step, memory, batch_stats),
         slice_kernel_state(real_traj, slice(1, None))
     )
-    return losses
+    if train:
+        return losses, last_batch_stats
+    else:
+        return losses

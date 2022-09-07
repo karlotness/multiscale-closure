@@ -46,6 +46,7 @@ parser.add_argument("--architecture", type=str, default="closure-cnn-v1", help="
 class RecurrentTrainState(flax.training.train_state.TrainState):
     param_type: str
     memory_init_fn: Callable = flax.struct.field(pytree_node=False)
+    batch_stats: dict
 
 
 def mean_l1err_loss(real_step, est_step):
@@ -59,6 +60,10 @@ def qg_mean_l1err_loss(real_step, est_step):
 def relerr_loss(real_step, est_step):
     err = jnp.abs(est_step - real_step)
     return jnp.mean(err / jnp.abs(real_step))
+
+def mse_loss(real_step, est_step):
+    err = jnp.abs(est_step - real_step)
+    return jnp.mean(err ** 2)
 
 
 def compare_val_loss(a, b, rollout_len):
@@ -75,9 +80,9 @@ def init_network(architecture, lr, weight_decay, rng, small_model):
     rng_1, rng_2 = jax.random.split(rng, 2)
     match net.param_type:
         case "uv":
-            params = net.init(rng_1, dummy_u, dummy_v)
+            params = net.init(rng_1, dummy_u, dummy_v, True)
         case "q":
-            params = net.init(rng_1, dummy_q, dummy_u, dummy_v)
+            params = net.init(rng_1, dummy_q, dummy_u, dummy_v, True)
         case _:
             raise ValueError(f"invalid parameterization type {net.param_type}")
     # Change initialization
@@ -87,6 +92,11 @@ def init_network(architecture, lr, weight_decay, rng, small_model):
         rng_use, rng_2 = jax.random.split(rng_2)
         new_params.append(jax.random.normal(rng_use, shape=p.shape) * 1e-5)
     params = jax.tree_util.tree_unflatten(tree, new_params)
+    if "batch_stats" in params:
+        batch_stats = params["batch_stats"]
+        params = params["params"]
+    else:
+        batch_stats = {}
     optim = optax.adamw(learning_rate=lr, weight_decay=weight_decay)
     return net, RecurrentTrainState.create(
         apply_fn=functools.partial(net.apply, method=net.parameterization),
@@ -94,6 +104,7 @@ def init_network(architecture, lr, weight_decay, rng, small_model):
         params=params,
         tx=optim,
         param_type=net.param_type,
+        batch_stats=batch_stats,
     )
 
 
@@ -147,18 +158,18 @@ def epoch_batch_iterators(train_file, batch_size, rollout_length_str, seed=None,
 
 def make_train_batch_computer(small_model, loss_fn, param_type):
     def do_batch(batch, train_state):
-        batch_loss_func = jax.vmap(qg_utils.get_online_batch_loss, in_axes=(0, None, None, None, None, None, None))
+        batch_loss_func = jax.vmap(qg_utils.get_online_batch_loss, in_axes=(0, None, None, None, None, None, None, None, None), out_axes=(0, None), axis_name="batch")
         def _get_losses(params):
-            apply_fn = functools.partial(train_state.apply_fn, train=True)
-            step_losses = batch_loss_func(batch, apply_fn, params, small_model, loss_fn, train_state.memory_init_fn, param_type)
-            return jnp.mean(step_losses)
+            step_losses, new_batch_stats = batch_loss_func(batch, train_state.apply_fn, params, small_model, loss_fn, train_state.memory_init_fn, train_state.batch_stats, param_type, True)
+            return jnp.mean(step_losses), new_batch_stats
 
-        loss, grads = jax.value_and_grad(_get_losses)(train_state.params)
+        (loss, new_batch_stats), grads = jax.value_and_grad(_get_losses, has_aux=True)(train_state.params)
         new_train_state = jax.lax.cond(
             jnp.isfinite(jnp.abs(loss)),
             lambda: train_state.apply_gradients(grads=grads),
             lambda: train_state,
         )
+        new_train_state.batch_stats = new_batch_stats
         return new_train_state, loss
 
     return do_batch
@@ -168,17 +179,19 @@ def make_val_computer(small_model, loss_fn, param_type):
     def do_traj(traj, train_state):
         batch_loss_func = jax.vmap(
             qg_utils.get_online_batch_loss,
-            in_axes=(0, None, None, None, None, None, None)
+            in_axes=(0, None, None, None, None, None, None, None, None),
+            axis_name="batch",
         )
-        apply_fn = functools.partial(train_state.apply_fn, train=False)
         step_losses = batch_loss_func(
             traj,
-            apply_fn,
+            train_state.apply_fn,
             train_state.params,
             small_model,
             loss_fn,
             train_state.memory_init_fn,
+            train_state.batch_stats,
             param_type,
+            False,
         )
         step_losses = jnp.nan_to_num(step_losses[0], nan=jnp.inf, posinf=jnp.inf, neginf=jnp.inf)
         uncorrected_step_losses = batch_loss_func(
@@ -188,7 +201,9 @@ def make_val_computer(small_model, loss_fn, param_type):
             small_model,
             loss_fn,
             lambda params, u, v: None,
+            {},
             "uv",
+            False,
         )
         uncorrected_step_losses = jnp.nan_to_num(uncorrected_step_losses[0], nan=jnp.inf, posinf=jnp.inf, neginf=jnp.inf)
         return step_losses, uncorrected_step_losses
