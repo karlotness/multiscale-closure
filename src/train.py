@@ -169,7 +169,7 @@ def make_train_batch_computer(small_model, loss_fn, param_type):
             lambda: train_state.apply_gradients(grads=grads),
             lambda: train_state,
         )
-        new_train_state.batch_stats = new_batch_stats
+        new_train_state = new_train_state.replace(batch_stats=new_batch_stats)
         return new_train_state, loss
 
     return do_batch
