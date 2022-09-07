@@ -100,7 +100,8 @@ def get_online_rollout(start_state, num_steps, apply_fn, params, small_model, me
             nonlocal memory, stats
             net_param = {"params": params, "batch_stats": stats}
             if train:
-                (sx, sy, memory), stats = apply_fn(net_param, state.u, state.v, memory, train, mutable=["batch_stats"])
+                (sx, sy, memory), new_stats = apply_fn(net_param, state.u, state.v, memory, train, mutable=["batch_stats"])
+                stats = new_stats["batch_stats"]
             else:
                 sx, sy, memory = apply_fn(net_param, state.u, state.v, memory, train)
             return sx, sy
@@ -109,7 +110,8 @@ def get_online_rollout(start_state, num_steps, apply_fn, params, small_model, me
             nonlocal memory, stats
             net_param = {"params": params, "batch_stats": stats}
             if train:
-                (dq, memory), stats = apply_fn(net_param, state.q, state.u, state.v, memory, train, mutable=["batch_stats"])
+                (dq, memory), new_stats = apply_fn(net_param, state.q, state.u, state.v, memory, train, mutable=["batch_stats"])
+                stats = new_stats["batch_stats"]
             else:
                 dq, memory = apply_fn(net_param, state.q, state.u, state.v, memory, train)
             return dq
@@ -155,7 +157,8 @@ def get_online_batch_loss(real_traj, apply_fn, params, small_model, loss_fn, mem
             nonlocal memory, stats
             net_param = {"params": params, "batch_stats": stats}
             if train:
-                (sx, sy, memory), stats = apply_fn(net_param, state.u, state.v, memory, train, mutable=["batch_stats"])
+                (sx, sy, memory), new_stats = apply_fn(net_param, state.u, state.v, memory, train, mutable=["batch_stats"])
+                stats = new_stats["batch_stats"]
             else:
                 sx, sy, memory = apply_fn(net_param, state.u, state.v, memory, train)
             return sx, sy
@@ -164,7 +167,8 @@ def get_online_batch_loss(real_traj, apply_fn, params, small_model, loss_fn, mem
             nonlocal memory, stats
             net_param = {"params": params, "batch_stats": stats}
             if train:
-                (dq, memory), stats = apply_fn(net_param, state.q, state.u, state.v, memory, train, mutable=["batch_stats"])
+                (dq, memory), new_stats = apply_fn(net_param, state.q, state.u, state.v, memory, train, mutable=["batch_stats"])
+                stats = new_stats["batch_stats"]
             else:
                 dq, memory = apply_fn(net_param, state.q, state.u, state.v, memory, train)
             return dq
