@@ -28,7 +28,7 @@ class _FCNN(nn.Module):
                 [
                     nn.Conv(features=features, kernel_size=kernel, strides=1, padding="CIRCULAR"),
                     nn.relu,
-                    nn.BatchNorm(features, eps=1e-05, momentum=0.1, affine=True, use_running_average=not train, axis_name="batch"),
+                    nn.BatchNorm(epsilon=1e-05, momentum=0.1, use_running_average=not train, axis_name="batch"),
                 ]
             )
         seq_steps.append(
