@@ -13,6 +13,7 @@ import optax
 import flax.serialization
 import flax.training.train_state
 import flax.struct
+from flax.core import frozen_dict
 import numpy as np
 import logging
 import time
@@ -93,11 +94,9 @@ def init_network(architecture, lr, weight_decay, rng, small_model):
         rng_use, rng_2 = jax.random.split(rng_2)
         new_params.append(jax.random.normal(rng_use, shape=p.shape) * 1e-5)
     params = jax.tree_util.tree_unflatten(tree, new_params)
-    if "batch_stats" in params:
-        batch_stats = params["batch_stats"]
-        params = params["params"]
-    else:
-        batch_stats = {}
+    # Separate parameters and batch_stats
+    batch_stats = params.get("batch_stats", frozen_dict.freeze({}))
+    params = params["params"]
     optim = optax.adamw(learning_rate=lr, weight_decay=weight_decay)
     return net, RecurrentTrainState.create(
         apply_fn=functools.partial(net.apply, method=net.parameterization),
@@ -202,7 +201,7 @@ def make_val_computer(small_model, loss_fn, param_type):
             small_model,
             loss_fn,
             lambda params, u, v: None,
-            {},
+            frozen_dict.freeze({}),
             "uv",
             False,
         )
