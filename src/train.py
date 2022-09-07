@@ -354,7 +354,7 @@ def main():
                     logger=logger.getChild("train_epoch"),
                 )
                 train_elapsed = time.perf_counter() - train_start
-                logger.info("Finished epoch %d in %f sec. train_loss=%f", epoch + 1, train_elapsed, mean_train_loss)
+                logger.info("Finished epoch %d in %f sec. train_loss=%g", epoch + 1, train_elapsed, mean_train_loss)
             if epoch % args.save_interval == 0:
                 save_network("interval", weights_dir, net=net, params=train_state.params, base_logger=logger)
             # Run validation phase
@@ -385,7 +385,7 @@ def main():
                         "uncorr": uncorr_val,
                     }
                     logger.info(
-                        "Validation horizon %d steps: %f%% (vs. %f%%)",
+                        "Validation horizon %d steps: %g%% (vs. %g%%)",
                         horizon,
                         horiz_val * 100,
                         uncorr_val * 100,
