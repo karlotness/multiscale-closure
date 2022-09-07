@@ -36,7 +36,7 @@ class _FCNN(nn.Module):
         )
         x = nn.Sequential(seq_steps)(x)
         if self.zero_mean:
-            x = x - x.mean(dim=(-1, -2, -3), keepdim=True)
+            x = x - x.mean()
         return x
 
 
