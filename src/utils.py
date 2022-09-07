@@ -14,7 +14,7 @@ def set_up_logging(level="info", out_file=None):
     handlers.append(logging.StreamHandler())
     if out_file:
         handlers.append(logging.FileHandler(filename=out_file, encoding="utf8"))
-    logging.basicConfig(level=num_level, handlers=handlers,
+    logging.basicConfig(level=num_level, handlers=handlers, force=True,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
