@@ -8,7 +8,7 @@ from ._defs import ACTIVATIONS, QParameterization
 
 
 class _FCNN(nn.Module):
-    features_kernels: list = [
+    features_kernels: tuple = (
         (128, (5, 5)),
         (64, (5, 5)),
         (32, (3, 3)),
@@ -17,8 +17,8 @@ class _FCNN(nn.Module):
         (32, (3, 3)),
         (32, (3, 3)),
         (1, (3, 3)),
-    ]
-    zero_mean: bool
+    )
+    zero_mean: bool = True
 
     @nn.compact
     def __call__(self, x, train):
