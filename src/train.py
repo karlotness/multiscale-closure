@@ -196,7 +196,7 @@ def make_val_computer(small_model, loss_fn, param_type):
         step_losses = jnp.nan_to_num(step_losses[0], nan=jnp.inf, posinf=jnp.inf, neginf=jnp.inf)
         uncorrected_step_losses = batch_loss_func(
             traj,
-            lambda params, u, v, memory: (jnp.zeros_like(u), jnp.zeros_like(v), None),
+            lambda params, u, v, memory, train: (jnp.zeros_like(u), jnp.zeros_like(v), None),
             None,
             small_model,
             loss_fn,
