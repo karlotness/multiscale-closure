@@ -142,9 +142,9 @@ def get_online_batch_loss(real_traj, apply_fn, params, small_model, loss_fn, mem
 
     match param_type:
         case "uv":
-            memory = memory_init_fn(params, start_state.u, start_state.v)
+            memory = memory_init_fn(params, first_step.u, first_step.v)
         case "q":
-            memory = memory_init_fn(params, start_state.q, start_state.u, start_state.v)
+            memory = memory_init_fn(params, first_step.q, first_step.u, first_step.v)
         case _:
             raise ValueError(f"invalid parameterization type {param_type}")
 
