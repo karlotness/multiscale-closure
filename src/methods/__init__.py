@@ -11,4 +11,5 @@ def make_module_factory(module, class_name):
 ARCHITECTURES = {
     "closure-cnn-v1": make_module_factory("cnn", "ClosureCnnV1"),
     "rnn-unet": make_module_factory("rnn_unet", "RNNUNetUV"),
+    "gz-fcnn-v1": make_module_factory("gz_fcnn", "GZFCNNV1"),
 }
