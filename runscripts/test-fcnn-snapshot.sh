@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=train-fcnn-snapshot
-#SBATCH --time=24:00:00
+#SBATCH --time=02:00:00
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8GB
 #SBATCH --gres=gpu:1
