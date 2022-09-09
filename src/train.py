@@ -241,12 +241,14 @@ def save_network(output_name, output_dir, net, train_state, base_logger=None):
         logger = base_logger.getChild("save")
     output_dir = pathlib.Path(output_dir)
     with open(output_dir / f"{output_name}.flaxnn.PART", "wb") as out_file:
-        out_file.write(flax.serialization.to_bytes(
-            frozen_dict.freeze(
-                {
-                    "params": train_state.params,
-                    "batch_stats": train_state.batch_stats,
-                }
+        out_file.write(
+            flax.serialization.to_bytes(
+                frozen_dict.freeze(
+                    {
+                        "params": train_state.params,
+                        "batch_stats": train_state.batch_stats,
+                    }
+                )
             )
         )
     with open(output_dir / f"{output_name}.json.PART", "w", encoding="utf8") as out_file:
