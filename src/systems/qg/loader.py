@@ -360,6 +360,7 @@ class SimpleQGLoader:
                 num_traj += 1
         self.num_trajectories = num_traj
         self.num_steps = self._trajs_group["traj00000"].shape[0]
+        self.num_trajs = self.num_trajectories
 
     def __enter__(self):
         return self
