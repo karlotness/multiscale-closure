@@ -394,7 +394,7 @@ def main():
                         "uncorr": uncorr_val,
                     }
                     logger.info(
-                        "Validation horizon %d steps: %g%% (vs. %g%%)",
+                        "Validation horizon %d steps: %g (vs. %g)",
                         horizon,
                         horiz_val * 100,
                         uncorr_val * 100,
