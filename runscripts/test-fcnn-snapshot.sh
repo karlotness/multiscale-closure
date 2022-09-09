@@ -38,7 +38,7 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --weight_decay=0 \
             --batch_size=75 \
             --train_epochs=140 \
-            --batches_per_epoch=2500 \
+            --batches_per_epoch=500 \
             --rollout_length='2' \
             --val_steps=250 \
             --val_samples=15 \
