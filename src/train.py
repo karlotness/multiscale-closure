@@ -308,7 +308,7 @@ def main():
     val_func = jax.jit(
         make_val_computer(
             small_model=val_small_model,
-            loss_fn=relerr_loss,
+            loss_fn=mse_loss,
             param_type=net.param_type,
         )
     )
