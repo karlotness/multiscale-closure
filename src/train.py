@@ -234,14 +234,21 @@ def do_validation(val_batch_iter, train_state, val_func, val_file, logger):
     return np.mean(traj_losses, axis=0), np.mean(uncorrected_losses, axis=0)
 
 
-def save_network(output_name, output_dir, net, params, base_logger=None):
+def save_network(output_name, output_dir, net, train_state, base_logger=None):
     if base_logger is None:
         logger = logging.getLogger("save")
     else:
         logger = base_logger.getChild("save")
     output_dir = pathlib.Path(output_dir)
     with open(output_dir / f"{output_name}.flaxnn.PART", "wb") as out_file:
-        out_file.write(flax.serialization.to_bytes(params))
+        out_file.write(flax.serialization.to_bytes(
+            frozen_dict.freeze(
+                {
+                    "params": train_state.params,
+                    "batch_stats": train_state.batch_stats,
+                }
+            )
+        )
     with open(output_dir / f"{output_name}.json.PART", "w", encoding="utf8") as out_file:
         json.dump(net.net_description(), out_file)
     try:
@@ -356,7 +363,7 @@ def main():
                 train_elapsed = time.perf_counter() - train_start
                 logger.info("Finished epoch %d in %f sec. train_loss=%g", epoch + 1, train_elapsed, mean_train_loss)
             if epoch % args.save_interval == 0:
-                save_network("interval", weights_dir, net=net, params=train_state.params, base_logger=logger)
+                save_network("interval", weights_dir, net=net, train_state=train_state, base_logger=logger)
             # Run validation phase
             with contextlib.closing(val_loader.iter_batches()) as val_batch_iter:
                 logger.info("Starting validation after epoch %d", epoch + 1)
@@ -393,7 +400,7 @@ def main():
             # If validation improved, store snapshot
             if best_val_loss is None or compare_val_loss(val_loss_horizons, best_val_loss, rollout_len=train_rollout_len) < 0:
                 logger.info("Validation performance improved, saving weights")
-                save_network("best_val", weights_dir, net=net, params=train_state.params, base_logger=logger)
+                save_network("best_val", weights_dir, net=net, train_state=train_state, base_logger=logger)
                 best_val_loss = val_loss_horizons
                 new_best_val = True
             else:
@@ -409,7 +416,7 @@ def main():
                 }
             )
     # Store final weights
-    save_network("final_net", weights_dir, net=net, params=train_state.params, base_logger=logger)
+    save_network("final_net", weights_dir, net=net, train_state=train_state, base_logger=logger)
     end = time.perf_counter()
     # Finished training
     logger.info("Finished training in %f sec", end - start)
