@@ -54,7 +54,7 @@ def load_network(weight_dir, weight_type, small_model):
     if "batch_stats" not in params:
         params = params.copy(batch_stats=frozen_dict.freeze({}))
     with open(weight_dir / f"{weight_type}.flaxnn", "rb") as weights_file:
-        flax.serialization.from_bytes(params, weights_file.read())
+        params = flax.serialization.from_bytes(params, weights_file.read())
     batch_stats = params["batch_stats"]
     params = params["params"]
     return net, params, batch_stats
