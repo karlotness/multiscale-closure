@@ -75,6 +75,9 @@ def main():
     weight_dir = net_dir / "weights"
     weight_data = weight_dir / f"{args.saved_weight_type}.flaxnn"
     weight_json = weight_dir / f"{args.saved_weight_type}.json"
+    # Check that we can find both weight files
+    if not weight_data.is_file() or not weight_json.is_file():
+        raise ValueError(f"weight files for {args.saved_weight_type} do not both exist")
     # Prepare our particular output directory
     out_dir = net_dir / "eval" / args.saved_weight_type
     # Make our directory, but only the last two levels (we don't want to create net_dir if it doesn't exist)
@@ -84,9 +87,6 @@ def main():
     utils.set_up_logging(level=args.log_level, out_file=out_dir/"run.log")
     logger = logging.getLogger("main")
     logger.info("Arguments: %s", vars(args))
-    # Check that we can find both weight files
-    if not weight_data.is_file() or not weight_json.is_file():
-        raise ValueError(f"weight files for {args.saved_weight_type} do not both exist")
     # Find the training data file
     eval_file = pathlib.Path(args.eval_set) / "data.hdf5"
     # Create the model
