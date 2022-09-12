@@ -52,7 +52,7 @@ def load_network(weight_dir, weight_type, small_model):
             raise ValueError(f"invalid parameterization type {net.param_type}")
     # Now, load from saved values
     if "batch_stats" not in params:
-        params = params.copy("batch_stats"=frozen_dict.freeze({}))
+        params = params.copy(batch_stats=frozen_dict.freeze({}))
     with open(weight_dir / f"{weight_type}.flaxnn", "rb") as weights_file:
         flax.serialization.from_bytes(params, weights_file.read())
     batch_stats = params["batch_stats"]
@@ -67,12 +67,12 @@ def make_eval_traj_computer(net, params, batch_stats, small_model, loss_funcs_di
     def do_eval(traj):
         first_step = qg_utils.slice_kernel_state(traj, 0)
         tail_steps = qg_utils.slice_kernel_state(traj, slice(1, None))
-        num_steps = traj.shape[0] - 1
+        num_steps = traj.q.shape[0] - 1
         new_states, _last_memory = qg_utils.get_online_rollout(first_step, num_steps, apply_fn, params, small_model, memory_init_fn, batch_stats, net.param_type, False)
         # Compute losses
         return {
             loss_name: jax.vmap(loss_func)(tail_steps.q, new_states.q)
-            for loss_name, loss_func in loss_func_dict.items()
+            for loss_name, loss_func in loss_funcs_dict.items()
         }
 
     return do_eval
@@ -97,6 +97,7 @@ def main():
     utils.set_up_logging(level=args.log_level, out_file=out_dir/"run.log")
     logger = logging.getLogger("main")
     logger.info("Arguments: %s", vars(args))
+    logger.info("Saving results to: %s", out_dir)
     # Find the training data file
     eval_file = pathlib.Path(args.eval_set) / "data.hdf5"
     # Create the model
@@ -119,30 +120,31 @@ def main():
                 },
             )
         )
+        logger.info("Starting to evaluate on %d trajectories of %d steps", eval_loader.num_trajs, eval_loader.num_steps)
         for traj_num in range(eval_loader.num_trajs):
             logger.debug("Starting to load trajectory %d", traj_num)
-            traj = loader.get_trajectory(traj_num)
+            traj = eval_loader.get_trajectory(traj_num)
             logger.debug("Finished loading trajectory %d", traj_num)
             logger.info("Starting rollout of trajectory %d", traj_num)
             traj_result = jax.device_get(eval_func(traj))
             logger.info("Finished rollout of trajectory %d", traj_num)
             # Report some results for the losses
+            json_results["traj_info"][traj_num] = {}
             json_results["traj_info"][traj_num]["loss_keys"] = {}
             for loss_name, loss_result in traj_result.items():
                 loss_key = f"{traj_num:05}_{loss_name}"
-                json_results["traj_info"][traj_num]["loss_keys"] = {"loss_name": loss_key}
+                json_results["traj_info"][traj_num]["loss_keys"][loss_name] = loss_key
                 bulk_results[loss_key] = loss_result
-            horizon_report_components = []
             traj_horizons = {loss_name: {} for loss_name in traj_result.keys()}
             for horizon in sorted({5, 10, 25, 50, 100, 250, 500, 750, 1000}):
+                horizon_report_components = []
                 for loss_name in sorted(traj_result.keys()):
-                    horiz_loss = np.mean(traj_result[loss_name][:horizon])
+                    horiz_loss = float(np.mean(traj_result[loss_name][:horizon]))
                     traj_horizons[loss_name][horizon] = horiz_loss
                     horizon_report_components.append(f"{loss_name}: {horiz_loss:<15.5g}")
                 # Build report string
-                logger.info("Traj %d horizon %d: %s", traj_num, horizon, " ".join(horizon_report_components))
+                logger.info("Traj %05d horizon %5d: %s", traj_num, horizon, " ".join(horizon_report_components))
             json_results["traj_info"][traj_num]["loss_horizons"] = traj_horizons
-            json_results["traj_horizons"][traj_num] = traj_horizons
     # Save results
     np.savez(out_dir / "results.npz", **bulk_results)
     with open(out_dir / "results.json", "w", encoding="utf8") as json_file:
