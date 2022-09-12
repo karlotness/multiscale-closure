@@ -22,6 +22,16 @@ parser.add_argument("saved_weight_type", type=str, help="Directory with validati
 parser.add_argument("--log_level", type=str, help="Level for logger", default="info", choices=["debug", "info", "warning", "error", "critical"])
 
 
+def mse_loss(real_step, est_step):
+    err = jnp.abs(est_step - real_step)
+    return jnp.mean(err ** 2)
+
+
+def relerr_loss(real_step, est_step):
+    err = jnp.abs(est_step - real_step)
+    return jnp.mean(err / jnp.abs(real_step))
+
+
 def load_network(weight_dir, weight_type, small_model):
     weight_dir = pathlib.Path(weight_dir)
     dummy_q = jnp.zeros((small_model.nz, small_model.ny, small_model.nx))
@@ -103,9 +113,9 @@ def main():
                 params=params,
                 batch_stats=batch_stats,
                 small_model=eval_small_model,
-                loss_funcs_dics={
-                    "mse": None,
-                    "relerr": None,
+                loss_funcs_dict={
+                    "mse": mse_loss,
+                    "relerr": relerr_loss,
                 },
             )
         )
