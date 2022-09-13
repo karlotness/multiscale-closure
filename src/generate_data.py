@@ -11,6 +11,7 @@ import numpy as np
 import h5py
 from systems.qg import utils as qg_utils
 from systems.qg.qg_model import QGModel
+from systems.qg import coarsen
 
 parser = argparse.ArgumentParser(description="Generate data for a variety of systems")
 parser.add_argument("out_dir", type=str, help="Directory to store output (created if non-existing)")
@@ -51,6 +52,8 @@ def make_generate_coarse_trajs(big_model, num_steps, coarsen_operators):
             for op_name, op in coarsen_operators.items()
         }
 
+    return make_trajs
+
 
 def gen_qg(out_dir, args, base_logger):
     out_dir = pathlib.Path(out_dir)
@@ -88,7 +91,7 @@ def gen_qg(out_dir, args, base_logger):
             param_group = out_file.create_group("params")
             param_group.create_dataset("big_model", data=big_model.param_json())
             param_group.create_dataset("small_model", data=op.small_model.param_json())
-            out_file.out_file.create_group("trajs")
+            out_file.create_group("trajs")
         # Generate trajectories
         compound_dtype = None
         for traj_num in range(args.num_trajs):
@@ -99,7 +102,7 @@ def gen_qg(out_dir, args, base_logger):
             # First time: determine the compound dtype
             if compound_dtype is None:
                 dtype_fields = []
-                for k, v in dataclasses.asdict(next(coarse_trajs.values())).items():
+                for k, v in dataclasses.asdict(next(iter(coarse_trajs.values()))).items():
                     if v.ndim > 1:
                         dtype_fields.append((k, v.dtype, v.shape[1:]))
                     else:

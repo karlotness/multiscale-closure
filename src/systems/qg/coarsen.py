@@ -16,6 +16,7 @@ class Coarsener:
         params["ny"] = small_nx
         self.big_model = big_model
         self.small_model = QGModel.from_param_json(json.dumps(params))
+        self.ratio = self.big_model.nx / self.small_model.nx
 
     def coarsen_traj(self, big_traj):
         assert big_traj.q.ndim == 4
@@ -41,13 +42,13 @@ class Coarsener:
         small_traj.dqhdt_p = jnp.concatenate(
             [
                 jnp.expand_dims(jnp.zeros_like(small_traj.dqhdt_p[0]), 0),
-                small_traj.dqhdt[:-1]
+                small_traj.dqhdt[:-1],
             ]
         )
         small_traj.dqhdt_pp = jnp.concatenate(
             [
-                jnp.zeros_like(small_traj.dqhdt_pp[:2])
-                small_traj.dqhdt[:-2]
+                jnp.zeros_like(small_traj.dqhdt_pp[:2]),
+                small_traj.dqhdt[:-2],
             ]
         )
         # All done
@@ -73,7 +74,7 @@ class SpectralCoarsener(Coarsener):
         )
         dummy_qh = self._to_spec(dummy_small_q)
         nk = dummy_qh.shape[1] // 2
-        trunc = np.hstack((vh[:, :nk,:nk+1],
+        trunc = jnp.hstack((vh[:, :nk,:nk+1],
                            vh[:,-nk:,:nk+1]))
         filtered = trunc * self.spectral_filter() / self.ratio**2
         return self._to_real(filtered)
