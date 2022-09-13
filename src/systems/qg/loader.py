@@ -23,6 +23,13 @@ _WORK_LOOP_MUTEX = threading.Lock()
 _PENDING_TASKS = set()
 
 
+@dataclasses.dataclass
+class CoreTrajData:
+    t: jnp.ndarray
+    tc: jnp.ndarray
+    ablevel: jnp.ndarray
+
+
 def qg_model_from_hdf5(file_path, model="small"):
     with h5py.File(file_path, "r") as h5_file:
         params = h5_file["params"][f"{model}_model"].asstr()[()]
@@ -31,8 +38,41 @@ def qg_model_from_hdf5(file_path, model="small"):
 
 def _get_series_details(file_path, rollout_steps):
     with h5py.File(file_path, "r") as h5_file:
-        arr = h5_file["trajs"]["traj00000"][:int(rollout_steps)]
-        return arr.dtype, arr.nbytes
+        q_arr = h5_file["trajs"]["traj00000_q"][:operator.index(rollout_steps)]
+        dqhdt_arr = h5_file["trajs"]["traj00000_dqhdt"][:operator.index(rollout_steps) + 2]
+        return q_arr.dtype, dqhdt_arr.dtype, q_arr.nbytes, dqhdt_arr.nbytes, q_arr.shape[1:], dqhdt_arr.shape[1:]
+
+
+def _get_core_traj_data(file_path):
+    with h5py.File(file_path, "r") as h5_file:
+        t = jax.device_put(h5_file["trajs"]["t"][:])
+        tc = jax.device_put(h5_file["trajs"]["tc"][:])
+        ablevel = jax.device_put(h5_file["trajs"]["ablevel"][:])
+        return CoreTrajData(t=t, tc=tc, ablevel=ablevel)
+
+
+def _make_small_model_recomputer(small_model):
+    def recompute_1(q, t, tc, ablevel):
+        small_state = small_model.create_initial_state(jax.random.PRNGKey(0))
+        small_state.t = t
+        small_state.tc = tc
+        small_state.ablevel = ablevel
+        small_state.q = q
+        # Initialize other values
+        small_state = small_model.invert(small_state) # Recompute ph, u, v
+        small_state = small_model.do_advection(small_state) # Recompute uq, vq, dqhdt
+        small_state = small_model.do_friction(small_state) # Recompute dqhdt
+        return small_state
+
+    def recompute(q, dqhdt, t, tc, ablevel):
+        small_state = jax.vmap(recompute_1)(q, t, tc, ablevel)
+        # Fix up dqhdt, etc
+        small_state.dqhdt = dqhdt[2:]
+        small_state.dqhdt_p = dqhdt[1:-1]
+        small_state.dqhdt_pp = dqhdt[:-2]
+        return small_state
+
+    return recompute
 
 
 def _get_work_loop():
@@ -110,10 +150,17 @@ async def _proc_worker_task(
         logger,
         file_path,
         rollout_steps,
-        arr_dtype,
-        arr_byte_size,
+        q_dtype,
+        dqhdt_dtype,
+        q_byte_size,
+        dqhdt_byte_size,
+        q_shape,
+        dqhdt_shape,
+        core_traj_data,
 ):
     logger.debug("process worker started")
+    q_shape = (rollout_steps, ) + q_shape
+    dqhdt_shape = (rollout_steps + 2, ) + dqhdt_shape
     try:
         # Spawn worker's process
         proc = await asyncio.create_subprocess_exec(
@@ -135,7 +182,16 @@ async def _proc_worker_task(
                 i, traj, step = job
                 proc.stdin.write(f"{traj:d} {step:d}\n".encode("utf8"))
                 await proc.stdin.drain()
-                await out_queue.put((i, np.frombuffer(await proc.stdout.readexactly(arr_byte_size), dtype=arr_dtype)))
+                # Prepare sliced core data
+                slicer = slice(operator.index(step), operator.index(step + rollout_steps))
+                t = core_traj_data.t[slicer]
+                tc = core_traj_data.tc[slicer]
+                ablevel = core_traj_data.ablevel[slicer]
+                # Get bytes from worker (q, dqhdt)
+                q = np.frombuffer(await proc.stdout.readexactly(q_byte_size), dtype=q_dtype).reshape(q_shape)
+                dqhdt = np.frombuffer(await proc.stdout.readexactly(dqhdt_byte_size), dtype=dqhdt_dtype).reshape(dqhdt_shape)
+                # Put results
+                await out_queue.put((i, q, dqhdt, t, tc, ablevel))
         finally:
             proc.stdin.write_eof()
             return_code = await proc.wait()
@@ -160,17 +216,28 @@ async def _worker_coro(
         seed,
         num_trajs,
         num_steps,
-        arr_dtype,
-        arr_byte_size,
+        q_dtype,
+        dqhdt_dtype,
+        q_byte_size,
+        dqhdt_byte_size,
+        q_shape,
+        dqhdt_shape,
         queue_wait_cond,
         num_procs=10,
 ):
     try:
         logger.debug("worker thread started")
+        core_traj_data = _get_core_traj_data(file_path) # Source for t, tc, ablevel
+        small_model = qg_model_from_hdf5(file_path=file_path, model="small") # Source for recomputing other values from q
+        state_recomputer = jax.jit(jax.vmap(_make_small_model_recomputer(small_model)))
         submit_queue = asyncio.Queue()
         recieve_queue = asyncio.Queue()
         sort_key_func = operator.itemgetter(0)
-        undecorate_func = operator.itemgetter(1)
+        undecorate_q_func = operator.itemgetter(1)
+        undecorate_dqhdt_func = operator.itemgetter(2)
+        undecorate_t_func = operator.itemgetter(3)
+        undecorate_tc_func = operator.itemgetter(4)
+        undecorate_ablevel_func = operator.itemgetter(5)
         sub_tasks = {
             asyncio.create_task(
                 _proc_worker_task(
@@ -179,8 +246,13 @@ async def _worker_coro(
                     logger=logger.getChild(f"proc{i}"),
                     file_path=file_path,
                     rollout_steps=rollout_steps,
-                    arr_dtype=arr_dtype,
-                    arr_byte_size=arr_byte_size,
+                    q_dtype=q_dtype,
+                    dqhdt_dtype=dqhdt_dtype,
+                    q_byte_size=q_byte_size,
+                    dqhdt_byte_size=dqhdt_byte_size,
+                    q_shape=q_shape,
+                    dqhdt_shape=dqhdt_shape,
+                    core_traj_data=core_traj_data,
                 )
             )
             for i in range(num_procs)
@@ -211,8 +283,12 @@ async def _worker_coro(
                     arr_stack.append(res)
                 arr_stack.sort(key=sort_key_func)
                 # Stack and split arrays, push to GPU and place in queue
-                arr_stack = np.stack(list(map(undecorate_func, arr_stack)))
-                out_result = jax.device_put(kernel.PseudoSpectralKernelState(**{k: arr_stack[k] for k in data_fields}))
+                q_stack = np.stack(list(map(undecorate_q_func, arr_stack)))
+                dqhdt_stack = np.stack(list(map(undecorate_dqhdt_func, arr_stack)))
+                t_stack = jnp.stack(list(map(undecorate_t_func, arr_stack)))
+                tc_stack = jnp.stack(list(map(undecorate_tc_func, arr_stack)))
+                ablevel_stack = jnp.stack(list(map(undecorate_ablevel_func, arr_stack)))
+                out_result = state_recomputer(q_stack, dqhdt_stack, t_stack, tc_stack, ablevel_stack)
                 async with queue_wait_cond:
                     while True:
                         try:
@@ -271,21 +347,20 @@ class ThreadedQGLoader:
 
         # Determine some basic statistics
         with h5py.File(file_path, "r") as h5_file:
-            num_steps = h5_file["trajs"]["traj00000"].shape[0]
+            num_steps = h5_file["trajs"]["traj00000_q"].shape[0]
             num_trajs = 0
             for k in h5_file["trajs"].keys():
-                if k.startswith("traj"):
+                if k.startswith("traj") and k.endswith("_q"):
                     num_trajs += 1
         self._logger.info("loading dataset with %d trajectories of %d steps each", num_trajs, num_steps)
         self.num_trajs = num_trajs
         self.num_steps = num_steps
         self.rollout_steps = rollout_steps
         self.batch_size = batch_size
-        self._arr_dtype, self._arr_byte_size = _get_series_details(
+        self._q_dtype, self._dqhdt_dtype, self._q_byte_size, self._dqhdt_byte_size, self._q_shape, self._dqhdt_shape = _get_series_details(
             file_path=file_path,
             rollout_steps=self.rollout_steps
         )
-
         self._work_loop = _get_work_loop()
         self._queue_wait_cond = _create_work_loop_cond(self._work_loop)
         self._worker_future = asyncio.run_coroutine_threadsafe(
@@ -299,8 +374,12 @@ class ThreadedQGLoader:
                 seed=seed,
                 num_trajs=num_trajs,
                 num_steps=num_steps,
-                arr_dtype=self._arr_dtype,
-                arr_byte_size=self._arr_byte_size,
+                q_dtype=self._q_dtype,
+                dqhdt_dtype=self._dqhdt_dtype,
+                q_byte_size=self._q_byte_size,
+                dqhdt_byte_size=self._dqhdt_byte_size,
+                q_shape=self._q_shape,
+                dqhdt_shape=self._dqhdt_shape,
                 queue_wait_cond=self._queue_wait_cond,
                 num_procs=num_workers,
             ),
@@ -356,11 +435,20 @@ class SimpleQGLoader:
         self._data_fields = frozenset(f.name for f in dataclasses.fields(kernel.PseudoSpectralKernelState))
         num_traj = 0
         for k in self._trajs_group.keys():
-            if k.startswith("traj"):
+            if k.startswith("traj") and k.endswith("_q"):
                 num_traj += 1
+        _, _, _, _, q_shape, dqhdt_shape = _get_series_details(
+            file_path=file_path,
+            rollout_steps=1,
+        )
+        self.q_shape = q_shape[1:]
+        self.dqhdt_shape = dqhdt_shape[1:]
         self.num_trajectories = num_traj
-        self.num_steps = self._trajs_group["traj00000"].shape[0]
+        self.num_steps = self._trajs_group["traj00000_q"].shape[0]
         self.num_trajs = self.num_trajectories
+        small_model = qg_model_from_hdf5(file_path=file_path, model="small") # Source for recomputing other values from q
+        self._state_recomputer = jax.jit(_make_small_model_recomputer(small_model))
+        self._core_traj_data = _get_core_traj_data(file_path) # Source for t, tc, ablevel
 
     def __enter__(self):
         return self
@@ -380,5 +468,11 @@ class SimpleQGLoader:
         start = operator.index(start)
         if end is not None:
             end = operator.index(end)
-        traj_data = self._trajs_group[f"traj{traj:05d}"][start:end]
-        return jax.device_put(kernel.PseudoSpectralKernelState(**{k: traj_data[k] for k in self._data_fields}))
+        slicer = slice(start, end)
+        slicer_dqhdt = slice(start, end + 2 if end is not None else None)
+        t = self._core_traj_data.t[slicer]
+        tc = self._core_traj_data.tc[slicer]
+        ablevel = self._core_traj_data.ablevel[slicer]
+        q = self._trajs_group[f"traj{traj:05d}_q"][slicer]
+        dqhdt = self._trajs_group[f"traj{traj:05d}_dqhdt"][slicer_dqhdt]
+        return self._state_recomputer(q, dqhdt, t, tc, ablevel)

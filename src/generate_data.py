@@ -55,15 +55,23 @@ def make_generate_coarse_traj(coarse_op, num_steps):
             prev_small_state.dqhdt_p = small_dqhdt
             prev_small_state.dqhdt_pp = small_dqhdt_p
             next_big_state = coarse_op.big_model.step_forward(prev_big_state)
-            return (next_big_state, prev_small_state.dqhdt, prev_small_state.dqhdt_p), prev_small_state
+            return (next_big_state, prev_small_state.dqhdt, prev_small_state.dqhdt_p), (prev_small_state.q, prev_small_state.t, prev_small_state.tc, prev_small_state.ablevel, prev_small_state.dqhdt)
 
-        _carry, coarse_states = jax.lax.scan(
+        _carry, (q, t, tc, ablevel, dqhdt) = jax.lax.scan(
             _step_forward,
             (big_initial_step, dummy_dqhdt, dummy_dqhdt),
             None,
             length=num_steps,
         )
-        return coarse_states
+        dqhdt = jnp.concatenate(
+            [
+                jnp.expand_dims(dummy_dqhdt, 0),
+                jnp.expand_dims(dummy_dqhdt, 0),
+                dqhdt,
+            ]
+        )
+
+        return q, t, tc, ablevel, dqhdt
 
     return make_traj
 
@@ -117,24 +125,18 @@ def gen_qg(out_dir, args, base_logger):
                 out_file = op_files[op_name]
                 traj_gen = traj_gen_ops[op_name]
                 logger.info("Starting trajectory %d for operator %s", traj_num, op_name)
-                traj = jax.device_get(traj_gen(initial_step))
+                q, t, tc, ablevel, dqhdt = jax.device_get(traj_gen(initial_step))
                 logger.info("Finished generating trajectory %d for operator %s", traj_num, op_name)
-                # First time: determine the compound dtype
-                if compound_dtype is None:
-                    dtype_fields = []
-                    for k, v in dataclasses.asdict(traj).items():
-                        if v.ndim > 1:
-                            dtype_fields.append((k, v.dtype, v.shape[1:]))
-                        else:
-                            dtype_fields.append((k, v.dtype))
-                    compound_dtype = np.dtype(dtype_fields)
-                # Combine the data
-                data_arr = np.empty(num_steps, dtype=compound_dtype)
-                for k, v in dataclasses.asdict(traj).items():
-                    data_arr[k] = v
-                del traj
-                out_file["trajs"].create_dataset(f"traj{traj_num:05d}", data=data_arr)
-                del data_arr
+                # Store the data
+                if traj_num == 0:
+                    # First trajectory, store t, tc, ablevel
+                    out_file["trajs"].create_dataset("t", data=t)
+                    out_file["trajs"].create_dataset("tc", data=tc)
+                    out_file["trajs"].create_dataset("ablevel", data=ablevel)
+                # Store q and dqhdt
+                out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q", data=q)
+                out_file["trajs"].create_dataset(f"traj{traj_num:05d}_dqhdt", data=dqhdt)
+                del q, t, tc, ablevel, dqhdt
                 logger.info("Finished storing trajectory %d for operator %s", traj_num, op_name)
 
 
