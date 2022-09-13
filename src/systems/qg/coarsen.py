@@ -40,7 +40,7 @@ class Coarsener:
         assert big_traj.q.ndim == 4
         assert big_traj.q.shape[1:] == (self.big_model.nz, self.big_model.ny, self.big_model.nx)
         # Coarsen each state
-        _, small_traj = jax.lax.scan(lambda _carry, x: (None, self._coarsen_step(x)), None, big_traj)
+        small_traj = jax.vmap(self._coarsen_step)(big_traj)
         # Patch up the dqhdt_p and dqhdt_pp values
         small_traj.dqhdt_p = jnp.concatenate(
             [
