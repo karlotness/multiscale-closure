@@ -25,6 +25,21 @@ parser_qg.add_argument("--tmax", type=float, default=311040000.0, help="End time
 parser_qg.add_argument("--big_size", type=int, default=256, help="Scale of large model")
 parser_qg.add_argument("--small_size", type=int, default=64, help="Scale of small model")
 parser_qg.add_argument("--num_trajs", type=int, default=1, help="Number of trajectories to generate")
+parser_qg.add_argument("--config", type=str, default="eddy", help="Eddy or jet configuration", choices=["eddy", "jet"])
+
+CONFIG_VARS = {
+    "eddy": {
+        "rek": 5.787e-7,
+        "delta": 0.25,
+        "beta": 1.5e-11,
+
+    },
+    "jet": {
+        "rek": 7e-08,
+        "delta": 0.1,
+        "beta": 1e-11,
+    },
+}
 
 
 def make_generate_coarse_trajs(big_model, num_steps, coarsen_operators):
@@ -42,7 +57,7 @@ def gen_qg(out_dir, args, base_logger):
     logger = base_logger.getChild("qg")
     logger.info("Generating trajectory for QG with seed %d", args.seed)
     # Initialize models
-    big_model = QGModel(nx=args.big_size, ny=args.big_size, dt=args.dt, tmax=args.tmax)
+    big_model = QGModel(nx=args.big_size, ny=args.big_size, dt=args.dt, tmax=args.tmax, **CONFIG_VARS[args.config])
     # Initialize coarsening operators
     coarsen_operators = {
         "op1": coarsen.Operator1(big_model=big_model, small_nx=args.small_size),
