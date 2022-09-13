@@ -18,26 +18,29 @@ class Coarsener:
         self.small_model = QGModel.from_param_json(json.dumps(params))
         self.ratio = self.big_model.nx / self.small_model.nx
 
+    def _coarsen_step(self, big_state):
+        assert big_state.q.ndim == 3
+        assert big_state.q.shape == (self.big_model.nz, self.big_model.ny, self.big_model.nx)
+        big_state = self.big_model.invert(big_state)
+        # Create an appropriate zeroed initial state
+        small_state = self.small_model.create_initial_state(jax.random.PRNGKey(0))
+        # Copy basic attributes
+        small_state.t = big_state.t
+        small_state.tc = big_state.tc
+        small_state.ablevel = big_state.ablevel
+        # Initialize new q value
+        small_state.q = self.coarsen_q(big_state.q) # Recompute q
+        small_state = self.small_model.invert(small_state) # Recompute ph, u, v
+        small_state = self.small_model.do_advection(small_state) # Recompute uq, vq, dqhdt
+        small_state = self.small_model.do_friction(small_state) # Recompute dqhdt
+        # NOTE: YOU ARE RESPONSIBLE FOR PATCHING UP dqhdt_p AND dqhdt_pp!
+        return small_state
+
     def coarsen_traj(self, big_traj):
         assert big_traj.q.ndim == 4
         assert big_traj.q.shape[1:] == (self.big_model.nz, self.big_model.ny, self.big_model.nx)
         # Coarsen each state
-        def _coarsen_state(_carry, big_state):
-            big_state = self.big_model.invert(big_state)
-            # Create an appropriate zeroed initial state
-            small_state = self.small_model.create_initial_state(jax.random.PRNGKey(0))
-            # Copy basic attributes
-            small_state.t = big_state.t
-            small_state.tc = big_state.tc
-            small_state.ablevel = big_state.ablevel
-            # Initialize new q value
-            small_state.q = self.coarsen_q(big_state.q) # Recompute q
-            small_state = self.small_model.invert(small_state) # Recompute ph, u, v
-            small_state = self.small_model.do_advection(small_state) # Recompute uq, vq, dqhdt
-            small_state = self.small_model.do_friction(small_state) # Recompute dqhdt
-            # Now all that remains is to patch up the shifted dqhdt_p and dqhdt_pp values (later pass)
-            return None, small_state
-        _, small_traj = jax.lax.scan(_coarsen_state, None, big_traj)
+        _, small_traj = jax.lax.scan(lambda _carry, x: (None, self._coarsen_step(x)), None, big_traj)
         # Patch up the dqhdt_p and dqhdt_pp values
         small_traj.dqhdt_p = jnp.concatenate(
             [

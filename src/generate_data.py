@@ -43,16 +43,29 @@ CONFIG_VARS = {
 }
 
 
-def make_generate_coarse_trajs(big_model, num_steps, coarsen_operators):
+def make_generate_coarse_traj(coarse_op, num_steps):
+    dummy_init = coarse_op.small_model.create_initial_state(jax.random.PRNGKey(0))
+    dummy_dqhdt = jnp.zeros_like(dummy_init.dqhdt)
 
-    def make_trajs(rng):
-        full_traj = qg_utils.make_gen_traj(big_model, num_steps)(rng)
-        return {
-            op_name: op.coarsen_traj(full_traj)
-            for op_name, op in coarsen_operators.items()
-        }
+    def make_traj(big_initial_step):
 
-    return make_trajs
+        def _step_forward(carry, x):
+            prev_big_state, small_dqhdt, small_dqhdt_p = carry
+            prev_small_state = coarse_op._coarsen_step(prev_big_state)
+            prev_small_state.dqhdt_p = small_dqhdt
+            prev_small_state.dqhdt_pp = small_dqhdt_p
+            next_big_state = coarse_op.big_model.step_forward(prev_big_state)
+            return (next_big_state, prev_small_state.dqhdt, prev_small_state.dqhdt_p), prev_small_state
+
+        _carry, coarse_states = jax.lax.scan(
+            _step_forward,
+            (big_initial_step, dummy_dqhdt, dummy_dqhdt),
+            None,
+            length=num_steps,
+        )
+        return coarse_states
+
+    return make_traj
 
 
 def gen_qg(out_dir, args, base_logger):
@@ -70,9 +83,12 @@ def gen_qg(out_dir, args, base_logger):
     rng_ctr = jax.random.PRNGKey(seed=args.seed)
     # Do computations
     num_steps = math.ceil(args.tmax / args.dt)
-    traj_gen = jax.jit(
-        make_generate_coarse_trajs(big_model, num_steps, coarsen_operators)
-    )
+    traj_gen_ops = {
+        op_name: jax.jit(
+            make_generate_coarse_traj(op, num_steps)
+        )
+        for op_name, op in coarsen_operators.items()
+    }
     logger.info("Generating %d trajectories with %d steps", args.num_trajs, num_steps)
     # Create directories for each operator
     op_directories = {}
@@ -96,26 +112,30 @@ def gen_qg(out_dir, args, base_logger):
         compound_dtype = None
         for traj_num in range(args.num_trajs):
             rng, rng_ctr = jax.random.split(rng_ctr, 2)
-            logger.info("Starting trajectory %d", traj_num)
-            coarse_trajs = jax.device_get(traj_gen(rng))
-            logger.info("Finished generating trajectory %d", traj_num)
-            # First time: determine the compound dtype
-            if compound_dtype is None:
-                dtype_fields = []
-                for k, v in dataclasses.asdict(next(iter(coarse_trajs.values()))).items():
-                    if v.ndim > 1:
-                        dtype_fields.append((k, v.dtype, v.shape[1:]))
-                    else:
-                        dtype_fields.append((k, v.dtype))
-                compound_dtype = np.dtype(dtype_fields)
-            # For each operator, combine the data
-            for op_name, traj in coarse_trajs.items():
+            initial_step = big_model.create_initial_state(rng)
+            for op_name, op in coarsen_operators.items():
                 out_file = op_files[op_name]
+                traj_gen = traj_gen_ops[op_name]
+                logger.info("Starting trajectory %d for operator %s", traj_num, op_name)
+                traj = jax.device_get(traj_gen(initial_step))
+                logger.info("Finished generating trajectory %d for operator %s", traj_num, op_name)
+                # First time: determine the compound dtype
+                if compound_dtype is None:
+                    dtype_fields = []
+                    for k, v in dataclasses.asdict(traj).items():
+                        if v.ndim > 1:
+                            dtype_fields.append((k, v.dtype, v.shape[1:]))
+                        else:
+                            dtype_fields.append((k, v.dtype))
+                    compound_dtype = np.dtype(dtype_fields)
+                # Combine the data
                 data_arr = np.empty(num_steps, dtype=compound_dtype)
                 for k, v in dataclasses.asdict(traj).items():
                     data_arr[k] = v
+                del traj
                 out_file["trajs"].create_dataset(f"traj{traj_num:05d}", data=data_arr)
-            logger.info("Finished storing trajectory %d", traj_num)
+                del data_arr
+                logger.info("Finished storing trajectory %d for operator %s", traj_num, op_name)
 
 
 if __name__ == "__main__":
