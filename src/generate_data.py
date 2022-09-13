@@ -3,6 +3,7 @@ import pathlib
 import dataclasses
 import utils
 import logging
+import contextlib
 import math
 import jax
 import jax.numpy as jnp
@@ -19,52 +20,83 @@ subparsers = parser.add_subparsers(help="Choice of system to generate", dest="sy
 # QG options
 parser_qg = subparsers.add_parser("qg", help="Generate training data like PyQG")
 parser_qg.add_argument("seed", type=int, help="RNG seed, must be unique for unique trajectory")
-parser_qg.add_argument("--dt", type=float, default=7200.0, help="Time step size")
-parser_qg.add_argument("--tmax", type=float, default=157680000.0 * 2, help="End time for the model")
-parser_qg.add_argument("--big_size", type=int, default=64, help="Scale of large model")
-parser_qg.add_argument("--small_size", type=int, default=16, help="Scale of small model")
+parser_qg.add_argument("--dt", type=float, default=3600.0, help="Time step size")
+parser_qg.add_argument("--tmax", type=float, default=311040000.0, help="End time for the model")
+parser_qg.add_argument("--big_size", type=int, default=256, help="Scale of large model")
+parser_qg.add_argument("--small_size", type=int, default=64, help="Scale of small model")
 parser_qg.add_argument("--num_trajs", type=int, default=1, help="Number of trajectories to generate")
 
 
+def make_generate_coarse_trajs(big_model, num_steps, coarsen_operators):
+
+    def make_trajs(rng):
+        full_traj = qg_utils.make_gen_traj(big_model, num_steps)(rng)
+        return {
+            op_name: op.coarsen_traj(full_traj)
+            for op_name, op in coarsen_operators.items()
+        }
+
+
 def gen_qg(out_dir, args, base_logger):
+    out_dir = pathlib.Path(out_dir)
     logger = base_logger.getChild("qg")
     logger.info("Generating trajectory for QG with seed %d", args.seed)
     # Initialize models
     big_model = QGModel(nx=args.big_size, ny=args.big_size, dt=args.dt, tmax=args.tmax)
-    small_model = QGModel(nx=args.small_size, ny=args.small_size, dt=args.dt, tmax=args.tmax)
+    # Initialize coarsening operators
+    coarsen_operators = {
+        "op1": coarsen.Operator1(big_model=big_model, small_nx=args.small_size),
+        "op2": coarsen.Operator2(big_model=big_model, small_nx=args.small_size),
+    }
     # Set up data generator
     rng_ctr = jax.random.PRNGKey(seed=args.seed)
-    spectral_coarsener = qg_utils.SpectralCoarsener(big_model=big_model, small_model=small_model)
     # Do computations
     num_steps = math.ceil(args.tmax / args.dt)
-    traj_gen = qg_utils.make_gen_traj(big_model=big_model, spectral_coarsener=spectral_coarsener)
+    traj_gen = jax.jit(
+        make_generate_coarse_trajs(big_model, num_steps, coarsen_operators)
+    )
     logger.info("Generating %d trajectories with %d steps", args.num_trajs, num_steps)
-    with h5py.File(out_dir / "data.hdf5", "w", libver="latest") as out_file:
-        # Store model parameters
-        param_group = out_file.create_group("params")
-        param_group.create_dataset("big_model", data=big_model.param_json())
-        param_group.create_dataset("small_model", data=small_model.param_json())
+    # Create directories for each operator
+    op_directories = {}
+    for op_name in coarsen_operators.keys():
+        op_directories[op_name] = out_dir / op_name
+        op_directories[op_name].mkdir(exist_ok=True)
+    with contextlib.ExitStack() as exit_stack:
+        # Create and open files for each operator
+        op_files = {
+            op_name: exit_stack.enter_context(h5py.File(op_directories[op_name] / "data.hdf5", "w", libver="latest"))
+            for op_name in coarsen_operators.keys()
+        }
+        # Store model parameters in each file
+        for op_name, op in coarsen_operators.items():
+            out_file = op_files[op_name]
+            param_group = out_file.create_group("params")
+            param_group.create_dataset("big_model", data=big_model.param_json())
+            param_group.create_dataset("small_model", data=op.small_model.param_json())
+            out_file.out_file.create_group("trajs")
         # Generate trajectories
-        root_group = out_file.create_group("trajs")
         compound_dtype = None
         for traj_num in range(args.num_trajs):
             rng, rng_ctr = jax.random.split(rng_ctr, 2)
             logger.info("Starting trajectory %d", traj_num)
-            traj = traj_gen(rng=rng, num_steps=num_steps)
+            coarse_trajs = jax.device_get(traj_gen(rng))
             logger.info("Finished generating trajectory %d", traj_num)
+            # First time: determine the compound dtype
             if compound_dtype is None:
                 dtype_fields = []
-                for k, v in dataclasses.asdict(traj).items():
+                for k, v in dataclasses.asdict(next(coarse_trajs.values())).items():
                     if v.ndim > 1:
                         dtype_fields.append((k, v.dtype, v.shape[1:]))
                     else:
                         dtype_fields.append((k, v.dtype))
                 compound_dtype = np.dtype(dtype_fields)
-            data_arr = np.empty(num_steps, dtype=compound_dtype)
-            for k, v in dataclasses.asdict(traj).items():
-                data_arr[k] = v
-            # Store results
-            root_group.create_dataset(f"traj{traj_num:05d}", data=data_arr)
+            # For each operator, combine the data
+            for op_name, traj in coarse_trajs.items():
+                out_file = op_files[op_name]
+                data_arr = np.empty(num_steps, dtype=compound_dtype)
+                for k, v in dataclasses.asdict(traj).items():
+                    data_arr[k] = v
+                out_file["trajs"].create_dataset(f"traj{traj_num:05d}", data=data_arr)
             logger.info("Finished storing trajectory %d", traj_num)
 
 
