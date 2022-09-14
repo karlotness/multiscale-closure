@@ -183,7 +183,7 @@ async def _proc_worker_task(
                 proc.stdin.write(f"{traj:d} {step:d}\n".encode("utf8"))
                 await proc.stdin.drain()
                 # Prepare sliced core data
-                slicer = slice(operator.index(step), operator.index(step + rollout_steps))
+                slicer = slice(operator.index(step), operator.index(step) + operator.index(rollout_steps))
                 t = core_traj_data.t[slicer]
                 tc = core_traj_data.tc[slicer]
                 ablevel = core_traj_data.ablevel[slicer]
