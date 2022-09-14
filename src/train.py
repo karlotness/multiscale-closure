@@ -108,7 +108,7 @@ def init_network(architecture, lr, weight_decay, rng, small_model):
     )
 
 
-def epoch_batch_iterators(train_file, batch_size, rollout_length_str, seed=None, base_logger=None, max_buffer_steps=100000):
+def epoch_batch_iterators(train_file, batch_size, rollout_length_str, seed=None, base_logger=None, max_buffer_steps=5000):
     if base_logger is None:
         logger = logging.getLogger("epoch_iter")
     else:
@@ -346,7 +346,7 @@ def main():
                 rollout_steps=args.val_steps,
                 split_name="val",
                 base_logger=logger,
-                buffer_size=args.val_samples,
+                buffer_size=1,
                 seed=loader_rng_init.randint(0, 2**32),
                 num_workers=1,
             )
