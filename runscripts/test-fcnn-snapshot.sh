@@ -20,8 +20,8 @@ readonly SINGULARITY_CONTAINER="${SCRATCH}/closure/closure.sif"
 readonly ORIGIN_REPO_DIR="${HOME}/repos/closure.git"
 readonly OUT_BASE_DIR="${SCRATCH}/closure/run_outputs/"
 readonly CHECKOUT_DIR="${SLURM_JOBTMP}/Closure/"
-readonly TRAIN_DATA_DIR="${SCRATCH}/closure/data/train/"
-readonly VAL_DATA_DIR="${SCRATCH}/closure/data/val/"
+readonly TRAIN_DATA_DIR="${SCRATCH}/closure/data/train/op1/"
+readonly VAL_DATA_DIR="${SCRATCH}/closure/data/val/op1/"
 readonly OUT_DIR="${OUT_BASE_DIR}/$(date '+%Y%m%d-%H%M%S')-${BASE_NAME}-${SLURM_JOB_ID}"
 
 # Clone Repository
