@@ -25,6 +25,16 @@ _PENDING_TASKS = set()
 
 @dataclasses.dataclass
 class CoreTrajData:
+    t: np.ndarray
+    tc: np.ndarray
+    ablevel: np.ndarray
+
+
+@kernel.register_dataclass_pytree
+@dataclasses.dataclass
+class PartialState:
+    q: jnp.ndarray
+    dqhdt_seq: jnp.ndarray
     t: jnp.ndarray
     tc: jnp.ndarray
     ablevel: jnp.ndarray
@@ -45,10 +55,9 @@ def _get_series_details(file_path, rollout_steps):
 
 def _get_core_traj_data(file_path):
     with h5py.File(file_path, "r") as h5_file:
-        cpu_dev = jax.devices("cpu")[0]
-        t = jax.device_put(h5_file["trajs"]["t"][:], device=cpu_dev)
-        tc = jax.device_put(h5_file["trajs"]["tc"][:], device=cpu_dev)
-        ablevel = jax.device_put(h5_file["trajs"]["ablevel"][:], device=cpu_dev)
+        t = h5_file["trajs"]["t"][:]
+        tc = h5_file["trajs"]["tc"][:]
+        ablevel = h5_file["trajs"]["ablevel"][:]
         return CoreTrajData(t=t, tc=tc, ablevel=ablevel)
 
 
@@ -74,6 +83,20 @@ def _make_small_model_recomputer(small_model):
         return small_state
 
     return recompute
+
+
+def _make_partial_state_recomputer(small_model):
+    recompute_fun = _make_small_model_recomputer(small_model)
+
+    def recompute_state(partial_state):
+        q = partial_state.q
+        dqhdt = partial_state.dqhdt_seq
+        t = partial_state.t
+        tc = partial_state.tc
+        ablevel = partial_state.ablevel
+        return recompute_fun(q, dqhdt, t, tc, ablevel)
+
+    return recompute_state
 
 
 def _get_work_loop():
@@ -229,8 +252,6 @@ async def _worker_coro(
     try:
         logger.debug("worker thread started")
         core_traj_data = _get_core_traj_data(file_path) # Source for t, tc, ablevel
-        small_model = qg_model_from_hdf5(file_path=file_path, model="small") # Source for recomputing other values from q
-        state_recomputer = jax.jit(jax.vmap(_make_small_model_recomputer(small_model)), device=jax.devices("cpu")[0])
         submit_queue = asyncio.Queue()
         recieve_queue = asyncio.Queue()
         sort_key_func = operator.itemgetter(0)
@@ -286,10 +307,10 @@ async def _worker_coro(
                 # Stack and split arrays, push to GPU and place in queue
                 q_stack = np.stack(list(map(undecorate_q_func, arr_stack)))
                 dqhdt_stack = np.stack(list(map(undecorate_dqhdt_func, arr_stack)))
-                t_stack = jnp.stack(list(map(undecorate_t_func, arr_stack)))
-                tc_stack = jnp.stack(list(map(undecorate_tc_func, arr_stack)))
-                ablevel_stack = jnp.stack(list(map(undecorate_ablevel_func, arr_stack)))
-                out_result = jax.device_put(state_recomputer(q_stack, dqhdt_stack, t_stack, tc_stack, ablevel_stack), device=jax.devices()[0])
+                t_stack = np.stack(list(map(undecorate_t_func, arr_stack)))
+                tc_stack = np.stack(list(map(undecorate_tc_func, arr_stack)))
+                ablevel_stack = np.stack(list(map(undecorate_ablevel_func, arr_stack)))
+                out_result = jax.device_put(PartialState(q=q_stack, dqhdt_seq=dqhdt_stack, t=t_stack, tc=tc_stack, ablevel=ablevel_stack))
                 async with queue_wait_cond:
                     while True:
                         try:
@@ -427,6 +448,10 @@ class ThreadedQGLoader:
             pass
         # Join the worker
         self._worker_future.result()
+
+    @staticmethod
+    def make_reconstruct_state_func(small_model):
+        return jax.vmap(_make_partial_state_recomputer(small_model))
 
 
 class SimpleQGLoader:

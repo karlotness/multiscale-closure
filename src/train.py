@@ -158,6 +158,7 @@ def epoch_batch_iterators(train_file, batch_size, rollout_length_str, seed=None,
 
 def make_train_batch_computer(small_model, loss_fn, param_type):
     def do_batch(batch, train_state):
+        batch = ThreadedQGLoader.make_reconstruct_state_func(small_model)(batch)
         batch_loss_func = jax.vmap(qg_utils.get_online_batch_loss, in_axes=(0, None, None, None, None, None, None, None, None), out_axes=(0, None), axis_name="batch")
         def _get_losses(params):
             step_losses, new_batch_stats = batch_loss_func(batch, train_state.apply_fn, params, small_model, loss_fn, train_state.memory_init_fn, train_state.batch_stats, param_type, True)
@@ -177,6 +178,7 @@ def make_train_batch_computer(small_model, loss_fn, param_type):
 
 def make_val_computer(small_model, loss_fn, param_type):
     def do_traj(traj, train_state):
+        traj = ThreadedQGLoader.make_reconstruct_state_func(small_model)(traj)
         batch_loss_func = jax.vmap(
             qg_utils.get_online_batch_loss,
             in_axes=(0, None, None, None, None, None, None, None, None),
