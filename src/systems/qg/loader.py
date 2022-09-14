@@ -45,9 +45,10 @@ def _get_series_details(file_path, rollout_steps):
 
 def _get_core_traj_data(file_path):
     with h5py.File(file_path, "r") as h5_file:
-        t = jax.device_put(h5_file["trajs"]["t"][:])
-        tc = jax.device_put(h5_file["trajs"]["tc"][:])
-        ablevel = jax.device_put(h5_file["trajs"]["ablevel"][:])
+        cpu_dev = jax.devices("cpu")[0]
+        t = jax.device_put(h5_file["trajs"]["t"][:], device=cpu_dev)
+        tc = jax.device_put(h5_file["trajs"]["tc"][:], device=cpu_dev)
+        ablevel = jax.device_put(h5_file["trajs"]["ablevel"][:], device=cpu_dev)
         return CoreTrajData(t=t, tc=tc, ablevel=ablevel)
 
 
@@ -229,7 +230,7 @@ async def _worker_coro(
         logger.debug("worker thread started")
         core_traj_data = _get_core_traj_data(file_path) # Source for t, tc, ablevel
         small_model = qg_model_from_hdf5(file_path=file_path, model="small") # Source for recomputing other values from q
-        state_recomputer = jax.jit(jax.vmap(_make_small_model_recomputer(small_model)))
+        state_recomputer = jax.jit(jax.vmap(_make_small_model_recomputer(small_model)), device=jax.devices("cpu")[0])
         submit_queue = asyncio.Queue()
         recieve_queue = asyncio.Queue()
         sort_key_func = operator.itemgetter(0)
@@ -288,7 +289,7 @@ async def _worker_coro(
                 t_stack = jnp.stack(list(map(undecorate_t_func, arr_stack)))
                 tc_stack = jnp.stack(list(map(undecorate_tc_func, arr_stack)))
                 ablevel_stack = jnp.stack(list(map(undecorate_ablevel_func, arr_stack)))
-                out_result = state_recomputer(q_stack, dqhdt_stack, t_stack, tc_stack, ablevel_stack)
+                out_result = jax.device_put(state_recomputer(q_stack, dqhdt_stack, t_stack, tc_stack, ablevel_stack), device=jax.devices()[0])
                 async with queue_wait_cond:
                     while True:
                         try:
@@ -475,4 +476,4 @@ class SimpleQGLoader:
         ablevel = self._core_traj_data.ablevel[slicer]
         q = self._trajs_group[f"traj{traj:05d}_q"][slicer]
         dqhdt = self._trajs_group[f"traj{traj:05d}_dqhdt"][slicer_dqhdt]
-        return self._state_recomputer(q, dqhdt, t, tc, ablevel)
+        return jax.device_put(self._state_recomputer(q, dqhdt, t, tc, ablevel))
