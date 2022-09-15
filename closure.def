@@ -19,8 +19,8 @@ DEBIAN_FRONTEND="noninteractive" apt -y clean
 mkdir -p /opt/closure_venv/
 python3.10 -m venv --prompt=closure /opt/closure_venv/
 cat /opt/closure_venv/bin/activate >> $SINGULARITY_ENVIRONMENT
-bash -c "source /opt/closure_venv/bin/activate && python -m pip install --upgrade pip"
-bash -c "source /opt/closure_venv/bin/activate && python -m pip install --requirement /opt/requirements.txt"
+bash -c "source /opt/closure_venv/bin/activate && python -m pip install --compile --upgrade pip"
+bash -c "source /opt/closure_venv/bin/activate && python -m pip install --compile --requirement /opt/requirements.txt"
 bash -c "source /opt/closure_venv/bin/activate && python -m pip cache purge"
 
 %runscript
