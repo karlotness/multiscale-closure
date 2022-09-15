@@ -10,3 +10,5 @@ jupyterlab
 ipywidgets
 tqdm
 h5py
+diffrax
+distrax
