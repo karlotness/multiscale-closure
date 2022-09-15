@@ -364,6 +364,7 @@ def main():
                     batch_iter=batch_iter,
                     logger=logger.getChild("train_epoch"),
                 )
+                mean_train_loss = jax.device_get(mean_train_loss)
                 train_elapsed = time.perf_counter() - train_start
                 logger.info("Finished epoch %d in %f sec. train_loss=%g", epoch + 1, train_elapsed, mean_train_loss)
             if epoch % args.save_interval == 0:
@@ -372,12 +373,14 @@ def main():
             with contextlib.closing(val_loader.iter_batches()) as val_batch_iter:
                 logger.info("Starting validation after epoch %d", epoch + 1)
                 val_start = time.perf_counter()
-                val_loss_horizons, uncorr_loss_horizons = do_validation(
-                    val_batch_iter=itertools.islice(val_batch_iter, args.val_samples),
-                    train_state=train_state,
-                    val_func=val_func,
-                    val_file=val_file,
-                    logger=logger.getChild("validate"),
+                val_loss_horizons, uncorr_loss_horizons = jax.device_get(
+                    do_validation(
+                        val_batch_iter=itertools.islice(val_batch_iter, args.val_samples),
+                        train_state=train_state,
+                        val_func=val_func,
+                        val_file=val_file,
+                        logger=logger.getChild("validate"),
+                    )
                 )
                 val_elapsed = time.perf_counter() - val_start
                 logger.info("Finished validation for epoch %d in %f sec.", epoch + 1, val_elapsed)
