@@ -38,16 +38,57 @@ def _get_target_length(xs, length):
         return next(iter(leaf_lengths))
 
 
-def checkpoint_binomial_scan(f, init, xs, length=None):
+def checkpoint_chunked_scan(f, init, xs, length=None, chunk_size=5):
+    chunk_size = operator.index(chunk_size)
     target_length = _get_target_length(xs, length)
-    if target_length <= 1:
-        return jax.lax.scan(f, init, xs, length=None)
+    if target_length <= chunk_size:
+        # Trivial, just do a normal scan
+        return jax.lax.scan(f, init, xs, length=length)
+    # Compute chunk size and remainder
+    num_chunks = target_length // chunk_size
+    remainder = target_length % chunk_size
+    # Split xs into pre and remainder
+    xs_pre = jax.tree_map(lambda x: x[:-remainder].reshape((num_chunks, chunk_size) + x.shape[1:]), xs)
+    xs_remainder = jax.tree_map(operator.itemgetter(slice(-remainder, None)), xs)
+    # Define inner scan function
+    @functools.partial(jax.checkpoint, prevent_cse=False)
+    def inner_scan(carry, x):
+        new_carry, ys = jax.lax.scan(
+            f,
+            carry,
+            x,
+            length=chunk_size,
+        )
+        return new_carry, ys
+    # Do the outer scan
+    pre_carry, pre_ys = jax.lax.scan(
+        inner_scan,
+        init,
+        xs_pre,
+        length=num_chunks,
+    )
+    pre_ys = jax.tree_map(jnp.concatenate, pre_ys)
+    # If necessary, do the remainder
+    if remainder > 0:
+        post_carry, post_ys = jax.lax.scan(
+            f,
+            pre_carry,
+            xs_remainder,
+            length=remainder,
+        )
+        out_carry = post_carry
+        out_ys = jax.tree_map(lambda a, b: jnp.concatenate([a, b]), pre_ys, post_ys)
+    else:
+        # No remainder to do
+        out_carry = pre_carry
+        out_ys = pre_ys
+    return out_carry, out_ys
 
 
 def checkpoint_log2_scan(f, init, xs, length=None):
     target_length = _get_target_length(xs, length)
     if target_length <= 1:
-        return jax.lax.scan(f, init, xs, length=None)
+        return jax.lax.scan(f, init, xs, length=length)
     # Compute log2 levels
     log_depth = ilog2(target_length)
     pre_length = 2**log_depth
@@ -84,7 +125,7 @@ def checkpoint_log2_scan(f, init, xs, length=None):
 def checkpoint_sqrt_scan(f, init, xs, length=None):
     target_length = _get_target_length(xs, length)
     if target_length <= 1:
-        return jax.lax.scan(f, init, xs, length=None)
+        return jax.lax.scan(f, init, xs, length=length)
     sqrt_length = math.isqrt(target_length)
     remainder = target_length - (sqrt_length**2)
     pre_slicer = slice(None, sqrt_length**2)
@@ -120,8 +161,8 @@ def checkpoint_sqrt_scan(f, init, xs, length=None):
 def checkpoint_cbrt_scan(f, init, xs, length=None):
     target_length = _get_target_length(xs, length)
     cbrt_length = icbrt(target_length)
-    if target_length <= 1 or cbrt_length < 2:
-        return jax.lax.scan(f, init, xs, length=None)
+    if target_length <= 1:
+        return jax.lax.scan(f, init, xs, length=length)
     pre_length = cbrt_length**3
     remainder = target_length - (pre_length)
     pre_slicer = slice(None, pre_length)

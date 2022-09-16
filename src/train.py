@@ -22,6 +22,7 @@ from typing import Callable
 from systems.qg.qg_model import QGModel
 from systems.qg import utils as qg_utils
 from systems.qg.loader import ThreadedQGLoader, SimpleQGLoader, qg_model_from_hdf5
+import jax_utils
 import utils
 from methods import ARCHITECTURES
 
@@ -159,9 +160,11 @@ def epoch_batch_iterators(train_file, batch_size, rollout_length_str, seed=None,
 def make_train_batch_computer(small_model, loss_fn, param_type):
     def do_batch(batch, train_state):
         batch = ThreadedQGLoader.make_reconstruct_state_func(small_model)(batch)
-        batch_loss_func = jax.vmap(qg_utils.get_online_batch_loss, in_axes=(0, None, None, None, None, None, None, None, None), out_axes=(0, None), axis_name="batch")
+        assert small_model.nx == small_model.ny
+        scan_fn = functools.partial(jax_utils.checkpoint_chunked_scan, chunk_size=5)
+        batch_loss_func = jax.vmap(qg_utils.get_online_batch_loss, in_axes=(0, None, None, None, None, None, None, None, None, None), out_axes=(0, None), axis_name="batch")
         def _get_losses(params):
-            step_losses, new_batch_stats = batch_loss_func(batch, train_state.apply_fn, params, small_model, loss_fn, train_state.memory_init_fn, train_state.batch_stats, param_type, True)
+            step_losses, new_batch_stats = batch_loss_func(batch, train_state.apply_fn, params, small_model, loss_fn, train_state.memory_init_fn, train_state.batch_stats, param_type, True, scan_fn)
             return jnp.mean(step_losses), new_batch_stats
 
         (loss, new_batch_stats), grads = jax.value_and_grad(_get_losses, has_aux=True)(train_state.params)
