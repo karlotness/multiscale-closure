@@ -24,7 +24,7 @@ def slice_kernel_state(state, slicer):
     return PseudoSpectralKernelState(**{k: getattr(state, k)[slicer] for k in data_fields})
 
 
-def get_online_rollout(start_state, num_steps, apply_fn, params, small_model, memory_init_fn, batch_stats, param_type="uv", train=False):
+def get_online_rollout(start_state, num_steps, apply_fn, params, small_model, memory_init_fn, batch_stats, param_type="uv", train=False, scan_fn=jax.lax.scan):
     match param_type:
         case "uv":
             memory = memory_init_fn(params, start_state.u, start_state.v)
@@ -67,7 +67,7 @@ def get_online_rollout(start_state, num_steps, apply_fn, params, small_model, me
         new_state = small_model.step_forward(old_state, **kw)
         return (new_state, memory, stats), new_state
 
-    (_last_step, last_memory, last_batch_stats), new_states = jax.lax.scan(
+    (_last_step, last_memory, last_batch_stats), new_states = scan_fn(
         do_steps,
         (start_state, memory, batch_stats),
         None,
@@ -79,7 +79,7 @@ def get_online_rollout(start_state, num_steps, apply_fn, params, small_model, me
         return new_states, last_memory
 
 
-def get_online_batch_loss(real_traj, apply_fn, params, small_model, loss_fn, memory_init_fn, batch_stats, param_type="uv", train=False):
+def get_online_batch_loss(real_traj, apply_fn, params, small_model, loss_fn, memory_init_fn, batch_stats, param_type="uv", train=False, scan_fn=jax.lax.scan):
     first_step = slice_kernel_state(real_traj, 0)
 
     match param_type:
@@ -125,10 +125,10 @@ def get_online_batch_loss(real_traj, apply_fn, params, small_model, loss_fn, mem
         loss = loss_fn(real_step=true_step.q, est_step=new_state.q)
         return (new_state, memory, stats), loss
 
-    (_last_step, _last_memory, last_batch_stats), losses = jax.lax.scan(
+    (_last_step, _last_memory, last_batch_stats), losses = scan_fn(
         do_steps,
         (first_step, memory, batch_stats),
-        slice_kernel_state(real_traj, slice(1, None))
+        slice_kernel_state(real_traj, slice(1, None)),
     )
     if train:
         return losses, last_batch_stats
