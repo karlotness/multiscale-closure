@@ -212,8 +212,9 @@ async def _proc_worker_task(
                 tc = core_traj_data.tc[slicer]
                 ablevel = core_traj_data.ablevel[slicer]
                 # Get bytes from worker (q, dqhdt)
-                q = np.frombuffer(await proc.stdout.readexactly(q_byte_size), dtype=q_dtype).reshape(q_shape)
-                dqhdt = np.frombuffer(await proc.stdout.readexactly(dqhdt_byte_size), dtype=dqhdt_dtype).reshape(dqhdt_shape)
+                data = await proc.stdout.readexactly(q_byte_size + dqhdt_byte_size)
+                q = np.frombuffer(data[:q_byte_size], dtype=q_dtype).reshape(q_shape)
+                dqhdt = np.frombuffer(data[-dqhdt_byte_size:], dtype=dqhdt_dtype).reshape(dqhdt_shape)
                 # Put results
                 await out_queue.put((i, q, dqhdt, t, tc, ablevel))
         finally:

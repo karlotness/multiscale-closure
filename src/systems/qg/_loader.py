@@ -15,8 +15,7 @@ def main(args):
             line_parts = line.split()
             traj = int(line_parts[0])
             step = int(line_parts[1])
-            sys.stdout.buffer.write(trajs_group[f"traj{traj:05d}_q"][step:step + rollout_steps].tobytes())
-            sys.stdout.buffer.write(trajs_group[f"traj{traj:05d}_dqhdt"][step:step + rollout_steps + 2].tobytes())
+            sys.stdout.buffer.write(trajs_group[f"traj{traj:05d}_q"][step:step + rollout_steps].tobytes() + trajs_group[f"traj{traj:05d}_dqhdt"][step:step + rollout_steps + 2].tobytes())
             sys.stdout.buffer.flush()
         else:
             # Orderly exit
