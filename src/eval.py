@@ -97,6 +97,13 @@ def main():
     utils.set_up_logging(level=args.log_level, out_file=out_dir/"run.log")
     logger = logging.getLogger("main")
     logger.info("Arguments: %s", vars(args))
+    git_info = utils.get_git_info(base_logger=logger)
+    if git_info is not None:
+        logger.info(
+            "Running on commit %s (%s worktree)",
+            git_info.hash,
+            "clean" if git_info.clean_worktree else "dirty"
+        )
     logger.info("Saving results to: %s", out_dir)
     # Find the training data file
     eval_file = pathlib.Path(args.eval_set) / "data.hdf5"
