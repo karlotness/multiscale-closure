@@ -41,153 +41,90 @@ def _get_target_length(xs, length):
 def checkpoint_chunked_scan(f, init, xs, length=None, chunk_size=5):
     chunk_size = operator.index(chunk_size)
     target_length = _get_target_length(xs, length)
+    num_chunks = target_length // chunk_size
     if target_length <= chunk_size:
         # Trivial, just do a normal scan
         return jax.lax.scan(f, init, xs, length=length)
-    # Compute chunk size and remainder
-    num_chunks = target_length // chunk_size
-    remainder = target_length % chunk_size
-    # Split xs into pre and remainder
-    xs_pre = jax.tree_map(lambda x: x[:-remainder].reshape((num_chunks, chunk_size) + x.shape[1:]), xs)
-    xs_remainder = jax.tree_map(operator.itemgetter(slice(-remainder, None)), xs)
-    # Define inner scan function
-    @functools.partial(jax.checkpoint, prevent_cse=False)
-    def inner_scan(carry, x):
-        new_carry, ys = jax.lax.scan(
-            f,
-            carry,
-            x,
-            length=chunk_size,
-        )
-        return new_carry, ys
-    # Do the outer scan
-    pre_carry, pre_ys = jax.lax.scan(
-        inner_scan,
+    return easy_nested_scan(
+        f,
         init,
-        xs_pre,
-        length=num_chunks,
+        xs,
+        length=length,
+        nested_lengths=[num_chunks, chunk_size],
+        continue_scan_fn=jax.lax.scan,
     )
-    pre_ys = jax.tree_map(jnp.concatenate, pre_ys)
-    # If necessary, do the remainder
-    if remainder > 0:
-        post_carry, post_ys = jax.lax.scan(
-            f,
-            pre_carry,
-            xs_remainder,
-            length=remainder,
-        )
-        out_carry = post_carry
-        out_ys = jax.tree_map(lambda a, b: jnp.concatenate([a, b]), pre_ys, post_ys)
-    else:
-        # No remainder to do
-        out_carry = pre_carry
-        out_ys = pre_ys
-    return out_carry, out_ys
 
 
 def checkpoint_log2_scan(f, init, xs, length=None):
     target_length = _get_target_length(xs, length)
-    if target_length <= 1:
-        return jax.lax.scan(f, init, xs, length=length)
-    # Compute log2 levels
     log_depth = ilog2(target_length)
-    pre_length = 2**log_depth
-    remainder = target_length - pre_length
-    pre_slicer = slice(None, pre_length)
-    post_slicer = slice(pre_length, None)
-    if xs is not None:
-        pre_xs = jax.tree_map(operator.itemgetter(pre_slicer), xs)
-        post_xs = jax.tree_map(operator.itemgetter(post_slicer), xs)
-    else:
-        pre_xs = None
-        post_xs = None
-    pre_carry, pre_out = nested_checkpoint_scan(
+    if log_depth < 2:
+        return jax.lax.scan(f, init, xs, length=length)
+    return easy_nested_scan(
         f,
         init,
-        pre_xs,
-        pre_length,
-        nested_lengths=[2]*log_depth,
+        xs,
+        length=length,
+        nested_lengths=[2] * log_depth,
+        continue_scan_fn=checkpoint_log2_scan,
     )
-    if remainder > 0:
-        post_carry, post_out = checkpoint_log2_scan(
-            f,
-            pre_carry,
-            post_xs,
-            remainder,
-        )
-        result = jnp.concatenate([pre_out, post_out])
-    else:
-        post_carry = pre_carry
-        result = pre_out
-    return post_carry, result
 
 
 def checkpoint_sqrt_scan(f, init, xs, length=None):
     target_length = _get_target_length(xs, length)
-    if target_length <= 1:
-        return jax.lax.scan(f, init, xs, length=length)
     sqrt_length = math.isqrt(target_length)
-    remainder = target_length - (sqrt_length**2)
-    pre_slicer = slice(None, sqrt_length**2)
-    post_slicer = slice(sqrt_length**2, None)
-    if xs is not None:
-        pre_xs = jax.tree_map(operator.itemgetter(pre_slicer), xs)
-        post_xs = jax.tree_map(operator.itemgetter(post_slicer), xs)
-    else:
-        pre_xs = None
-        post_xs = None
-    pre_carry, pre_out = nested_checkpoint_scan(
+    if sqrt_length < 2:
+        return jax.lax.scan(f, init, xs, length=length)
+    return easy_nested_scan(
         f,
         init,
-        pre_xs,
-        sqrt_length**2,
-        nested_lengths=[sqrt_length, sqrt_length],
+        xs,
+        length=length,
+        nested_lengths=[sqrt_length] * 2,
+        continue_scan_fn=jax.lax.scan,
     )
-    if remainder > 0:
-        post_carry, post_out = nested_checkpoint_scan(
-            f,
-            pre_carry,
-            post_xs,
-            remainder,
-            nested_lengths=[remainder],
-        )
-        result = jnp.concatenate([pre_out, post_out])
-    else:
-        post_carry = pre_carry
-        result = pre_out
-    return post_carry, result
 
 
 def checkpoint_cbrt_scan(f, init, xs, length=None):
     target_length = _get_target_length(xs, length)
     cbrt_length = icbrt(target_length)
+    if cbrt_length < 2:
+        return checkpoint_sqrt_scan(f, init, xs, length=length)
+    return easy_nested_scan(
+        f,
+        init,
+        xs,
+        length=length,
+        nested_lengths=[cbrt_length] * 3,
+        continue_scan_fn=checkpoint_sqrt_scan,
+    )
+
+
+def easy_nested_scan(f, init, xs, length, *, nested_lengths, continue_scan_fn=jax.lax.scan):
+    target_length = _get_target_length(xs, length)
     if target_length <= 1:
         return jax.lax.scan(f, init, xs, length=length)
-    pre_length = cbrt_length**3
-    remainder = target_length - (pre_length)
-    pre_slicer = slice(None, pre_length)
-    post_slicer = slice(pre_length, None)
-    if xs is not None:
-        pre_xs = jax.tree_map(operator.itemgetter(pre_slicer), xs)
-        post_xs = jax.tree_map(operator.itemgetter(post_slicer), xs)
-    else:
-        pre_xs = None
-        post_xs = None
+    pre_length = math.prod(nested_lengths)
+    remainder = target_length - pre_length
+    pre_xs = jax.tree_map(operator.itemgetter(slice(None, pre_length)), xs)
+    post_xs = jax.tree_map(operator.itemgetter(slice(pre_length, None)), xs)
     pre_carry, pre_out = nested_checkpoint_scan(
         f,
         init,
         pre_xs,
         pre_length,
-        nested_lengths=[cbrt_length, cbrt_length, cbrt_length],
+        nested_lengths=nested_lengths,
+        scan_fn=jax.lax.scan,
+        checkpoint_fn=functools.partial(jax.checkpoint, prevent_cse=False),
     )
     if remainder > 0:
-        post_carry, post_out = checkpoint_sqrt_scan(
+        post_carry, post_out = continue_scan_fn(
             f,
             pre_carry,
             post_xs,
-            remainder,
+            length=remainder,
         )
-        result = jnp.concatenate([pre_out, post_out])
+        result = jax.tree_map(lambda a, b: jnp.concatenate([a, b]), pre_out, post_out)
     else:
         post_carry = pre_carry
         result = pre_out
@@ -246,7 +183,7 @@ def _inner_nested_scan(f, init, xs, lengths, scan_fn, checkpoint_fn):
   if len(lengths) == 1:
     return scan_fn(f, init, xs, lengths[0])
 
-  @functools.partial(checkpoint_fn, prevent_cse=False)
+  @checkpoint_fn
   def sub_scans(carry, xs):
     return _inner_nested_scan(f, carry, xs, lengths[1:], scan_fn, checkpoint_fn)
 
