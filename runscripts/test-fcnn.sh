@@ -1,10 +1,11 @@
 #!/bin/bash
 
 #SBATCH --job-name=train-fcnn
-#SBATCH --time=14:00:00
+#SBATCH --time=07:30:00
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8GB
 #SBATCH --gres=gpu:1
+#SBATCH --partition=rtx8000,a100
 
 # Begin execution
 module purge
@@ -37,10 +38,10 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --lr=0.00001 \
             --weight_decay=0 \
             --batch_size=75 \
-            --train_epochs=140 \
-            --batches_per_epoch=500 \
-            --rollout_length='5 60@10 100@20 120@40' \
+            --train_epochs=49 \
+            --batches_per_epoch=100 \
+            --rollout_length='5 20@10 30@25 40@50 45@100' \
             --val_steps=250 \
             --val_samples=15 \
-            --save_interval=10 \
+            --save_interval=1 \
             --architecture=gz-fcnn-v1 \
