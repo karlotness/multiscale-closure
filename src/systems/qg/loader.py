@@ -333,8 +333,9 @@ async def _worker_coro(
         raise
     finally:
         # Signal that we've exited by placing None in the queue
+        # Keep placing None until the other side acknowledges
         async with queue_wait_cond:
-            while True:
+            while not stop_event.is_set():
                 try:
                     out_queue.put_nowait(None)
                     break
