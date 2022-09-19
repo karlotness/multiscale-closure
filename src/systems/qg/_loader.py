@@ -1,7 +1,6 @@
 import sys
 import argparse
 import h5py
-import contextlib
 
 parser = argparse.ArgumentParser(description="Internal worker script for data loader")
 parser.add_argument("file_path", type=str, help="Path to hdf5 data file")
@@ -24,5 +23,4 @@ def main(args):
 
 
 if __name__ == "__main__":
-    with contextlib.closing(sys.stdout) as _stdout_closer:
-        main(parser.parse_args())
+    main(parser.parse_args())
