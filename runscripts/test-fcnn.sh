@@ -3,7 +3,7 @@
 #SBATCH --job-name=train-fcnn
 #SBATCH --time=07:30:00
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=8GB
+#SBATCH --mem=16GB
 #SBATCH --gres=gpu:1
 #SBATCH --partition=rtx8000,a100
 
