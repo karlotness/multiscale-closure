@@ -12,3 +12,4 @@ tqdm
 h5py
 diffrax
 distrax
+pyqg

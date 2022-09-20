@@ -11,7 +11,7 @@ DEBIAN_FRONTEND="noninteractive" apt -y install software-properties-common
 DEBIAN_FRONTEND="noninteractive" add-apt-repository ppa:deadsnakes/ppa
 DEBIAN_FRONTEND="noninteractive" apt -y update
 DEBIAN_FRONTEND="noninteractive" apt -y upgrade
-DEBIAN_FRONTEND="noninteractive" apt -y install python3.10 python3.10-venv git bash
+DEBIAN_FRONTEND="noninteractive" apt -y install python3.10 python3.10-venv python3.10-dev git bash
 DEBIAN_FRONTEND="noninteractive" apt -y autoremove
 DEBIAN_FRONTEND="noninteractive" apt -y clean
 
