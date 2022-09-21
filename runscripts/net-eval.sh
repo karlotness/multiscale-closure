@@ -27,7 +27,7 @@ set -euo pipefail
 readonly SINGULARITY_CONTAINER="${SCRATCH}/closure/closure.sif"
 readonly ORIGIN_REPO_DIR="${HOME}/repos/closure.git"
 readonly CHECKOUT_DIR="${SLURM_JOBTMP}/Closure/"
-readonly EVAL_DATA_DIR="${SCRATCH}/closure/data/test/"
+readonly EVAL_DATA_DIR="${SCRATCH}/closure/data/test/op1/"
 
 # Clone Repository
 mkdir -p "$CHECKOUT_DIR"
