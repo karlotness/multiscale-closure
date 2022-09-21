@@ -6,10 +6,14 @@ numpy
 scipy
 scikit-learn
 matplotlib
+seaborn
 jupyterlab
 ipywidgets
 tqdm
 h5py
 diffrax
 distrax
+kymatio
 pyqg
+xarray
+netCDF4
