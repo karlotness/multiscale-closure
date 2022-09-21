@@ -65,6 +65,7 @@ def make_eval_traj_computer(net, params, batch_stats, small_model, loss_funcs_di
     memory_init_fn = functools.partial(net.apply, method=net.init_memory)
 
     def do_eval(traj):
+        traj = SimpleQGLoader.make_reconstruct_state_func(small_model)(traj)
         first_step = qg_utils.slice_kernel_state(traj, 0)
         tail_steps = qg_utils.slice_kernel_state(traj, slice(1, None))
         num_steps = traj.q.shape[0] - 1
