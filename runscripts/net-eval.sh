@@ -3,7 +3,7 @@
 #SBATCH --job-name=net-eval
 #SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=8GB
+#SBATCH --mem=16GB
 #SBATCH --gres=gpu:1
 
 if [[ $# -lt 2 ]]; then
