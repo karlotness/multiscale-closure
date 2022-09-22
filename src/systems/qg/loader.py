@@ -501,8 +501,8 @@ class SimpleQGLoader:
         t = self._core_traj_data.t[slicer]
         tc = self._core_traj_data.tc[slicer]
         ablevel = self._core_traj_data.ablevel[slicer]
-        q = self._trajs_group[f"traj{traj:05d}_q"][slicer]
-        dqhdt = self._trajs_group[f"traj{traj:05d}_dqhdt"][slicer_dqhdt]
+        q = jax.device_put(self._trajs_group[f"traj{traj:05d}_q"][slicer])
+        dqhdt = jax.device_put(self._trajs_group[f"traj{traj:05d}_dqhdt"][slicer_dqhdt])
         return jax.device_put(PartialState(q=q, dqhdt_seq=dqhdt, t=t, tc=tc, ablevel=ablevel))
 
     @staticmethod
