@@ -35,7 +35,7 @@ def register_dataclass_pytree(cls):
 def add_fft_properties(fields):
     def make_getter_setter(field):
         getter = lambda self: _generic_rfftn(getattr(self, field))
-        setter = lambda self, val: setattr(self, field, _generic_irfftn(val)),
+        setter = lambda self, val: setattr(self, field, _generic_irfftn(val))
         return getter, setter
 
     def add_properties(cls):
