@@ -87,7 +87,15 @@ class QGModel(model.Model):
 
     def _apply_a_ph(self, state):
         qh = jnp.moveaxis(state.qh, 0, -1)
-        ph = jnp.linalg.solve(self.inv_mat2, qh)
+        # Solve each section *except* the 0, 0th component (which is not invertible)
+        inv_mat = self.inv_mat2.reshape((-1, 2, 2))
+        qh_orig_shape = qh.shape
+        qh = qh.reshape((-1, 2))
+        ph = jnp.linalg.solve(inv_mat[1:], qh[1:])
+        # Add zeros for the first part (multiply to propagate NaN)
+        ph_rem = jnp.expand_dims(qh[0] * 0, 0)
+        # Concatenate both together
+        ph = jnp.concatenate([ph_rem, ph], axis=0).reshape(qh_orig_shape)
         return jnp.moveaxis(ph, -1, 0)
 
     def param_json(self):
