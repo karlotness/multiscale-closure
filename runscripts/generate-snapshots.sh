@@ -1,1 +1,2 @@
+export JAX_ENABLE_X64=True
 sbatch --wrap="singularity exec --nv /scratch/kto236/closure/closure.sif python generate_data.py /scratch/kto236/closure/snap_data/train/ qg_snap 0 --num_trajs=5000" --job-name="qg-snap-gen" --time="8:00:00" --cpus-per-task=1 --mem="4G" --gres=gpu:1

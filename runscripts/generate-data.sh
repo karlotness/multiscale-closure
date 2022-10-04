@@ -1,3 +1,4 @@
+export JAX_ENABLE_X64=True
 sbatch --wrap="singularity exec --nv /scratch/kto236/closure/closure.sif python generate_data.py /scratch/kto236/closure/data/train/ qg 0 --num_trajs=100" --job-name="qg-gen" --time="12:00:00" --cpus-per-task=2 --mem="15G" --gres=gpu:1
 sbatch --wrap="singularity exec --nv /scratch/kto236/closure/closure.sif python generate_data.py /scratch/kto236/closure/data/val/ qg 1 --num_trajs=3" --job-name="qg-gen" --time="8:00:00" --cpus-per-task=2 --mem="15G" --gres=gpu:1
 sbatch --wrap="singularity exec --nv /scratch/kto236/closure/closure.sif python generate_data.py /scratch/kto236/closure/data/test/ qg 2 --num_trajs=10" --job-name="qg-gen" --time="8:00:00" --cpus-per-task=2 --mem="15G" --gres=gpu:1

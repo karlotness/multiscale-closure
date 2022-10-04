@@ -32,6 +32,7 @@ git clone "$ORIGIN_REPO_DIR" "$CHECKOUT_DIR"
 mkdir -p "$OUT_DIR"
 
 # Run
+export JAX_ENABLE_X64=True
 singularity run --nv "$SINGULARITY_CONTAINER" \
             python "${CHECKOUT_DIR}/src/train.py" "$OUT_DIR" "$TRAIN_DATA_DIR" "$VAL_DATA_DIR" \
             --lr=0.00001 \
