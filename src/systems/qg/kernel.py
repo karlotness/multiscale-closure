@@ -14,8 +14,8 @@ def _generic_irfftn(a):
     return jnp.fft.irfftn(a, axes=(-2, -1))
 
 
-DTYPE_COMPLEX = jnp.complex64
-DTYPE_REAL = jnp.float32
+DTYPE_COMPLEX = jnp.complex128
+DTYPE_REAL = jnp.float64
 
 
 def register_dataclass_pytree(cls):
