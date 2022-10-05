@@ -86,15 +86,15 @@ class QGModel(model.Model):
                 [
                     [
                         # 0, 0
-                            -(wv2 + self.F1),
+                        -(wv2 + self.F1),
                         # 0, 1
-                            jnp.full_like(wv2, self.F1),
+                        jnp.full_like(wv2, self.F1),
                     ],
                     [
                         # 1, 0
-                            jnp.full_like(wv2, self.F2),
+                        jnp.full_like(wv2, self.F2),
                         # 1, 1
-                            -(wv2 + self.F2),
+                        -(wv2 + self.F2),
                     ],
                 ]
             ),
