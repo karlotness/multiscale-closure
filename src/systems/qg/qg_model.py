@@ -1,9 +1,11 @@
 import dataclasses
+import math
 import json
 import jax
 import jax.numpy as jnp
 import jax.random
 from . import model
+from .kernel import DTYPE_COMPLEX, DTYPE_REAL
 
 class QGModel(model.Model):
     def __init__(
@@ -11,7 +13,7 @@ class QGModel(model.Model):
             beta=1.5e-11,
             rd=15000.0,
             delta=0.25,
-            H1 = 500,
+            H1=500,
             U1=0.025,
             U2=0.0,
             **kwargs,
@@ -20,7 +22,7 @@ class QGModel(model.Model):
         self.beta = beta
         self.rd = rd
         self.delta = delta
-        self.Hi = jnp.array([H1, H1/delta])
+        self.Hi = jnp.array([H1, H1/delta], dtype=DTYPE_REAL)
         self.U1 = U1
         self.U2 = U2
         self.H1 = H1
@@ -29,7 +31,7 @@ class QGModel(model.Model):
 
         # INITIALIZE BACKGROUND
         self.H = self.Hi.sum()
-        self.Ubg = jnp.array([self.U1, self.U2])
+        self.Ubg = jnp.array([self.U1, self.U2], dtype=DTYPE_REAL)
         self.U = self.U1 - self.U2
         # The F parameters
         self.F1 = self.rd**-2 / (1 + self.delta)
@@ -37,7 +39,7 @@ class QGModel(model.Model):
         # The meridional PV gradients in each layer
         self.Qy1 = self.beta + self.F1 * (self.U1 - self.U2)
         self.Qy2 = self.beta - self.F2 * (self.U1 - self.U2)
-        self.Qy = jnp.array([self.Qy1, self.Qy2])
+        self.Qy = jnp.array([self.Qy1, self.Qy2], dtype=DTYPE_REAL)
         self._ikQy = 1j * (jnp.expand_dims(self.kk, 0) * jnp.expand_dims(self.Qy, -1))
         # complex versions, multiplied by k, speeds up computations to precompute
         self.ikQy1 = self.Qy1 * 1j * self.k
@@ -49,28 +51,6 @@ class QGModel(model.Model):
         self.del1 = self.delta / (self.delta + 1)
         self.del2 = (self.delta + 1) ** -1
 
-        # INITIALIZE INVERSION MATRIX
-        self.inv_mat2 = jnp.moveaxis(
-            jnp.array(
-                [
-                    [
-                        # 0, 0
-                    -(self.wv2 + self.F1),
-                        # 0, 1
-                    self.F1 * jnp.ones_like(self.wv2),
-                    ],
-                    [
-                        # 1, 0
-                    self.F2 * jnp.ones_like(self.wv2),
-                        # 1, 1
-                    -(self.wv2 + self.F2),
-                    ],
-                ]
-            ),
-            (0, 1),
-            (-2, -1)
-        )
-
         # INITIALIZE FORCING (nothing to do)
 
     def _set_q1q2(self, state, q1, q2):
@@ -80,22 +60,53 @@ class QGModel(model.Model):
         state = super().create_initial_state()
         # initial conditions (pv anomalies)
         rng_a, rng_b = jax.random.split(rng, num=2)
-        q1 = 1e-7 * jax.random.uniform(rng_a, shape=(self.ny, self.nx)) + 1e-6 * (jnp.ones((self.ny, 1)) * jax.random.uniform(rng_b, shape=(1, self.nx)))
-        q2 = jnp.zeros_like(self.x)
+        q1 = 1e-7 * jax.random.uniform(rng_a, shape=(self.ny, self.nx), dtype=DTYPE_REAL) + 1e-6 * (jnp.ones((self.ny, 1), dtype=DTYPE_REAL) * jax.random.uniform(rng_b, shape=(1, self.nx), dtype=DTYPE_REAL))
+        q2 = jnp.zeros_like(self.x, dtype=DTYPE_REAL)
         state = self._set_q1q2(state, q1, q2)
         return state
 
     def _apply_a_ph(self, state):
         qh = jnp.moveaxis(state.qh, 0, -1)
-        # Solve each section *except* the 0, 0th component (which is not invertible)
-        inv_mat = self.inv_mat2.reshape((-1, 2, 2))
         qh_orig_shape = qh.shape
         qh = qh.reshape((-1, 2))
-        ph = jnp.linalg.solve(inv_mat[1:], qh[1:])
-        # Add zeros for the first part (multiply to propagate NaN)
-        ph_rem = jnp.expand_dims(qh[0] * 0, 0)
-        # Concatenate both together
-        ph = jnp.concatenate([ph_rem, ph], axis=0).reshape(qh_orig_shape)
+        # Compute inversion matrix
+        dk = 2 * math.pi / self.L
+        dl = 2 * math.pi / self.W
+        ll = dl * jnp.concatenate(
+            [
+                jnp.arange(0, self.nx / 2, dtype=jnp.float64),
+                jnp.arange(-self.nx / 2, 0, dtype=jnp.float64),
+            ]
+        )
+        kk = dk * jnp.arange(0, self.nk, dtype=jnp.float64)
+        k, l = jnp.meshgrid(kk, ll)
+        wv2 = k**2 + l**2
+        inv_mat2 = jnp.moveaxis(
+            jnp.array(
+                [
+                    [
+                        # 0, 0
+                            -(wv2 + self.F1),
+                        # 0, 1
+                            jnp.full_like(wv2, self.F1),
+                    ],
+                    [
+                        # 1, 0
+                            jnp.full_like(wv2, self.F2),
+                        # 1, 1
+                            -(wv2 + self.F2),
+                    ],
+                ]
+            ),
+            (0, 1),
+            (-2, -1)
+        ).reshape((-1, 2, 2))[1:]
+        # Solve the system for the tail
+        ph_tail = jnp.linalg.solve(inv_mat2, qh[1:].astype(jnp.complex128)).astype(jnp.complex64)
+        # Fill zeros for the head
+        ph_head = jnp.expand_dims(jnp.zeros_like(qh[0]), 0)
+        # Combine and return
+        ph = jnp.concatenate([ph_head, ph_tail], axis=0).reshape(qh_orig_shape)
         return jnp.moveaxis(ph, -1, 0)
 
     def param_json(self):
