@@ -120,8 +120,6 @@ def gen_qg_final_step(out_dir, args, base_logger):
     logger = base_logger.getChild("qg")
     logger.info("Generating final step snapshots for QG with seed %d", args.seed)
     # Initialize models
-    if args.config == "jet":
-        raise ValueError("jet configuration is currently broken")
     big_model = QGModel(nx=args.big_size, ny=args.big_size, dt=args.dt, tmax=args.tmax, **CONFIG_VARS[args.config])
     # Initialize coarsening operators
     coarsen_operators = {
@@ -176,8 +174,6 @@ def gen_qg(out_dir, args, base_logger):
     logger = base_logger.getChild("qg")
     logger.info("Generating trajectory for QG with seed %d", args.seed)
     # Initialize models
-    if args.config == "jet":
-        raise ValueError("jet configuration is currently broken")
     big_model = QGModel(nx=args.big_size, ny=args.big_size, dt=args.dt, tmax=args.tmax, **CONFIG_VARS[args.config])
     # Initialize coarsening operators
     coarsen_operators = {
