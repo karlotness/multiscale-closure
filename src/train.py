@@ -94,7 +94,7 @@ def init_network(architecture, lr, weight_decay, rng, small_model):
     new_params = []
     for p in defs:
         rng_use, rng_2 = jax.random.split(rng_2)
-        new_params.append(jax.random.normal(rng_use, shape=p.shape) * 1e-5)
+        new_params.append(jax.random.normal(rng_use, shape=p.shape, dtype=p.dtype) * 1e-5)
     params = jax.tree_util.tree_unflatten(tree, new_params)
     # Separate parameters and batch_stats
     batch_stats = params.get("batch_stats", frozen_dict.freeze({}))
