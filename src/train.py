@@ -3,6 +3,7 @@ import pathlib
 import math
 import re
 import os
+import ast
 import random
 import itertools
 import contextlib
@@ -280,6 +281,11 @@ def main():
     utils.set_up_logging(level=args.log_level, out_file=out_dir/"run.log")
     logger = logging.getLogger("main")
     logger.info("Arguments: %s", vars(args))
+    if not ast.literal_eval(os.environ.get("JAX_ENABLE_X64", "False")):
+        logger.warning("JAX float64 support not enabled, this causes numerical issues")
+        logger.warning("set environment variable JAX_ENABLE_X64=True")
+    else:
+        logger.info("JAX float64 support enabled: JAX_ENABLE_X64=%s", os.environ["JAX_ENABLE_X64"])
     git_info = utils.get_git_info(base_logger=logger)
     if git_info is not None:
         logger.info(
