@@ -5,16 +5,26 @@ import jax.numpy as jnp
 from .kernel import PseudoSpectralKernelState
 
 
-def make_gen_traj(model, num_steps):
+def make_basic_rollout(model, num_steps):
 
     def do_steps(carry_state, _y):
         next_state = model.step_forward(carry_state)
         return next_state, carry_state
 
+    def gen_traj(first_step):
+        _last_step, steps = jax.lax.scan(do_steps, first_step, None, length=num_steps)
+        return steps
+
+    return gen_traj
+
+
+def make_gen_traj(model, num_steps):
+
+    rollout_func = make_basic_rollout(model, num_steps)
+
     def gen_traj(rng):
         init = model.create_initial_state(rng)
-        _last_step, steps = jax.lax.scan(do_steps, init, None, length=num_steps)
-        return steps
+        return rollout_func(init)
 
     return gen_traj
 
