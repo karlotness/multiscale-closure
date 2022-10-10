@@ -17,3 +17,5 @@ kymatio
 pyqg
 xarray
 netCDF4
+ml-collections
+Pillow
