@@ -3,7 +3,7 @@ import abc
 import jax.numpy as jnp
 import jax
 import numpy as np
-from utils import batch_mul
+from .utils import batch_mul
 
 
 class SDE(abc.ABC):

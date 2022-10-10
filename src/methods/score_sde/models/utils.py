@@ -20,19 +20,20 @@ from typing import Any
 import flax
 import functools
 import jax.numpy as jnp
-import sde_lib
+from .. import sde_lib
 import jax
 import numpy as np
-from models import wideresnet_noise_conditional
-from flax.training import checkpoints
-from utils import batch_mul
+from . import wideresnet_noise_conditional
+from .. import utils as super_utils
+
+batch_mul = super_utils.batch_mul
 
 
 # The dataclass that stores all training states
 @flax.struct.dataclass
 class State:
   step: int
-  optimizer: flax.optim.Optimizer
+  optimizer: Any
   lr: float
   model_state: Any
   ema_rate: float
@@ -230,32 +231,6 @@ def to_flattened_numpy(x):
 def from_flattened_numpy(x, shape):
   """Form a JAX array with the given `shape` from a flattened numpy array `x`."""
   return jnp.asarray(x).reshape(shape)
-
-
-def create_classifier(prng_key, batch_size, ckpt_path):
-  """Create a noise-conditional image classifier.
-
-  Args:
-    prng_key: A JAX random state.
-    batch_size: The batch size of input data.
-    ckpt_path: The path to stored checkpoints for this classifier.
-
-  Returns:
-    classifier: A `flax.linen.Module` object that represents the architecture of the classifier.
-    classifier_params: A dictionary that contains trainable parameters of the classifier.
-  """
-  input_shape = (batch_size, 32, 32, 3)
-  classifier = wideresnet_noise_conditional.WideResnet(
-    blocks_per_group=4,
-    channel_multiplier=10,
-    num_outputs=10
-  )
-  initial_variables = classifier.init({'params': prng_key, 'dropout': jax.random.PRNGKey(0)},
-                                      jnp.ones(input_shape, dtype=jnp.float32),
-                                      jnp.ones((batch_size,), dtype=jnp.float32), train=False)
-  model_state, init_params = initial_variables.pop('params')
-  classifier_params = checkpoints.restore_checkpoint(ckpt_path, init_params)
-  return classifier, classifier_params
 
 
 def get_logit_fn(classifier, classifier_params):

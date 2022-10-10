@@ -29,7 +29,6 @@ import flax
 import jax
 import jax.numpy as jnp
 from PIL import Image
-import tensorflow as tf
 
 T = TypeVar("T")
 
@@ -40,12 +39,6 @@ def batch_add(a, b):
 
 def batch_mul(a, b):
   return jax.vmap(lambda a, b: a * b)(a, b)
-
-
-def load_training_state(filepath, state):
-  with tf.io.gfile.GFile(filepath, "rb") as f:
-    state = flax.serialization.from_bytes(state, f.read())
-  return state
 
 
 def save_image(ndarray, fp, nrow=8, padding=2, pad_value=0.0, format=None):
