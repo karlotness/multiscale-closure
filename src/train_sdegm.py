@@ -235,6 +235,7 @@ def main():
         )
     )
 
+    min_mean_loss = None
     rng, rng_ctr = jax.random.split(rng_ctr, 2)
     for epoch in range(args.num_epochs):
         logger.info("Starting epoch %d of %d", epoch + 1, args.num_epochs)
@@ -248,6 +249,9 @@ def main():
         logger.info("Epoch %d final loss %f", epoch + 1, final_loss)
 
         # Save weights
+        if min_mean_loss is None or (np.isfinite(mean_loss) and mean_loss <= min_mean_loss):
+            min_mean_loss = mean_loss
+            save_network("best_loss", output_dir=weights_dir, state=state, base_logger=logger)
         if epoch % args.save_interval == 0:
             save_network("epoch", output_dir=weights_dir, state=state, base_logger=logger)
 
