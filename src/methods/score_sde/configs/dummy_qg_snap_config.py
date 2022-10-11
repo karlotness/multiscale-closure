@@ -82,13 +82,13 @@ def build_dummy_qg_snap_config(batch_size, num_epochs, batches_per_epoch, lr):
     # training
     training = config.training
     training.sde = 'vpsde'
-    training.continuous = False
+    training.continuous = True
     training.reduce_mean = True
 
     # sampling
     sampling = config.sampling
     sampling.method = 'pc'
-    sampling.predictor = 'ancestral_sampling'
+    sampling.predictor = 'euler_maruyama'
     sampling.corrector = 'none'
 
     # data
