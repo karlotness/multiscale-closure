@@ -103,7 +103,7 @@ def make_epoch_computer(sde, score_model, optimize_fn, reduce_mean, continuous, 
     return do_epoch
 
 
-def make_sample_computer(config, sde, score_model, inverse_scaler, sampling_eps, num_epoch_samples, data_min, data_max):
+def make_sample_computer(config, sde, score_model, inverse_scaler, sampling_eps, num_epoch_samples, data_mean, data_std):
 
     sampling_shape = (num_epoch_samples, config.data.image_size,
                       config.data.image_size, config.data.num_channels)
@@ -111,7 +111,7 @@ def make_sample_computer(config, sde, score_model, inverse_scaler, sampling_eps,
 
     def do_sample(rng, state):
         sample, nfe = sampling_fn(rng, state)
-        sample = (sample * (data_max - data_min)) + data_min
+        sample = (sample * data_std) + data_mean
         return sample, nfe
 
     return do_sample
@@ -210,10 +210,10 @@ def main():
     # Mask out NaNs, put batches at the back, and move to GPU
     train_data = jax.device_put(np.moveaxis(train_data[np.all(np.isfinite(train_data), axis=(-1, -2, -3))], 1, -1))
     # Rescale data to [0, 1]
-    train_min = jnp.min(train_data)
-    train_max = jnp.max(train_data)
-    train_data = (train_data - train_min) / (train_max - train_min)
-    logger.info("Finished loading data")
+    train_mean = jnp.mean(train_data)
+    train_std = jnp.std(train_data)
+    train_data = (train_data - train_mean) / train_std
+    logger.info("Finished loading data, mean=%g, std=%g", train_mean, train_std)
     # Create data normalizer and its inverse
     scaler = datasets.get_data_scaler(config)
     inverse_scaler = datasets.get_data_inverse_scaler(config)
@@ -260,8 +260,8 @@ def main():
             inverse_scaler=inverse_scaler,
             sampling_eps=sampling_eps,
             num_epoch_samples=args.num_epoch_samples,
-            data_min=train_min,
-            data_max=train_max,
+            data_mean=train_mean,
+            data_std=train_std,
         )
     )
 

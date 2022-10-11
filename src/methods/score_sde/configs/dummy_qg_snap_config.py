@@ -93,7 +93,7 @@ def build_dummy_qg_snap_config(batch_size, num_epochs, batches_per_epoch, lr):
 
     # data
     data = config.data
-    data.centered = True
+    data.centered = False
 
     # model
     model = config.model
