@@ -23,7 +23,7 @@ readonly OUT_BASE_DIR="${SCRATCH}/closure/run_outputs/"
 readonly CHECKOUT_DIR="${SLURM_JOBTMP}/Closure/"
 readonly TRAIN_DATA_DIR="${SCRATCH}/closure/data/train/op1/"
 readonly VAL_DATA_DIR="${SCRATCH}/closure/data/val/op1/"
-readonly OUT_DIR="${OUT_BASE_DIR}/$(date '+%Y%m%d-%H%M%S')-${BASE_NAME}-${SLURM_JOB_ID}"
+readonly OUT_DIR="${OUT_BASE_DIR}/${BASE_NAME}-${SLURM_JOB_ID}-$(date '+%Y%m%d-%H%M%S')"
 
 # Clone Repository
 mkdir -p "$CHECKOUT_DIR"
