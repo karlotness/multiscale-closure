@@ -43,7 +43,7 @@ parser.add_argument("--architecture", type=str, default="sdegm-ncsnpp", help="Ch
 parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
 parser.add_argument("--num_epochs", type=int, default=100, help="Number of training epochs")
 parser.add_argument("--batches_per_epoch", type=int, default=100, help="Training batches per epoch")
-parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate for optimizer")
+parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for optimizer")
 
 
 def save_network(output_name, output_dir, state, base_logger=None):
