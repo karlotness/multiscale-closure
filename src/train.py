@@ -377,7 +377,7 @@ def main():
                 train_elapsed = time.perf_counter() - train_start
                 logger.info("Finished epoch %d in %f sec. train_loss=%g", epoch + 1, train_elapsed, mean_train_loss)
             if epoch % args.save_interval == 0:
-                save_network("interval", weights_dir, net=net, train_state=train_state, base_logger=logger)
+                save_network(f"interval{epoch + 1:05d}", weights_dir, net=net, train_state=train_state, base_logger=logger)
             # Run validation phase
             with contextlib.closing(val_loader.iter_batches()) as val_batch_iter:
                 logger.info("Starting validation after epoch %d", epoch + 1)
