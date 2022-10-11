@@ -28,6 +28,7 @@ import utils
 from methods import ARCHITECTURES
 from methods.score_sde.models import utils as mutils
 from methods.score_sde import losses as losses_module
+from methods.score_sde import sampling
 from methods.score_sde.configs.dummy_qg_snap_config import build_dummy_qg_snap_config
 from methods.score_sde import datasets, sde_lib
 
@@ -44,6 +45,7 @@ parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
 parser.add_argument("--num_epochs", type=int, default=100, help="Number of training epochs")
 parser.add_argument("--batches_per_epoch", type=int, default=100, help="Training batches per epoch")
 parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for optimizer")
+parser.add_argument("--num_epoch_samples", type=int, default=15, help="Number of samples to draw after each epoch")
 
 
 def save_network(output_name, output_dir, state, base_logger=None):
@@ -99,6 +101,20 @@ def make_epoch_computer(sde, score_model, optimize_fn, reduce_mean, continuous, 
         return new_state, last_rng, losses
 
     return do_epoch
+
+
+def make_sample_computer(config, sde, score_model, inverse_scaler, sampling_eps, num_epoch_samples, data_min, data_max):
+
+    sampling_shape = (num_epoch_samples, config.data.image_size,
+                      config.data.image_size, config.data.num_channels)
+    sampling_fn = sampling.get_sampling_fn(config, sde, score_model, sampling_shape, inverse_scaler, sampling_eps)
+
+    def do_sample(rng, state):
+        sample, nfe = sampling_fn(rng, state)
+        sample = (sample * (data_max - data_min)) + data_min
+        return sample, nfe
+
+    return do_sample
 
 
 
@@ -174,6 +190,8 @@ def main():
     train_small_model = qg_model_from_hdf5(file_path=train_path, model="small")
     weights_dir = out_dir / "weights"
     weights_dir.mkdir(exist_ok=True)
+    samples_dir = out_dir / "samples"
+    samples_dir.mkdir(exist_ok=True)
     # Construct neural net
     rng, rng_ctr = jax.random.split(rng_ctr, 2)
     logger.info("Training network %s", args.architecture)
@@ -234,6 +252,18 @@ def main():
             train_data=train_data
         )
     )
+    sample_fn = jax.jit(
+        make_sample_computer(
+            config=config,
+            sde=sde,
+            score_model=score_model,
+            inverse_scaler=inverse_scaler,
+            sampling_eps=sampling_eps,
+            num_epoch_samples=args.num_epoch_samples,
+            data_min=train_min,
+            data_max=train_max,
+        )
+    )
 
     min_mean_loss = None
     rng, rng_ctr = jax.random.split(rng_ctr, 2)
@@ -254,6 +284,18 @@ def main():
             save_network("best_loss", output_dir=weights_dir, state=state, base_logger=logger)
         if epoch % args.save_interval == 0:
             save_network("epoch", output_dir=weights_dir, state=state, base_logger=logger)
+
+        # Do epoch sampling
+        logger.info("Starting sampling")
+        rng, sample_rng = jax.random.split(rng)
+        sample_start = time.perf_counter()
+        sample, nfe = jax.device_get(sample_fn(sample_rng, state))
+        sample_end = time.perf_counter()
+        sample = np.moveaxis(sample, -1, 1)
+        logger.info("Finished sampling in %f sec", sample_end - sample_start)
+        epoch_sample_path = samples_dir / f"samples_ep{epoch + 1:05d}.npz"
+        np.savez(epoch_sample_path, sample=sample, nfe=nfe)
+        logger.info("Saved samples to %s", epoch_sample_path)
 
 
 if __name__ == "__main__":

@@ -24,12 +24,12 @@ import jax.random as random
 import abc
 import flax
 
-from models.utils import from_flattened_numpy, to_flattened_numpy, get_score_fn
+from .models.utils import from_flattened_numpy, to_flattened_numpy, get_score_fn
 from scipy import integrate
-import sde_lib
-from utils import batch_mul, batch_add
+from . import sde_lib
+from .utils import batch_mul, batch_add
 
-from models import utils as mutils
+from .models import utils as mutils
 
 _CORRECTORS = {}
 _PREDICTORS = {}
@@ -284,10 +284,8 @@ class LangevinCorrector(Corrector):
       noise = jax.random.normal(step_rng, x.shape)
       grad_norm = jnp.linalg.norm(
         grad.reshape((grad.shape[0], -1)), axis=-1).mean()
-      grad_norm = jax.lax.pmean(grad_norm, axis_name='batch')
       noise_norm = jnp.linalg.norm(
         noise.reshape((noise.shape[0], -1)), axis=-1).mean()
-      noise_norm = jax.lax.pmean(noise_norm, axis_name='batch')
       step_size = (target_snr * noise_norm / grad_norm) ** 2 * 2 * alpha
       x_mean = x + batch_mul(step_size, grad)
       x = x_mean + batch_mul(noise, jnp.sqrt(step_size * 2))
@@ -436,7 +434,7 @@ def get_pc_sampler(sde, model, shape, predictor, corrector, inverse_scaler, snr,
     # Denoising is equivalent to running one predictor step without adding noise.
     return inverse_scaler(x_mean if denoise else x), sde.N * (n_steps + 1)
 
-  return jax.pmap(pc_sampler, axis_name='batch')
+  return pc_sampler
 
 
 def get_ode_sampler(sde, model, shape, inverse_scaler,
@@ -460,7 +458,6 @@ def get_ode_sampler(sde, model, shape, inverse_scaler,
     as well as the number of function evaluations during sampling.
   """
 
-  @jax.pmap
   def denoise_update_fn(rng, state, x):
     score_fn = get_score_fn(sde, model, state.params_ema, state.model_state, train=False, continuous=True)
     # Reverse diffusion predictor for denoising
@@ -469,7 +466,6 @@ def get_ode_sampler(sde, model, shape, inverse_scaler,
     _, x = predictor_obj.update_fn(rng, x, vec_eps)
     return x
 
-  @jax.pmap
   def drift_fn(state, x, t):
     """Get the drift function of the reverse-time SDE."""
     score_fn = get_score_fn(sde, model, state.params_ema, state.model_state, train=False, continuous=True)
