@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=train-fcnn
-#SBATCH --time=10:00:00
+#SBATCH --time=15:00:00
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=16GB
 #SBATCH --gres=gpu:1
@@ -39,9 +39,9 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --lr=0.00001 \
             --weight_decay=0 \
             --batch_size=75 \
-            --train_epochs=49 \
+            --train_epochs=65 \
             --batches_per_epoch=100 \
-            --rollout_length='5 20@10 30@25 40@50 45@100' \
+            --rollout_length='5 20@10 30@25 40@50 55@100' \
             --val_steps=250 \
             --val_samples=15 \
             --save_interval=1 \
