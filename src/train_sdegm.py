@@ -293,6 +293,10 @@ def main():
         sample_end = time.perf_counter()
         sample = np.moveaxis(sample, -1, 1)
         logger.info("Finished sampling in %f sec", sample_end - sample_start)
+        sample_min = np.min(sample)
+        sample_max = np.max(sample)
+        sample_mean = np.mean(sample)
+        logger.info("Sample stats: min=%g, max=%g, mean=%g", sample_min, sample_max, sample_mean)
         epoch_sample_path = samples_dir / f"samples_ep{epoch + 1:05d}.npz"
         np.savez(epoch_sample_path, sample=sample, nfe=nfe)
         logger.info("Saved samples to %s", epoch_sample_path)
