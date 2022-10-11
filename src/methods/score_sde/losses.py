@@ -17,23 +17,41 @@
 """
 
 import flax
+import optax
 import jax
 import jax.numpy as jnp
 import jax.random as random
-from models import utils as mutils
-from sde_lib import VESDE, VPSDE
-from utils import batch_mul
+from .models import utils as mutils
+from .sde_lib import VESDE, VPSDE
+from .utils import batch_mul
 
 
 def get_optimizer(config):
   """Returns a flax optimizer object based on `config`."""
+  # If we need a schedule, specify it
+  if config.optim.warmup > 0:
+    lr = optax.linear_schedule(0, 1, config.optim.warmup)
+  else:
+    lr = optax.constant_schedule(config.optim.lr)
   if config.optim.optimizer == 'Adam':
-    optimizer = flax.optim.Adam(beta1=config.optim.beta1, eps=config.optim.eps,
-                                weight_decay=config.optim.weight_decay)
+    optimizer = optax.adamw(
+      learning_rate=lr,
+      b1=config.optim.beta1,
+      eps=config.optim.eps,
+      weight_decay=config.optim.weight_decay,
+    )
+    #optimizer = flax.optim.Adam(beta1=config.optim.beta1, eps=config.optim.eps,
+    #                            weight_decay=config.optim.weight_decay)
   else:
     raise NotImplementedError(
       f'Optimizer {config.optim.optimizer} not supported yet!')
 
+  # If we need clipping, add that first
+  if config.optim.grad_clip >= 0:
+    clipper = optax.adaptive_grad_clip(config.optim.grad_clip)
+    optimizer = optax.chain(clipper, optimizer)
+
+  # Return optimizer
   return optimizer
 
 
@@ -41,23 +59,23 @@ def optimization_manager(config):
   """Returns an optimize_fn based on `config`."""
 
   def optimize_fn(state,
-                  grad,
-                  warmup=config.optim.warmup,
-                  grad_clip=config.optim.grad_clip):
+                  grad):
+                  # warmup=config.optim.warmup,
+                  # grad_clip=config.optim.grad_clip):
     """Optimizes with warmup and gradient clipping (disabled if negative)."""
-    lr = state.lr
-    if warmup > 0:
-      lr = lr * jnp.minimum(state.step / warmup, 1.0)
-    if grad_clip >= 0:
-      # Compute global gradient norm
-      grad_norm = jnp.sqrt(
-        sum([jnp.sum(jnp.square(x)) for x in jax.tree_leaves(grad)]))
-      # Clip gradient
-      clipped_grad = jax.tree_map(
-        lambda x: x * grad_clip / jnp.maximum(grad_norm, grad_clip), grad)
-    else:  # disabling gradient clipping if grad_clip < 0
-      clipped_grad = grad
-    return state.optimizer.apply_gradient(clipped_grad, learning_rate=lr)
+    # lr = state.lr
+    # if warmup > 0:
+    #   lr = lr * jnp.minimum(state.step / warmup, 1.0)
+    # if grad_clip >= 0:
+    #   # Compute global gradient norm
+    #   grad_norm = jnp.sqrt(
+    #     sum([jnp.sum(jnp.square(x)) for x in jax.tree_leaves(grad)]))
+    #   # Clip gradient
+    #   clipped_grad = jax.tree_map(
+    #     lambda x: x * grad_clip / jnp.maximum(grad_norm, grad_clip), grad)
+    # else:  # disabling gradient clipping if grad_clip < 0
+    #   clipped_grad = grad
+    return state.apply_gradients(grads=grad)
 
   return optimize_fn
 
@@ -223,27 +241,24 @@ def get_step_fn(sde, model, train, optimize_fn=None, reduce_mean=False, continuo
     rng, step_rng = jax.random.split(rng)
     grad_fn = jax.value_and_grad(loss_fn, argnums=1, has_aux=True)
     if train:
-      params = state.optimizer.target
+      params = state.params
       states = state.model_state
       (loss, new_model_state), grad = grad_fn(step_rng, params, states, batch)
-      grad = jax.lax.pmean(grad, axis_name='batch')
-      new_optimizer = optimize_fn(state, grad)
-      new_params_ema = jax.tree_multimap(
+      #grad = jax.lax.pmean(grad, axis_name='batch')
+      new_state = optimize_fn(state, grad)
+      new_params_ema = jax.tree_map(
         lambda p_ema, p: p_ema * state.ema_rate + p * (1. - state.ema_rate),
-        state.params_ema, new_optimizer.target
+        state.params_ema, new_state.params
       )
       step = state.step + 1
-      new_state = state.replace(
-        step=step,
-        optimizer=new_optimizer,
-        model_state=new_model_state,
+      new_state = new_state.replace(
         params_ema=new_params_ema
       )
     else:
       loss, _ = loss_fn(step_rng, state.params_ema, state.model_state, batch)
       new_state = state
 
-    loss = jax.lax.pmean(loss, axis_name='batch')
+    #loss = jax.lax.pmean(loss, axis_name='batch')
     new_carry_state = (rng, new_state)
     return new_carry_state, loss
 

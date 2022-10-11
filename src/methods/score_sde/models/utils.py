@@ -30,15 +30,26 @@ batch_mul = super_utils.batch_mul
 
 
 # The dataclass that stores all training states
-@flax.struct.dataclass
-class State:
-  step: int
-  optimizer: Any
+class State(flax.training.train_state.TrainState):
   lr: float
-  model_state: Any
   ema_rate: float
   params_ema: Any
+  model_state: Any
   rng: Any
+
+  @property
+  def optimizer(self):
+    return self.tx
+
+# @flax.struct.dataclass
+# class State:
+#   step: int
+#   optimizer: Any
+#   lr: float
+#   model_state: Any
+#   ema_rate: float
+#   params_ema: Any
+#   rng: Any
 
 
 _MODELS = {}
