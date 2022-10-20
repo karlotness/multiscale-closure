@@ -1,17 +1,17 @@
 import jax
 import jax.numpy as jnp
-import flax.linen as nn
+import flax.linen as flax_nn
 
 ACTIVATIONS = {
-    "relu": nn.relu,
+    "relu": jax.nn.relu,
     "hard_sigmoid": jax.nn.hard_sigmoid,
     "tanh": jnp.tanh,
-    "sigmoid": nn.sigmoid,
+    "sigmoid": jax.nn.sigmoid,
     "selu": jax.nn.selu,
 }
 
 
-class UVParameterization(nn.Module):
+class UVParameterization(flax_nn.Module):
     param_type = "uv"
 
     def net_description(self):
@@ -27,7 +27,7 @@ class UVParameterization(nn.Module):
         return self.parameterization(u, v, self.init_memory(u, v), train)
 
 
-class QParameterization(nn.Module):
+class QParameterization(flax_nn.Module):
     param_type = "q"
 
     def net_description(self):
