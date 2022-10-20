@@ -39,7 +39,7 @@ parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for op
 parser.add_argument("--weight_decay", type=float, default=0, help="Weight decay")
 parser.add_argument("--dt", type=float, default=0.01, help="Time step size when running diffusion")
 parser.add_argument("--num_epoch_samples", type=int, default=15, help="Number of samples to draw after each epoch")
-parser.add_argument("--num_hutch_samples", type=int, default=100, help="Number of samples to use when estimating the Jacobian")
+parser.add_argument("--num_hutch_samples", type=int, default=5, help="Number of samples to use when estimating the Jacobian")
 
 
 def save_network(output_name, output_dir, state, base_logger=None):
