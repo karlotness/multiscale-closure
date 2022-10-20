@@ -5,6 +5,27 @@ import jax
 import jax.numpy as jnp
 
 
+def hvp(f, x, v):
+    # Return hess(f)(x) * v
+    primals, tangents = jax.jvp(jax.grad(f), x, v)
+    return tangents
+
+
+def trace_jac(f, x):
+    # Return trace(jac(f)(x))
+    assert x.ndim == 1
+    return jnp.trace(jax.jacrev(f)(x))
+
+
+def trace_jac_hutch(f, x, rng, num_samples=10):
+    # Estimate trace(jac(f)(x))
+    assert x.ndim == 1
+    g_mat = jax.random.rademacher(rng, shape=(num_samples, x.shape[0]), dtype=x.dtype)
+    _primals_out, vjp_f = jax.vjp(f, x)
+    hutch_est = jnp.einsum("nd,nd->n", jax.vmap(vjp_f)(g_mat)[0], g_mat)
+    return jnp.mean(hutch_est)
+
+
 def ilog2(n):
     n = operator.index(n)
     if n < 0:
