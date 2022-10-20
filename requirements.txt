@@ -13,9 +13,13 @@ tqdm
 h5py
 diffrax
 distrax
+equinox
+jaxopt
 kymatio
 pyqg
 xarray
 netCDF4
 ml-collections
 Pillow
+einops
+jaxtyping
