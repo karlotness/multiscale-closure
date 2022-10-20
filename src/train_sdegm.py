@@ -123,7 +123,7 @@ def make_epoch_computer(dt, batch_size, train_data, num_steps, num_hutch_samples
         loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, snaps, ts, rng=rng_loss)
         # Update parameters
         out_state = state.apply_updates(grads)
-        out_state_vary, _out_state_fixed = eqx.partition(state, eqx.is_array)
+        out_state_vary, _out_state_fixed = eqx.partition(out_state, eqx.is_array)
         return (rng_ctr, out_state_vary), loss
 
     def do_epoch(state, rng):
