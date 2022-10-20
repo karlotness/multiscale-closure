@@ -19,7 +19,7 @@ class EquinoxTrainState:
         self.optim_state = self.optim.init(eqx.filter(net, param_filter))
 
     def apply_updates(self, grads):
-        updates, new_opt_state = self.optim.update(grads, self.opt_state)
+        updates, new_opt_state = self.optim.update(grads, self.optim_state)
         new_net = eqx.apply_updates(self.net, updates)
         # New object
         cls = type(self)
