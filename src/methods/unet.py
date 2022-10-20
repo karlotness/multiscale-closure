@@ -155,10 +155,10 @@ class XTSequential(eqx.Module):
         self.modules = modules
 
     def __len__(self):
-        return len(modules)
+        return len(self.modules)
 
     def __getitem__(self, idx):
-        return modules[idx]
+        return self.modules[idx]
 
     def __call__(self, x: Array, t: Float, *, key: Array = None):
         if key is None:
