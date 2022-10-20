@@ -3,6 +3,46 @@ import functools
 import operator
 import jax
 import jax.numpy as jnp
+import equinox as eqx
+
+
+@jax.tree_util.register_pytree_node_class
+class EquinoxTrainState:
+    # Fields:
+    # - net
+    # - optim
+    # - optim_state
+
+    def __init__(self, net, optim, *, param_filter=eqx.is_inexact_array):
+        self.net = net
+        self.optim = optim
+        self.optim_state = self.optim.init(eqx.filter(net, param_filter))
+
+    def apply_updates(self, grads):
+        updates, new_opt_state = self.optim.update(grads, self.opt_state)
+        new_net = eqx.apply_updates(self.net, updates)
+        # New object
+        cls = type(self)
+        obj = cls.__new__(cls)
+        obj.net = new_net
+        obj.optim_state = new_opt_state
+        obj.optim = self.optim
+        return obj
+
+    def tree_flatten(self):
+        children = (self.net, self.optim_state)
+        aux_data = (self.optim, )
+        return children, aux_data
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        obj = cls.__new__(cls)
+        net, optim_state = children
+        optim = aux_data[0]
+        obj.net = net
+        obj.optim_state = optim_state
+        obj.optim = optim
+        return obj
 
 
 def hvp(f, x, v):
