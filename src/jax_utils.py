@@ -12,14 +12,16 @@ class EquinoxTrainState:
     # - net
     # - optim
     # - optim_state
+    # - _param_filter
 
     def __init__(self, net, optim, *, param_filter=eqx.is_inexact_array):
         self.net = net
         self.optim = optim
-        self.optim_state = self.optim.init(eqx.filter(net, param_filter))
+        self._param_filter = param_filter
+        self.optim_state = self.optim.init(eqx.filter(net, self._param_filter))
 
     def apply_updates(self, grads):
-        updates, new_opt_state = self.optim.update(grads, self.optim_state)
+        updates, new_opt_state = self.optim.update(grads, self.optim_state, eqx.filter(self.net, self._param_filter))
         new_net = eqx.apply_updates(self.net, updates)
         # New object
         cls = type(self)
@@ -27,21 +29,23 @@ class EquinoxTrainState:
         obj.net = new_net
         obj.optim_state = new_opt_state
         obj.optim = self.optim
+        obj._param_filter = self._param_filter
         return obj
 
     def tree_flatten(self):
         children = (self.net, self.optim_state)
-        aux_data = (self.optim, )
+        aux_data = (self.optim, self._param_filter)
         return children, aux_data
 
     @classmethod
     def tree_unflatten(cls, aux_data, children):
         obj = cls.__new__(cls)
         net, optim_state = children
-        optim = aux_data[0]
+        optim, _param_filter = aux_data
         obj.net = net
         obj.optim_state = optim_state
         obj.optim = optim
+        obj._param_filter = _param_filter
         return obj
 
 
