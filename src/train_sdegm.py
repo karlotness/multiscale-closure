@@ -73,7 +73,7 @@ def make_ou_solver(dt, t0=0.0, t1=1.0):
         terms = diffrax.MultiTerm(diffrax.ODETerm(drift), control_noise)
         solver = diffrax.Euler()
         saveat = diffrax.SaveAt(steps=True)
-        solve = diffrax.diffeqsolve(terms, solver, t0, t1, dt0=dt, y0=snapshot, saveat=saveat, adjoint=diffrax.NoAdjoint())
+        solve = diffrax.diffeqsolve(terms, solver, t0, t1, dt0=dt, y0=snapshot, saveat=saveat, adjoint=diffrax.NoAdjoint(), max_steps=num_steps + 2)
         data = solve.ys[:num_steps]
         times = solve.ts[:num_steps]
         return jnp.concatenate([jnp.expand_dims(snapshot, 0), data]), jnp.concatenate([jnp.expand_dims(jnp.zeros_like(times[0]), 0), times])
