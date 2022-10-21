@@ -33,10 +33,10 @@ mkdir -p "$OUT_DIR"
 # Run
 singularity run --nv "$SINGULARITY_CONTAINER" \
             python "${CHECKOUT_DIR}/src/train_sdegm.py" "$OUT_DIR" "$TRAIN_DATA_DIR" \
-            --architecture=sdegm-ncsnpp \
+            --batch_size=128 \
+            --num_epochs=500 \
+            --batches_per_epoch=50 \
             --save_interval=1 \
-            --batch_size=32 \
-            --num_epochs=100 \
-            --batches_per_epoch=100 \
             --lr=1e-5 \
-            --num_epoch_samples=15 \
+            --dt=0.01 \
+            --num_hutch_samples=5 \
