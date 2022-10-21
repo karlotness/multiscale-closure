@@ -3,8 +3,9 @@
 #SBATCH --job-name=train-sde-snap
 #SBATCH --time=06:00:00
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=8GB
+#SBATCH --mem=5GB
 #SBATCH --gres=gpu:1
+#SBATCH --partition=rtx8000,a100
 
 # Begin execution
 module purge
