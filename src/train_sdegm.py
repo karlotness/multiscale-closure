@@ -36,7 +36,7 @@ parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
 parser.add_argument("--num_epochs", type=int, default=100, help="Number of training epochs")
 parser.add_argument("--batches_per_epoch", type=int, default=100, help="Training batches per epoch")
 parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for optimizer")
-parser.add_argument("--weight_decay", type=float, default=0, help="Weight decay")
+parser.add_argument("--weight_decay", type=float, default=None, help="Weight decay")
 parser.add_argument("--grad_clip", type=float, default=None, help="Gradient clipping norm")
 parser.add_argument("--dt", type=float, default=0.01, help="Time step size when running diffusion")
 parser.add_argument("--num_epoch_samples", type=int, default=15, help="Number of samples to draw after each epoch")
@@ -143,7 +143,7 @@ def make_epoch_computer(dt, batch_size, train_data, num_steps, num_hutch_samples
 
 def init_network(lr, weight_decay, rng, grad_clip):
     net = UNet(key=rng)
-    if weight_decay != 0:
+    if weight_decay is not None and weight_decay != 0:
         optim = optax.adamw(learning_rate=lr, weight_decay=weight_decay)
     else:
         optim = optax.adam(learning_rate=lr)
