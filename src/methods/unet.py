@@ -166,7 +166,7 @@ class XTSequential(eqx.Module):
             rngs = [None] * len(self.modules)
         else:
             rngs = jax.random.split(key, len(self.modules))
-        for module, k in zip(self.modules, rngs):
+        for module, k in zip(self.modules, rngs, strict=True):
             if isinstance(module, (PartiallyLearnedTimeConv, LearnedTimeConv)):
                 x = module(x, t, key=k)
             else:
@@ -305,14 +305,14 @@ class UNet(eqx.Module):
         assert q.shape[-1] == q.shape[-2]
         # Do downward pass
         skip_connections = []
-        for down_op, resample in zip(self.blocks_downward, self.sample_downward):
+        for down_op, resample in zip(self.blocks_downward, self.sample_downward, strict=True):
             q = down_op(q, t)
             skip_connections.append(q)
             q = resample(q)
         # Do across convs
         q = self.across_convs(q, t)
         # Do upward ops
-        for up_op, resample in zip(reversed(self.blocks_upward), reversed(self.sample_upward)):
+        for up_op, resample in zip(reversed(self.blocks_upward), reversed(self.sample_upward), strict=True):
             q = resample(q)
             q = jnp.concatenate([q, skip_connections.pop()], axis=-3)
             q = up_op(q, t)

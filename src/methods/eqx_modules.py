@@ -18,7 +18,7 @@ def _do_pad_input(x, pad_type, strides, filter_sizes, n_spatial_dims, dilations)
     if isinstance(dilations, int):
         dilations = (dilations, ) * n_spatial_dims
     pad_amts = [(0, 0)] * (x.ndim - n_spatial_dims)
-    for stride, filt, size, dilate in zip(strides, filter_sizes, spatial_dims, dilations):
+    for stride, filt, size, dilate in zip(strides, filter_sizes, spatial_dims, dilations, strict=True):
         filt = filt * dilate
         if size % stride == 0:
             pad_along_dim = max(filt - stride, 0)
