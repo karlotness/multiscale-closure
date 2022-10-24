@@ -46,6 +46,7 @@ class LearnedTimeConv(eqx.Module):
             depth=depth,
             activation=jax.nn.relu,
             key=rng_1,
+            final_activation=jax.nn.sigmoid,
         )
         # Set up network for outputs
         dummy_conv = self._get_dummy_conv()
@@ -196,13 +197,13 @@ class UNet(eqx.Module):
                     [
                         PartiallyLearnedTimeConv(
                             in_channels=in_chans,
-                            out_static_channels=out_chans - 8,
-                            out_time_channels=8,
+                            out_static_channels=out_chans - 5,
+                            out_time_channels=5,
                             kernel_size=3,
                             use_bias=True,
-                            basis_size=10,
-                            width=64,
-                            depth=3,
+                            basis_size=5,
+                            width=16,
+                            depth=2,
                             key=rngs[0]
                         ),
                         eqx.nn.Lambda(jax.nn.relu),
@@ -233,13 +234,13 @@ class UNet(eqx.Module):
                         eqx.nn.Lambda(jax.nn.relu),
                         PartiallyLearnedTimeConv(
                             in_channels=out_chans,
-                            out_static_channels=(out_chans if level == 0 else out_chans//2) - 8,
-                            out_time_channels=8,
+                            out_static_channels=(out_chans if level == 0 else out_chans//2) - 5,
+                            out_time_channels=5,
                             kernel_size=3,
                             use_bias=True,
-                            basis_size=10,
-                            width=64,
-                            depth=3,
+                            basis_size=5,
+                            width=16,
+                            depth=2,
                             key=rngs[3]
                         ),
                         (
