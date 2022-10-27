@@ -22,6 +22,7 @@ from systems.qg.qg_model import QGModel
 from systems.qg import utils as qg_utils
 from systems.qg.loader import ThreadedQGLoader, SimpleQGLoader, qg_model_from_hdf5
 from methods.unet import UNet
+from methods.gz_fcnn import GZFCNN
 import jax_utils
 import utils
 
@@ -142,7 +143,11 @@ def make_epoch_computer(dt, batch_size, train_data, num_steps, num_hutch_samples
 
 
 def init_network(lr, weight_decay, rng, grad_clip):
-    net = UNet(key=rng)
+    net = GZFCNN(
+        img_size=64,
+        n_layers=2,
+        key=rng,
+    )
     if weight_decay is not None and weight_decay != 0:
         optim = optax.adamw(learning_rate=lr, weight_decay=weight_decay)
     else:
@@ -214,7 +219,7 @@ def main():
     samples_dir.mkdir(exist_ok=True)
     # Construct neural net
     rng, rng_ctr = jax.random.split(rng_ctr, 2)
-    logger.info("Training network: unet")
+    logger.info("Training network: gzfcnn")
     state = init_network(
         lr=args.lr,
         weight_decay=args.weight_decay,
