@@ -230,9 +230,9 @@ def main():
     # Load dataset
     logger.info("Loading data")
     with h5py.File(train_path, "r") as train_file:
-        train_data = train_file["final_q_steps"][:]
+        train_data = jax.device_put(train_file["final_q_steps"][:])
     # Mask out NaNs, put batches at the back, and move to GPU
-    train_data = jax.device_put(train_data[np.all(np.isfinite(train_data), axis=(-1, -2, -3))])
+    train_data = train_data[jnp.all(jnp.isfinite(train_data), axis=(-1, -2, -3))]
     # Create data normalizer and its inverse
     scaler, unscaler, scale_deriv, data_stats = make_scalers(train_data)
     logger.info("Finished loading data, mean=(%g, %g), std=(%g, %g)", data_stats["mean"][0], data_stats["mean"][1], data_stats["std"][0], data_stats["std"][1])
