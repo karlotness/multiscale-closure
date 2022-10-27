@@ -3,67 +3,58 @@
 
 import jax
 import jax.numpy as jnp
-import flax.linen as nn
-from ._defs import ACTIVATIONS, QParameterization
+from jaxtyping import Array, Float
+import equinox as eqx
+from .eqx_modules import EasyPadConv
 
 
-class _FCNN(nn.Module):
-    features_kernels: tuple = (
-        (128, (5, 5)),
-        (64, (5, 5)),
-        (32, (3, 3)),
-        (32, (3, 3)),
-        (32, (3, 3)),
-        (32, (3, 3)),
-        (32, (3, 3)),
-        (1, (3, 3)),
-    )
-    zero_mean: bool = True
+class GZFCNN(eqx.Module):
+    conv_seq: eqx.nn.Sequential
+    img_size: int = eqx.static_field()
+    n_layers: int = eqx.static_field()
 
-    @nn.compact
-    def __call__(self, x, train):
-        seq_steps = []
-        for features, kernel in self.features_kernels[:-1]:
-            seq_steps.extend(
-                [
-                    nn.Conv(features=features, kernel_size=kernel, strides=1, padding="CIRCULAR"),
-                    nn.relu,
-                    nn.BatchNorm(epsilon=1e-05, momentum=0.1, use_running_average=not train, axis_name="batch"),
-                ]
+    def __init__(self, img_size: int, n_layers: int, padding: str = "circular", *, key: Array):
+        self.img_size = img_size
+        self.n_layers = n_layers
+
+        features_kernels = [
+            (128, (5, 5)),
+            (64, (5, 5)),
+            (32, (3, 3)),
+            (32, (3, 3)),
+            (32, (3, 3)),
+            (32, (3, 3)),
+            (32, (3, 3)),
+            (n_layers, (3, 3)),
+        ]
+        ops = []
+        prev_chans = n_layers + 1
+        keys = jax.random.split(key, len(features_kernels))
+        for (feature, kern_size), conv_key in zip(features_kernels, keys, strict=True):
+            conv = EasyPadConv(
+                num_spatial_dims=2,
+                in_channels=prev_chans,
+                out_channels=feature,
+                kernel_size=kern_size,
+                padding=padding,
+                use_bias=True,
+                key=conv_key,
             )
-        seq_steps.append(
-            nn.Conv(features=self.features_kernels[-1][0], kernel_size=self.features_kernels[-1][1], strides=1, padding="CIRCULAR")
-        )
-        x = nn.Sequential(seq_steps)(x)
-        if self.zero_mean:
-            x = x - x.mean()
-        return x
+            ops.extend([conv, eqx.nn.Lambda(jax.nn.relu)])
+            prev_chans = feature
+        # Remove final activation
+        ops.pop()
+        self.conv_seq = eqx.nn.Sequential(ops)
 
-
-class GZFCNNV1(QParameterization):
-    zero_mean: bool = True
-
-    def net_description(self):
-        return {
-            "architecture": "gz-fcnn-v1",
-            "params": {
-                "zero_mean": self.zero_mean,
-            },
-        }
-
-    @nn.compact
-    def parameterization(self, q, u, v, memory, train):
-        assert memory is None
-
-        # Count the number of layers nz
-        n_layers = q.shape[-3] # extract nz from (nz, ny, nx)
-        x = jnp.concatenate([q, u, v], axis=0)
-        x = jnp.moveaxis(x, 0, -1)
-        # For each model layer nz, apply a separate _FCNN network
-        dq = jnp.concatenate(
+    def __call__(self, x: Array, t: Float, *, key: Array|None = None):
+        assert x.ndim == 3
+        assert x.shape[-2:] == (self.img_size, self.img_size)
+        assert x.shape[-3] == self.n_layers
+        # Place time after x dimension
+        x = jnp.concatenate(
             [
-                _FCNN(zero_mean=self.zero_mean)(x, train) for _ in range(n_layers)
-            ],
-            axis=-1,
+                x,
+                jnp.expand_dims(jnp.full_like(x, t, shape=x.shape[1:]), 0),
+            ]
         )
-        return jnp.moveaxis(dq, -1, 0), None
+        return self.conv_seq(x, key=key)
