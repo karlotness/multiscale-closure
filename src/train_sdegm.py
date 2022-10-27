@@ -151,7 +151,7 @@ def init_network(lr, weight_decay, rng, grad_clip):
     if weight_decay is not None and weight_decay != 0:
         optim = optax.adamw(learning_rate=lr, weight_decay=weight_decay)
     else:
-        optim = optax.adam(learning_rate=lr)
+        optim = optax.adabelief(learning_rate=lr)
     if grad_clip is not None:
         optim = optax.chain(
             optax.clip_by_global_norm(grad_clip),
