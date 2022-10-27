@@ -82,7 +82,7 @@ def make_ou_solver(dt, t0=0.0, t1=1.0):
     return get_steps
 
 
-def make_epoch_computer(dt, batch_size, train_data, num_steps, num_hutch_samples):
+def make_epoch_computer(dt, batch_size, num_steps, num_hutch_samples, t0=0.0, t1=1.0):
 
     def sample_loss(snapshot, t, rng, net):
         net_rng, hutch_rng = jax.random.split(rng, 2)
@@ -105,11 +105,11 @@ def make_epoch_computer(dt, batch_size, train_data, num_steps, num_hutch_samples
     def batch_sde(snapshots, rng):
         n_batch = snapshots.shape[0]
         rngs = jnp.stack(jax.random.split(rng, n_batch))
-        ode_fwd = make_ou_solver(dt=dt, t0=0.0, t1=1.0)
+        ode_fwd = make_ou_solver(dt=dt, t0=t0, t1=t1)
         ys, ts = jax.vmap(ode_fwd)(snapshots, rngs)
         return ys, ts
 
-    def do_batch(carry, _x, m_fixed):
+    def do_batch(carry, _x, m_fixed, train_data):
         rng_ctr, m_vary = carry
         state = eqx.combine(m_vary, m_fixed)
         rng_batch, rng_sde, rng_times, rng_loss, rng_ctr = jax.random.split(rng_ctr, 5)
@@ -128,10 +128,10 @@ def make_epoch_computer(dt, batch_size, train_data, num_steps, num_hutch_samples
         out_state_vary, _out_state_fixed = eqx.partition(out_state, eqx.is_array)
         return (rng_ctr, out_state_vary), loss
 
-    def do_epoch(state, rng):
+    def do_epoch(state, rng, train_data):
         m_vary, m_fixed = eqx.partition(state, eqx.is_array)
         (last_rng, new_vary), losses = jax.lax.scan(
-            functools.partial(do_batch, m_fixed=m_fixed),
+            functools.partial(do_batch, m_fixed=m_fixed, train_data=train_data),
             (rng, m_vary),
             None,
             length=num_steps
@@ -244,9 +244,10 @@ def main():
         make_epoch_computer(
             dt=args.dt,
             batch_size=args.batch_size,
-            train_data=train_data,
             num_steps=args.batches_per_epoch,
             num_hutch_samples=args.num_hutch_samples,
+            t0=0.0,
+            t1=10.0,
         )
     )
 
@@ -256,7 +257,7 @@ def main():
         # Training
         logger.info("Starting epoch %d of %d", epoch + 1, args.num_epochs)
         epoch_start = time.perf_counter()
-        state, train_rng, losses = train_epoch_fn(state, train_rng)
+        state, train_rng, losses = train_epoch_fn(state, train_rng, train_data)
         mean_loss = jax.device_get(jnp.mean(losses))
         final_loss = jax.device_get(losses[-1])
         epoch_end = time.perf_counter()
