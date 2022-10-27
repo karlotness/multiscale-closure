@@ -181,12 +181,12 @@ class UNet(eqx.Module):
     sample_upward: Sequence[eqx.Module]
     across_convs: eqx.Module
 
-    def __init__(self, *, key: "jax.random.PRNGKey"):
+    def __init__(self, *, key: "jax.random.PRNGKey", data_channels: int = 2):
         self.blocks_downward = []
         self.blocks_upward = []
         self.sample_downward = []
         self.sample_upward = []
-        in_chans = 2
+        in_chans = data_channels
         out_chans = 64
         rng_ctr = key
         for level in range(3):
@@ -303,6 +303,8 @@ class UNet(eqx.Module):
         # Check that we don't have a native batch (require vmap)
         assert q.ndim == 3
         assert q.shape[-1] == q.shape[-2]
+        if jnp.ndim(t) == 0:
+            t = jnp.asarray([t])
         # Do downward pass
         skip_connections = []
         for down_op, resample in zip(self.blocks_downward, self.sample_downward, strict=True):
