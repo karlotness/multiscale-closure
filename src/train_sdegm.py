@@ -41,7 +41,6 @@ parser.add_argument("--weight_decay", type=float, default=None, help="Weight dec
 parser.add_argument("--grad_clip", type=float, default=None, help="Gradient clipping norm")
 parser.add_argument("--dt", type=float, default=0.01, help="Time step size when running diffusion")
 parser.add_argument("--num_epoch_samples", type=int, default=15, help="Number of samples to draw after each epoch")
-parser.add_argument("--num_hutch_samples", type=int, default=5, help="Number of samples to use when estimating the Jacobian")
 
 
 def save_network(output_name, output_dir, state, base_logger=None):
@@ -59,42 +58,33 @@ def save_network(output_name, output_dir, state, base_logger=None):
     logger.info("Saved network parameters to %s in %s", output_name, output_dir)
 
 
-def make_ou_solver(dt, t0=0.0, t1=1.0):
-    num_steps = math.floor((t1 - t0) / dt)
+def make_epoch_computer(batch_size, num_steps, loss_weight_func=None):
+    # OU: dY = -0.5 * g(t)
+    # g(t) = t
+    # int(g)(t) = t^2/2
+    # int(g^2)(t) = t^3/3
+    t0 = 0.0
+    t1 = 1.0
 
-    def drift(t, y, args):
-        return -y
+    def int_g_func(t):
+        return t**2 / 2
 
-    def diffuse_control(t, y, args):
-        return math.sqrt(2)
+    def int_g_sq_func(t):
+        return t**3 / 3
 
-    def get_steps(snapshot, rng):
-        brownian = diffrax.UnsafeBrownianPath(shape=snapshot.shape, key=rng)
-        control_noise = diffrax.WeaklyDiagonalControlTerm(diffuse_control, brownian)
-        terms = diffrax.MultiTerm(diffrax.ODETerm(drift), control_noise)
-        solver = diffrax.Euler()
-        saveat = diffrax.SaveAt(steps=True)
-        solve = diffrax.diffeqsolve(terms, solver, t0, t1, dt0=dt, y0=snapshot, saveat=saveat, adjoint=diffrax.NoAdjoint(), max_steps=num_steps + 2)
-        data = solve.ys[:num_steps]
-        times = solve.ts[:num_steps]
-        return jnp.concatenate([jnp.expand_dims(snapshot, 0), data]), jnp.concatenate([jnp.expand_dims(jnp.zeros_like(times[0]), 0), times])
+    min_variance = 1e-6
 
-    return get_steps
-
-
-def make_epoch_computer(dt, batch_size, num_steps, num_hutch_samples, t0=0.0, t1=1.0):
+    if loss_weight_func is None:
+        loss_weight_func = lambda t: 1 - jnp.exp(-t)
 
     def sample_loss(snapshot, t, rng, net):
-        net_rng, hutch_rng = jax.random.split(rng, 2)
-        orig_shape = snapshot.shape
-        est_trace_jac = jax_utils.trace_jac_hutch(
-            lambda x: net(x.reshape(orig_shape), t, key=net_rng).ravel(),
-            snapshot.ravel(),
-            rng=hutch_rng,
-            num_samples=num_hutch_samples,
-        )
-        est_norm = jnp.sum(net(snapshot, t, key=net_rng)**2) / 2
-        return est_trace_jac + est_norm
+        noise_mean = snapshot * jnp.exp(-1 * int_g_sq_func(t))
+        noise_var = jnp.maximum(min_variance, 1 - jnp.exp(-2 * (int_g_func(t))**2))
+        noise_std = jnp.sqrt(noise_var)
+        noise = jax.random.normal(rng, shape=snapshot.shape)
+        y = noise_mean + std * noise
+        pred = net(y, t)
+        return loss_weight_func(t) * jnp.mean((pred + noise / std) ** 2)
 
     def batch_loss(net, snapshots, ts, rng):
         n_batch = snapshots.shape[0]
@@ -102,26 +92,18 @@ def make_epoch_computer(dt, batch_size, num_steps, num_hutch_samples, t0=0.0, t1
         losses = jax.vmap(functools.partial(sample_loss, net=net))(snapshots, ts, rngs)
         return jnp.mean(losses)
 
-    def batch_sde(snapshots, rng):
-        n_batch = snapshots.shape[0]
-        rngs = jnp.stack(jax.random.split(rng, n_batch))
-        ode_fwd = make_ou_solver(dt=dt, t0=t0, t1=t1)
-        ys, ts = jax.vmap(ode_fwd)(snapshots, rngs)
-        return ys, ts
-
     def do_batch(carry, _x, m_fixed, train_data):
         rng_ctr, m_vary = carry
         state = eqx.combine(m_vary, m_fixed)
-        rng_batch, rng_sde, rng_times, rng_loss, rng_ctr = jax.random.split(rng_ctr, 5)
+        # Produce RNGs
+        rng_times, rng_batch, rng_loss, rng_ctr = jax.random.split(rng_ctr, 4)
+        # Sample times (one in each time bucket)
+        times = jax.random.uniform(rng_times, shape=(batch_size, ), minval=0, maxval=((t1 - t0) / batch_size), dtype=jnp.float32)
+        times = times + jnp.arange(batch_size, dtype=jnp.float32) * ((t1 - t0) / batch_size)
+        # Select batch
         batch_idx = jax.random.randint(rng_batch, (batch_size, ), 0, train_data.shape[0], dtype=jnp.uint32)
         batch = jnp.take(train_data, batch_idx, axis=0)
-        # Run the ou process
-        snaps, ts = batch_sde(batch, rng_sde)
-        # Select times
-        time_idx = jax.random.randint(rng_times, (batch_size, 1), 0, ts.shape[1], dtype=jnp.uint32)
-        snaps = jax.vmap(functools.partial(jnp.take, axis=0))(snaps, time_idx).squeeze(axis=1)
-        ts = jax.vmap(functools.partial(jnp.take, axis=0))(ts, time_idx)
-        # Compute loss
+        # Compute losses
         loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, snaps, ts, rng=rng_loss)
         # Update parameters
         out_state = state.apply_updates(grads)
@@ -141,6 +123,48 @@ def make_epoch_computer(dt, batch_size, num_steps, num_hutch_samples, t0=0.0, t1
 
     return do_epoch
 
+
+def make_sampler(dt, num_samples, sample_shape):
+
+    # OU: dY = -0.5 * g(t)
+    # g(t) = t
+    # int(g)(t) = t^2/2
+    # int(g^2)(t) = t^3/3
+    t0 = 0.0
+    t1 = 1.0
+    max_steps = math.ceil((t1 - t0) / dt) + 2
+
+    def g_func(t):
+        return t
+
+    def int_g_func(t):
+        return t**2 / 2
+
+    def int_g_sq_func(t):
+        return t**3 / 3
+
+    def drift(t, y, args):
+        net = args
+        return -g_func(t)**2 * (y + 2 * net(y, t))
+
+    def diffuse_control(t, y, args):
+        return jnp.sqrt(2) * g_func(t)
+
+    def draw_single_sample(rng, net):
+        snap_key, brown_key = jax.random.split(rng, 2)
+        snapshot = jax.random.normal(snap_key, data_shape, dtype=jnp.float32)
+        brownian = diffrax.UnsafeBrownianPath(shape=snapshot.shape, key=brown_key)
+        control_noise = diffrax.WeaklyDiagonalControlTerm(diffuse_control, brownian)
+        terms = diffrax.MultiTerm(diffrax.ODETerm(drift), control_noise)
+        solver = diffrax.Euler()
+        saveat = diffrax.SaveAt(t1=True)
+        sol = diffrax.diffeqsolve(terms, solver, t1, t0, -dt, snapshot, saveat=saveat, adjoint=diffrax.NoAdjoint(), max_steps=max_steps, args=net)
+        return sol.ys[0]
+
+    def draw_samples(net, rng):
+        sample_rngs = jnp.stack(jax.random.split(rng, num_samples))
+        samples = jax.vmap(functools.partial(draw_single_sample, net=net))(sample_rngs)
+        return samples
 
 def init_network(lr, weight_decay, rng, grad_clip):
     net = GZFCNN(
@@ -242,12 +266,15 @@ def main():
     # Training functions
     train_epoch_fn = eqx.filter_jit(
         make_epoch_computer(
-            dt=args.dt,
             batch_size=args.batch_size,
             num_steps=args.batches_per_epoch,
-            num_hutch_samples=args.num_hutch_samples,
-            t0=0.0,
-            t1=10.0,
+        )
+    )
+    val_epoch_fn = eqx.filter_jit(
+        make_sampler(
+            dt=args.dt,
+            num_samples=args.num_epoch_samples,
+            sample_shape=train_data.shape[1:],
         )
     )
 
@@ -266,6 +293,13 @@ def main():
         logger.info("Epoch %d final loss %f", epoch + 1, final_loss)
 
         # Validation
+        logger.info("Starting sample draw for epoch %d", epoch + 1)
+        val_rng, train_rng = jax.random.split(train_rng, 2)
+        sample_start = time.perf_counter()
+        val_samples = np.asarray(val_epoch_fn(state.net, val_rng))
+        sample_end = time.perf_counter()
+        np.save(samples_dir / f"samples_{epoch + 1:05d}.npy", val_samples, allow_pickle=False)
+        logger.info("Finished sample draw for epoch %d in %f sec", epoch + 1, sample_end - sample_start)
 
         # Save weights
         if min_mean_loss is None or (np.isfinite(mean_loss) and mean_loss <= min_mean_loss):
