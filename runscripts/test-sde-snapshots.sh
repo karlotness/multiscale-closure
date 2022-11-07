@@ -40,4 +40,4 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --save_interval=1 \
             --lr=3e-4 \
             --dt=0.01 \
-            --num_hutch_samples=5 \
+            --num_epoch_samples=15 \
