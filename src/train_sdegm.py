@@ -101,8 +101,12 @@ def make_epoch_computer(batch_size, num_steps, loss_weight_func=None):
         batch = jnp.take(train_data, batch_idx, axis=0)
         # Compute losses
         loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, batch, times, rng=rng_loss)
-        # Update parameters
-        out_state = state.apply_updates(grads)
+        # Update parameters (if loss is finite)
+        out_state = jax.lax.cond(
+            jnp.isfinite(loss),
+            lambda: state.apply_updates(grads),
+            lambda: state,
+        )
         out_state_vary, _out_state_fixed = eqx.partition(out_state, eqx.is_array)
         return (rng_ctr, out_state_vary), loss
 
