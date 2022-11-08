@@ -60,29 +60,25 @@ def save_network(output_name, output_dir, state, base_logger=None):
 
 def make_epoch_computer(batch_size, num_steps, loss_weight_func=None):
     # OU: dY = -0.5 * g(t)
-    # g(t) = t
-    # int(g)(t) = t^2/2
-    # int(g^2)(t) = t^3/3
+    # beta(t) = 18 * t^2
+    # int(beta)(t) = 6 * t^3
     t0 = 0.0
     t1 = 1.0
 
-    def int_g_func(t):
-        return t**2 / 2
-
-    def int_g_sq_func(t):
-        return t**3 / 3
+    def int_beta_func(t):
+        return 6 * t**3
 
     min_variance = 1e-6
 
     if loss_weight_func is None:
-        loss_weight_func = lambda t: 1 - jnp.exp(-t)
+        loss_weight_func = lambda t: 1 - jnp.exp(-int_beta_func(t))
 
     def sample_loss(snapshot, t, rng, net):
-        noise_mean = snapshot * jnp.exp(-1 * int_g_sq_func(t))
-        noise_var = jnp.maximum(min_variance, 1 - jnp.exp(-2 * (int_g_func(t))**2))
-        noise_std = jnp.sqrt(noise_var)
+        mean = snapshot * jnp.exp(-0.5 * int_beta_func(t))
+        var = jnp.maximum(min_variance, 1 - jnp.exp(-int_beta_func(t)))
+        std = jnp.sqrt(var)
         noise = jax.random.normal(rng, shape=snapshot.shape)
-        y = noise_mean + std * noise
+        y = mean + std * noise
         pred = net(y, t)
         return loss_weight_func(t) * jnp.mean((pred + noise / std) ** 2)
 
@@ -104,7 +100,7 @@ def make_epoch_computer(batch_size, num_steps, loss_weight_func=None):
         batch_idx = jax.random.randint(rng_batch, (batch_size, ), 0, train_data.shape[0], dtype=jnp.uint32)
         batch = jnp.take(train_data, batch_idx, axis=0)
         # Compute losses
-        loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, snaps, ts, rng=rng_loss)
+        loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, batch, times, rng=rng_loss)
         # Update parameters
         out_state = state.apply_updates(grads)
         out_state_vary, _out_state_fixed = eqx.partition(out_state, eqx.is_array)
@@ -125,7 +121,6 @@ def make_epoch_computer(batch_size, num_steps, loss_weight_func=None):
 
 
 def make_sampler(dt, num_samples, sample_shape):
-
     # OU: dY = -0.5 * g(t)
     # g(t) = t
     # int(g)(t) = t^2/2
@@ -134,29 +129,21 @@ def make_sampler(dt, num_samples, sample_shape):
     t1 = 1.0
     max_steps = math.ceil((t1 - t0) / dt) + 2
 
-    def g_func(t):
-        return t
+    def beta_func(t):
+        return 18 * t**2
 
-    def int_g_func(t):
-        return t**2 / 2
-
-    def int_g_sq_func(t):
-        return t**3 / 3
+    def int_beta_func(t):
+        return 6 * t**3
 
     def drift(t, y, args):
         net = args
-        return -g_func(t)**2 * (y + 2 * net(y, t))
-
-    def diffuse_control(t, y, args):
-        return jnp.sqrt(2) * g_func(t)
+        beta = beta_func(t)
+        return -0.5 * beta * (y + net(y, t))
 
     def draw_single_sample(rng, net):
-        snap_key, brown_key = jax.random.split(rng, 2)
-        snapshot = jax.random.normal(snap_key, data_shape, dtype=jnp.float32)
-        brownian = diffrax.UnsafeBrownianPath(shape=snapshot.shape, key=brown_key)
-        control_noise = diffrax.WeaklyDiagonalControlTerm(diffuse_control, brownian)
-        terms = diffrax.MultiTerm(diffrax.ODETerm(drift), control_noise)
-        solver = diffrax.Euler()
+        snapshot = jax.random.normal(rng, sample_shape, dtype=jnp.float32)
+        terms = diffrax.ODETerm(drift)
+        solver = diffrax.Tsit5()
         saveat = diffrax.SaveAt(t1=True)
         sol = diffrax.diffeqsolve(terms, solver, t1, t0, -dt, snapshot, saveat=saveat, adjoint=diffrax.NoAdjoint(), max_steps=max_steps, args=net)
         return sol.ys[0]
@@ -165,6 +152,8 @@ def make_sampler(dt, num_samples, sample_shape):
         sample_rngs = jnp.stack(jax.random.split(rng, num_samples))
         samples = jax.vmap(functools.partial(draw_single_sample, net=net))(sample_rngs)
         return samples
+
+    return draw_samples
 
 def init_network(lr, weight_decay, rng, grad_clip):
     net = GZFCNN(
@@ -296,10 +285,13 @@ def main():
         logger.info("Starting sample draw for epoch %d", epoch + 1)
         val_rng, train_rng = jax.random.split(train_rng, 2)
         sample_start = time.perf_counter()
-        val_samples = np.asarray(val_epoch_fn(state.net, val_rng))
+        val_samples = np.asarray(jax.vmap(unscaler)(val_epoch_fn(state.net, val_rng)))
         sample_end = time.perf_counter()
         np.save(samples_dir / f"samples_{epoch + 1:05d}.npy", val_samples, allow_pickle=False)
         logger.info("Finished sample draw for epoch %d in %f sec", epoch + 1, sample_end - sample_start)
+        val_mean = np.mean(val_samples, axis=(0, -1, -2))
+        val_std = np.std(val_samples, axis=(0, -1, -2))
+        logger.info("Val sample mean=(%g, %g) sample std=(%g, %g)", val_mean[0], val_mean[1], val_std[0], val_std[1])
 
         # Save weights
         if min_mean_loss is None or (np.isfinite(mean_loss) and mean_loss <= min_mean_loss):
