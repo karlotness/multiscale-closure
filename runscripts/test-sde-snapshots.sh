@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=train-sde-snap
-#SBATCH --time=06:00:00
+#SBATCH --time=05:00:00
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=5GB
 #SBATCH --gres=gpu:1
@@ -34,10 +34,10 @@ mkdir -p "$OUT_DIR"
 # Run
 singularity run --nv "$SINGULARITY_CONTAINER" \
             python "${CHECKOUT_DIR}/src/train_sdegm.py" "$OUT_DIR" "$TRAIN_DATA_DIR" \
-            --batch_size=128 \
-            --num_epochs=500 \
-            --batches_per_epoch=50 \
+            --batch_size=256 \
+            --num_epochs=100 \
+            --batches_per_epoch=1000 \
             --save_interval=1 \
             --lr=3e-4 \
             --dt=0.01 \
-            --num_epoch_samples=15 \
+            --num_epoch_samples=5 \
