@@ -539,7 +539,8 @@ class SimpleQGLoader:
         ablevel = self._core_traj_data.ablevel[slicer]
         q = jax.device_put(self._trajs_group[f"traj{traj:05d}_q"][slicer])
         dqhdt = jax.device_put(self._trajs_group[f"traj{traj:05d}_dqhdt"][slicer_dqhdt])
-        return jax.device_put(PartialState(q=q, dqhdt_seq=dqhdt, t=t, tc=tc, ablevel=ablevel))
+        q_total_forcing = jax.device_put(self._trajs_group[f"traj{traj:05d}_q_total_forcing"][slicer])
+        return jax.device_put(PartialState(q=q, dqhdt_seq=dqhdt, t=t, tc=tc, ablevel=ablevel, q_total_forcing=q_total_forcing))
 
     @staticmethod
     def make_reconstruct_state_func(small_model):
