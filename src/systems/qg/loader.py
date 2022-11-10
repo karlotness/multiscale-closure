@@ -38,6 +38,29 @@ class PartialState:
     t: jnp.ndarray
     tc: jnp.ndarray
     ablevel: jnp.ndarray
+    q_total_forcing: jnp.ndarray
+
+
+@dataclasses.dataclass
+class FieldInfo:
+    name: str
+    dtype: np.dtype
+    byte_size: int
+    shape: tuple[int, ...]
+
+
+def restore_from_fields(fields, data_bytes):
+    idx_acc = 0
+    restored = []
+    for field in fields:
+        restored.append(
+            np.frombuffer(
+                data_bytes[idx_acc:idx_acc+field.byte_size], dtype=field.dtype
+            ).reshape(field.shape)
+        )
+        idx_acc += field.byte_size
+    return restored
+
 
 
 def qg_model_from_hdf5(file_path, model="small"):
@@ -46,11 +69,22 @@ def qg_model_from_hdf5(file_path, model="small"):
         return QGModel.from_param_json(params)
 
 
-def _get_series_details(file_path, rollout_steps):
+def _get_series_details(file_path, rollout_steps, fields):
+    rollout_steps = operator.index(rollout_steps)
     with h5py.File(file_path, "r") as h5_file:
-        q_arr = h5_file["trajs"]["traj00000_q"][:operator.index(rollout_steps)]
-        dqhdt_arr = h5_file["trajs"]["traj00000_dqhdt"][:operator.index(rollout_steps) + 2]
-        return q_arr.dtype, dqhdt_arr.dtype, q_arr.nbytes, dqhdt_arr.nbytes, q_arr.shape[1:], dqhdt_arr.shape[1:]
+        traj_group = h5_file["trajs"]
+        field_info = []
+        for field_name in fields:
+            sample = traj_group[f"traj00000_{field_name}" if field_name not in ("t", "tc", "ablevel") else field_name][:(rollout_steps if field_name != "dqhdt" else rollout_steps + 2)]
+            field_info.append(
+                FieldInfo(
+                    name=field_name,
+                    dtype=sample.dtype,
+                    byte_size=sample.nbytes,
+                    shape=sample.shape,
+                )
+            )
+        return field_info
 
 
 def _get_core_traj_data(file_path):
@@ -174,27 +208,27 @@ async def _proc_worker_task(
         logger,
         file_path,
         rollout_steps,
-        q_dtype,
-        dqhdt_dtype,
-        q_byte_size,
-        dqhdt_byte_size,
-        q_shape,
-        dqhdt_shape,
+        fields,
+        core_fields,
         core_traj_data,
 ):
     logger.debug("process worker started")
-    q_shape = (rollout_steps, ) + q_shape
-    dqhdt_shape = (rollout_steps + 2, ) + dqhdt_shape
     try:
         # Spawn worker's process
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            str(pathlib.Path(__file__).parent / "_loader.py"),
-            str(file_path),
-            f"{rollout_steps:d}",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-        )
+        if fields:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                str(pathlib.Path(__file__).parent / "_loader.py"),
+                str(file_path),
+                f"{rollout_steps:d}",
+                "--fields",
+                *[field.name for field in fields],
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+            )
+        else:
+            proc = None
+        total_read_size = sum(field.byte_size for field in fields)
         logger.debug("spawned subprocess")
         try:
             while True:
@@ -204,22 +238,33 @@ async def _proc_worker_task(
                     logger.debug("process worker signaled to stop")
                     return
                 i, traj, step = job
-                proc.stdin.write(f"{traj:d} {step:d}\n".encode("utf8"))
-                await proc.stdin.drain()
+                if fields:
+                    proc.stdin.write(f"{traj:d} {step:d}\n".encode("utf8"))
+                    await proc.stdin.drain()
                 # Prepare sliced core data
+                loaded_data = {}
                 slicer = slice(operator.index(step), operator.index(step) + operator.index(rollout_steps))
-                t = core_traj_data.t[slicer]
-                tc = core_traj_data.tc[slicer]
-                ablevel = core_traj_data.ablevel[slicer]
-                # Get bytes from worker (q, dqhdt)
-                data = await proc.stdout.readexactly(q_byte_size + dqhdt_byte_size)
-                q = np.frombuffer(data[:q_byte_size], dtype=q_dtype).reshape(q_shape)
-                dqhdt = np.frombuffer(data[-dqhdt_byte_size:], dtype=dqhdt_dtype).reshape(dqhdt_shape)
+                for field in core_fields:
+                    loaded_data[field.name] = getattr(core_traj_data, field.name)[slicer]
+                # Get bytes from worker for non-core fields
+                if fields:
+                    restored = restore_from_fields(fields, await proc.stdout.readexactly(total_read_size))
+                else:
+                    restored = ()
+                loaded_data.update(
+                    zip(
+                        (field.name for field in fields),
+                        restored,
+                    )
+                )
                 # Put results
-                await out_queue.put((i, q, dqhdt, t, tc, ablevel))
+                await out_queue.put((i, loaded_data))
         finally:
-            proc.stdin.write_eof()
-            return_code = await proc.wait()
+            if fields:
+                proc.stdin.write_eof()
+                return_code = await proc.wait()
+            else:
+                return_code = 0
             if return_code != 0:
                 logger.error("worker exited abnormally with code %d", return_code)
             else:
@@ -241,26 +286,25 @@ async def _worker_coro(
         seed,
         num_trajs,
         num_steps,
-        q_dtype,
-        dqhdt_dtype,
-        q_byte_size,
-        dqhdt_byte_size,
-        q_shape,
-        dqhdt_shape,
+        fields,
         queue_wait_cond,
+        core_traj_data,
         num_procs=10,
 ):
     try:
         logger.debug("worker thread started")
-        core_traj_data = _get_core_traj_data(file_path) # Source for t, tc, ablevel
+        non_core_fields = []
+        core_fields = []
+        args_base = {k: None for k in ("q", "dqhdt_seq", "t", "tc", "ablevel", "q_total_forcing")}
+        for field in fields:
+            args_base.pop(field.name if field.name != "dqhdt" else "dqhdt_seq")
+            if field.name in {"t", "tc", "ablevel"}:
+                core_fields.append(field)
+            else:
+                non_core_fields.append(field)
         submit_queue = asyncio.Queue()
         recieve_queue = asyncio.Queue()
         sort_key_func = operator.itemgetter(0)
-        undecorate_q_func = operator.itemgetter(1)
-        undecorate_dqhdt_func = operator.itemgetter(2)
-        undecorate_t_func = operator.itemgetter(3)
-        undecorate_tc_func = operator.itemgetter(4)
-        undecorate_ablevel_func = operator.itemgetter(5)
         sub_tasks = {
             asyncio.create_task(
                 _proc_worker_task(
@@ -269,12 +313,8 @@ async def _worker_coro(
                     logger=logger.getChild(f"proc{i}"),
                     file_path=file_path,
                     rollout_steps=rollout_steps,
-                    q_dtype=q_dtype,
-                    dqhdt_dtype=dqhdt_dtype,
-                    q_byte_size=q_byte_size,
-                    dqhdt_byte_size=dqhdt_byte_size,
-                    q_shape=q_shape,
-                    dqhdt_shape=dqhdt_shape,
+                    fields=non_core_fields,
+                    core_fields=core_fields,
                     core_traj_data=core_traj_data,
                 )
             )
@@ -305,13 +345,17 @@ async def _worker_coro(
                         return
                     arr_stack.append(res)
                 arr_stack.sort(key=sort_key_func)
-                # Stack and split arrays, push to GPU and place in queue
-                q_stack = np.stack(list(map(undecorate_q_func, arr_stack)))
-                dqhdt_stack = np.stack(list(map(undecorate_dqhdt_func, arr_stack)))
-                t_stack = np.stack(list(map(undecorate_t_func, arr_stack)))
-                tc_stack = np.stack(list(map(undecorate_tc_func, arr_stack)))
-                ablevel_stack = np.stack(list(map(undecorate_ablevel_func, arr_stack)))
-                out_result = jax.device_put(PartialState(q=q_stack, dqhdt_seq=dqhdt_stack, t=t_stack, tc=tc_stack, ablevel=ablevel_stack))
+                # Stack each array by key
+                args = {(field.name if field.name != "dqhdt" else "dqhdt_seq"): [] for field in fields}
+                for field_dict in arr_stack:
+                    for name, arr in field_dict[1].items():
+                        args[name if name != "dqhdt" else "dqhdt_seq"].append(arr)
+                out_result = jax.device_put(
+                    PartialState(
+                        **{k: np.stack(v) for k, v in args.items()},
+                        **args_base,
+                    )
+                )
                 async with queue_wait_cond:
                     while True:
                         try:
@@ -354,6 +398,7 @@ class ThreadedQGLoader:
             buffer_size=1,
             seed=None,
             num_workers=10,
+            fields=["q", "dqhdt", "t", "tc", "ablevel"],
     ):
         self.split_name = split_name
         if split_name is not None:
@@ -381,9 +426,10 @@ class ThreadedQGLoader:
         self.num_steps = num_steps
         self.rollout_steps = rollout_steps
         self.batch_size = batch_size
-        self._q_dtype, self._dqhdt_dtype, self._q_byte_size, self._dqhdt_byte_size, self._q_shape, self._dqhdt_shape = _get_series_details(
+        self._fields = _get_series_details(
             file_path=file_path,
-            rollout_steps=self.rollout_steps
+            fields=fields,
+            rollout_steps=self.rollout_steps,
         )
         self._work_loop = _get_work_loop()
         self._queue_wait_cond = _create_work_loop_cond(self._work_loop)
@@ -398,13 +444,9 @@ class ThreadedQGLoader:
                 seed=seed,
                 num_trajs=self.num_trajs,
                 num_steps=self.num_steps,
-                q_dtype=self._q_dtype,
-                dqhdt_dtype=self._dqhdt_dtype,
-                q_byte_size=self._q_byte_size,
-                dqhdt_byte_size=self._dqhdt_byte_size,
-                q_shape=self._q_shape,
-                dqhdt_shape=self._dqhdt_shape,
+                fields=self._fields,
                 queue_wait_cond=self._queue_wait_cond,
+                core_traj_data=_get_core_traj_data(file_path), # Source for t, tc, ablevel
                 num_procs=num_workers,
             ),
             self._work_loop
@@ -465,12 +507,13 @@ class SimpleQGLoader:
         for k in self._trajs_group.keys():
             if k.startswith("traj") and k.endswith("_q"):
                 num_traj += 1
-        _, _, _, _, q_shape, dqhdt_shape = _get_series_details(
+        field_info = _get_series_details(
             file_path=file_path,
+            fields=["q", "dqhdt"],
             rollout_steps=1,
         )
-        self.q_shape = q_shape[1:]
-        self.dqhdt_shape = dqhdt_shape[1:]
+        self.q_shape = field_info[0].shape[1:]
+        self.dqhdt_shape = field_info[1].shape[1:]
         self.num_trajectories = num_traj
         self.num_steps = self._trajs_group["traj00000_q"].shape[0]
         self.num_trajs = self.num_trajectories
