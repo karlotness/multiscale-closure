@@ -507,13 +507,6 @@ class SimpleQGLoader:
         for k in self._trajs_group.keys():
             if k.startswith("traj") and k.endswith("_q"):
                 num_traj += 1
-        field_info = _get_series_details(
-            file_path=file_path,
-            fields=["q", "dqhdt"],
-            rollout_steps=1,
-        )
-        self.q_shape = field_info[0].shape[1:]
-        self.dqhdt_shape = field_info[1].shape[1:]
         self.num_trajectories = num_traj
         self.num_steps = self._trajs_group["traj00000_q"].shape[0]
         self.num_trajs = self.num_trajectories
