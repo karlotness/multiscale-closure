@@ -398,8 +398,9 @@ class ThreadedQGLoader:
             buffer_size=1,
             seed=None,
             num_workers=10,
-            fields=["q", "dqhdt", "t", "tc", "ablevel"],
+            fields=("q", "dqhdt", "t", "tc", "ablevel"),
     ):
+        fields = sorted(set(fields))
         self.split_name = split_name
         if split_name is not None:
             logger_name = f"qgloader_{split_name}"
