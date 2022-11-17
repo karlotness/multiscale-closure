@@ -65,7 +65,7 @@ class Coarsener:
         small_state = self.small_model.do_advection(small_state) # Recompute uq, vq, dqhdt
         small_state = self.small_model.do_friction(small_state) # Recompute dqhdt
         #  step 3: q forcing is the subtraction of dqhdt
-        q_total_forcing = dqhdt - small_state.dqhdt
+        q_total_forcing = self._to_real(dqhdt) - self._to_real(small_state.dqhdt)
         # Package values and return
         return PartialCoarsenedStep(
             q=q,
