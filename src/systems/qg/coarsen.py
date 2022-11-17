@@ -1,10 +1,35 @@
+import dataclasses
 import jax
 import jax.numpy as jnp
+from jaxtyping import Array, Float
 import json
-from .kernel import _generic_rfftn, _generic_irfftn
+from .kernel import _generic_rfftn, _generic_irfftn, register_dataclass_pytree
 from .qg_model import QGModel
 
 # Spectral filters as used in Ross, Li, Perezhogin, et al (2022)
+
+@register_dataclass_pytree
+@dataclasses.dataclass
+class PartialCoarsenedStep:
+    q: Array
+    dqhdt: Array
+    t: Array
+    tc: Array
+    ablevel: Array
+    q_total_forcing: Array
+
+
+@register_dataclass_pytree
+@dataclasses.dataclass
+class PartialCoarsenedTraj:
+    q: Array
+    dqhdt: Array
+    dqhdt_p: Array
+    dqhdt_pp: Array
+    t: Array
+    tc: Array
+    ablevel: Array
+    q_total_forcing: Array
 
 class Coarsener:
     def __init__(self, big_model, small_nx):
@@ -21,43 +46,68 @@ class Coarsener:
     def _coarsen_step(self, big_state):
         assert big_state.q.ndim == 3
         assert big_state.q.shape == (self.big_model.nz, self.big_model.ny, self.big_model.nx)
-        big_state = self.big_model.invert(big_state)
-        # Create an appropriate zeroed initial state
+        # Coarsen q, dqhdt
+        q = self.coarsen(big_state.q)
+        dqhdt = self.coarsen(big_state.dqhdt)
+        # Copy other attributes
+        t = big_state.t
+        tc = big_state.tc
+        ablevel = big_state.ablevel
+        # Compute q total forcing
         small_state = self.small_model.create_initial_state(jax.random.PRNGKey(0))
-        # Copy basic attributes
+        #  step 1: copy basic attributes
         small_state.t = big_state.t
         small_state.tc = big_state.tc
         small_state.ablevel = big_state.ablevel
-        # Initialize new q value
-        small_state.q = self.coarsen_q(big_state.q) # Recompute q
+        small_state.q = q
+        #  step 2: run part of time-stepping calculations
         small_state = self.small_model.invert(small_state) # Recompute ph, u, v
         small_state = self.small_model.do_advection(small_state) # Recompute uq, vq, dqhdt
         small_state = self.small_model.do_friction(small_state) # Recompute dqhdt
-        # NOTE: YOU ARE RESPONSIBLE FOR PATCHING UP dqhdt_p AND dqhdt_pp!
-        return small_state
+        #  step 3: q forcing is the subtraction of dqhdt
+        q_total_forcing = dqhdt - small_state.dqhdt
+        # Package values and return
+        return PartialCoarsenedStep(
+            q=q,
+            dqhdt=dqhdt,
+            t=t,
+            tc=tc,
+            ablevel=ablevel,
+            q_total_forcing=q_total_forcing,
+        )
 
     def coarsen_traj(self, big_traj):
         assert big_traj.q.ndim == 4
         assert big_traj.q.shape[1:] == (self.big_model.nz, self.big_model.ny, self.big_model.nx)
         # Coarsen each state
-        small_traj = jax.vmap(self._coarsen_step)(big_traj)
+        small_steps = jax.vmap(self._coarsen_step)(big_traj)
         # Patch up the dqhdt_p and dqhdt_pp values
-        small_traj.dqhdt_p = jnp.concatenate(
+        dqhdt_p = jnp.concatenate(
             [
-                jnp.expand_dims(jnp.zeros_like(small_traj.dqhdt_p[0]), 0),
-                small_traj.dqhdt[:-1],
+                jnp.expand_dims(jnp.zeros_like(small_steps.dqhdt[0]), 0),
+                small_steps.dqhdt[:-1],
             ]
         )
-        small_traj.dqhdt_pp = jnp.concatenate(
+        dqhdt_pp = jnp.concatenate(
             [
-                jnp.zeros_like(small_traj.dqhdt_pp[:2]),
-                small_traj.dqhdt[:-2],
+                jnp.zeros_like(small_steps.dqhdt[:2]),
+                small_steps.dqhdt[:-2],
             ]
+        )
+        small_traj = PartialCoarsenedTraj(
+            q=small_steps.q,
+            dqhdt=small_steps.dqhdt,
+            dqhdt_p=dqhdt_p,
+            dqhdt_pp=dqhdt_pp,
+            t=small_steps.t,
+            tc=small_steps.tc,
+            ablevel=small_steps.ablevel,
+            q_total_forcing=q_total_forcing,
         )
         # All done
         return small_traj
 
-    def coarsen_q(self, q):
+    def coarsen(self, var):
         raise NotImplementedError("implement in a subclass")
 
     def _to_spec(self, q):
@@ -68,17 +118,17 @@ class Coarsener:
 
 
 class SpectralCoarsener(Coarsener):
-    def coarsen_q(self, q):
-        assert q.ndim == 3
-        vh = self._to_spec(q)
-        dummy_small_q = jnp.zeros(
+    def coarsen(self, var):
+        assert var.ndim == 3
+        vh = self._to_spec(var)
+        dummy_small_var = jnp.zeros(
             (self.small_model.nz, self.small_model.ny, self.small_model.nx),
             dtype=jnp.float32
         )
-        dummy_qh = self._to_spec(dummy_small_q)
-        nk = dummy_qh.shape[1] // 2
+        dummy_varh = self._to_spec(dummy_small_var)
+        nk = dummy_varh.shape[1] // 2
         trunc = jnp.hstack((vh[:, :nk,:nk+1],
-                           vh[:,-nk:,:nk+1]))
+                            vh[:,-nk:,:nk+1]))
         filtered = trunc * self.spectral_filter() / self.ratio**2
         return self._to_real(filtered)
 
