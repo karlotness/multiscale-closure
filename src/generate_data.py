@@ -30,16 +30,16 @@ parser_qg.add_argument("--small_size", type=int, default=64, help="Scale of smal
 parser_qg.add_argument("--num_trajs", type=int, default=1, help="Number of trajectories to generate")
 parser_qg.add_argument("--config", type=str, default="eddy", help="Eddy or jet configuration", choices=["eddy", "jet"])
 
-# QG options
-parser_qg = subparsers.add_parser("qg_snap", help="Generate training data like PyQG")
-parser_qg.add_argument("seed", type=int, help="RNG seed, must be unique for unique trajectory")
-parser_qg.add_argument("--dt", type=float, default=3600.0, help="Time step size")
-parser_qg.add_argument("--tmax", type=float, default=155520000.0, help="End time for the model")
-parser_qg.add_argument("--big_size", type=int, default=256, help="Scale of large model")
-parser_qg.add_argument("--small_size", type=int, default=64, help="Scale of small model")
-parser_qg.add_argument("--num_trajs", type=int, default=1, help="Number of trajectories to generate")
-parser_qg.add_argument("--batch_size", type=int, default=100, help="Number of generation steps to batch together")
-parser_qg.add_argument("--config", type=str, default="eddy", help="Eddy or jet configuration", choices=["eddy", "jet"])
+# QG snapshot options
+parser_qg_snap = subparsers.add_parser("qg_snap", help="Generate training data like PyQG")
+parser_qg_snap.add_argument("seed", type=int, help="RNG seed, must be unique for unique trajectory")
+parser_qg_snap.add_argument("--dt", type=float, default=3600.0, help="Time step size")
+parser_qg_snap.add_argument("--tmax", type=float, default=155520000.0, help="End time for the model")
+parser_qg_snap.add_argument("--big_size", type=int, default=256, help="Scale of large model")
+parser_qg_snap.add_argument("--small_size", type=int, default=64, help="Scale of small model")
+parser_qg_snap.add_argument("--num_trajs", type=int, default=1, help="Number of trajectories to generate")
+parser_qg_snap.add_argument("--batch_size", type=int, default=100, help="Number of generation steps to batch together")
+parser_qg_snap.add_argument("--config", type=str, default="eddy", help="Eddy or jet configuration", choices=["eddy", "jet"])
 
 CONFIG_VARS = {
     "eddy": {
