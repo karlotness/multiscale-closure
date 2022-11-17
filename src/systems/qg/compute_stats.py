@@ -1,4 +1,5 @@
 import argparse
+import re
 import dataclasses
 import math
 import contextlib
@@ -11,14 +12,15 @@ parser.add_argument("out_file", type=str, help="Output file to save statistics (
 parser.add_argument("in_file", type=str, help="HDF5 file containing the trajectories")
 
 
-def traj_chunk_iter(h5_path, *, chunk_size=1000, include_remainders=True):
+def traj_chunk_iter(h5_path, field, *, chunk_size=1000, include_remainders=True):
+    field_re = re.compile(rf"^traj\d{{5}}_{re.escape(field)}$")
     with h5py.File(h5_path, "r") as data_file:
         trajs_group = data_file["trajs"]
         for k in trajs_group.keys():
-            if not (k.startswith("traj") and k.endswith("_q")):
-                # This isn't a q component
+            if not field_re.match(k):
+                # This isn't the field we want
                 continue
-            # This is a q component of the trajectory, load slices and yield them
+            # This is an instance of the target field, load slices and yield them
             record = trajs_group[k]
             num_steps = record.shape[0]
             num_batches = num_steps // chunk_size
@@ -80,14 +82,14 @@ def compute_stats(batch_iter):
 
 def main():
     args = parser.parse_args()
-    with contextlib.closing(traj_chunk_iter(args.in_file)) as batch_iter:
-        stats = compute_stats(batch_iter)
+    stats = {}
+    for field in ["q", "q_total_forcing"]:
+        with contextlib.closing(traj_chunk_iter(args.in_file, field)) as batch_iter:
+            for k, v in dataclasses.asdict(compute_stats(batch_iter)).items():
+                stats[f"{field}_{k}"] = v
     np.savez(
         args.out_file,
-        mean=stats.mean.astype(np.float32),
-        var=stats.var.astype(np.float32),
-        min=stats.min.astype(np.float32),
-        max=stats.max.astype(np.float32),
+        **stats,
     )
     print("Finished computing stats")
 
