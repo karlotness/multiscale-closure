@@ -500,7 +500,10 @@ class ThreadedQGLoader:
 
 
 class SimpleQGLoader:
-    def __init__(self, file_path):
+    def __init__(self, file_path, fields=("q", "dqhdt", "t", "tc", "ablevel")):
+        self._fields = sorted(set(fields))
+        self._core_fields = [f for f in self._fields if f in {"t", "tc", "ablevel"}]
+        self._non_core_fields = [f for f in self._fields if f not in {"t", "tc", "ablevel"}]
         self._h5_file = h5py.File(file_path, "r")
         self._trajs_group = self._h5_file["trajs"]
         self._data_fields = frozenset(f.name for f in dataclasses.fields(kernel.PseudoSpectralKernelState))
@@ -535,13 +538,14 @@ class SimpleQGLoader:
             end = operator.index(end)
         slicer = slice(start, end)
         slicer_dqhdt = slice(start, end + 2 if end is not None else None)
-        t = self._core_traj_data.t[slicer]
-        tc = self._core_traj_data.tc[slicer]
-        ablevel = self._core_traj_data.ablevel[slicer]
-        q = jax.device_put(self._trajs_group[f"traj{traj:05d}_q"][slicer])
-        dqhdt = jax.device_put(self._trajs_group[f"traj{traj:05d}_dqhdt"][slicer_dqhdt])
-        q_total_forcing = jax.device_put(self._trajs_group[f"traj{traj:05d}_q_total_forcing"][slicer])
-        return jax.device_put(PartialState(q=q, dqhdt_seq=dqhdt, t=t, tc=tc, ablevel=ablevel, q_total_forcing=q_total_forcing))
+        result_fields = {k: None for k in ("q", "dqhdt_seq", "t", "tc", "ablevel", "q_total_forcing")}
+        for field in self._core_fields:
+            result_fields[field] = getattr(self._core_traj_data, field)[slicer]
+        for field in self._non_core_fields:
+            result_fields[field if field != "dqhdt" else "dqhdt_seq"] = jax.device_put(
+                self._trajs_group[f"traj{traj:05d}_{field}"][slicer if field != "dqhdt" else slicer_dqhdt]
+            )
+        return jax.device_put(PartialState(**result_fields))
 
     @staticmethod
     def make_reconstruct_state_func(small_model):
