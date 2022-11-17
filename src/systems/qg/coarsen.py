@@ -144,3 +144,9 @@ class Operator1(SpectralCoarsener):
 class Operator2(SpectralCoarsener):
     def spectral_filter(self):
         return jnp.exp(-self.small_model.wv**2 * (2*self.small_model.dx)**2 / 24)
+
+
+COARSEN_OPERATORS = {
+    "op1": Operator1,
+    "op2": Operator2,
+}

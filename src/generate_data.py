@@ -29,6 +29,7 @@ parser_qg.add_argument("--big_size", type=int, default=256, help="Scale of large
 parser_qg.add_argument("--small_size", type=int, default=64, help="Scale of small model")
 parser_qg.add_argument("--num_trajs", type=int, default=1, help="Number of trajectories to generate")
 parser_qg.add_argument("--config", type=str, default="eddy", help="Eddy or jet configuration", choices=["eddy", "jet"])
+parser_qg.add_argument("--coarse_op", type=str, nargs="+", default=["op1", "op2"], help="Which coarsening operators to apply", choices=sorted(coarsen.COARSEN_OPERATORS.keys()))
 
 # QG snapshot options
 parser_qg_snap = subparsers.add_parser("qg_snap", help="Generate training data like PyQG")
@@ -177,8 +178,8 @@ def gen_qg(out_dir, args, base_logger):
     big_model = QGModel(nx=args.big_size, ny=args.big_size, dt=args.dt, tmax=args.tmax, **CONFIG_VARS[args.config])
     # Initialize coarsening operators
     coarsen_operators = {
-        "op1": coarsen.Operator1(big_model=big_model, small_nx=args.small_size),
-        "op2": coarsen.Operator2(big_model=big_model, small_nx=args.small_size),
+        op_name: coarsen.COARSEN_OPERATORS[op_name](big_model=big_model, small_nx=args.small_size)
+        for op_name in args.coarse_op
     }
     # Set up data generator
     rng_ctr = jax.random.PRNGKey(seed=args.seed)
