@@ -59,19 +59,19 @@ CONFIG_VARS = {
 
 def make_generate_coarse_traj(coarse_op, num_steps):
     dummy_init = coarse_op.small_model.create_initial_state(jax.random.PRNGKey(0))
-    dummy_dqhdt = jnp.zeros_like(dummy_init.dqhdt)
+    dummy_shape = dummy_init.shape
+    dummy_dtype = dummy_init.dtype
 
     def make_traj(big_initial_step):
 
         def _step_forward(carry, x):
             prev_big_state, small_dqhdt, small_dqhdt_p = carry
             prev_small_state = coarse_op._coarsen_step(prev_big_state)
-            prev_small_state.dqhdt_p = small_dqhdt
-            prev_small_state.dqhdt_pp = small_dqhdt_p
+            dqhdt_p = small_dqhdt
             next_big_state = coarse_op.big_model.step_forward(prev_big_state)
-            return (next_big_state, prev_small_state.dqhdt, prev_small_state.dqhdt_p), (prev_small_state.q, prev_small_state.t, prev_small_state.tc, prev_small_state.ablevel, prev_small_state.dqhdt)
+            return (next_big_state, prev_small_state.dqhdt, dqhdt_p), (prev_small_state.q, prev_small_state.t, prev_small_state.tc, prev_small_state.ablevel, prev_small_state.dqhdt, prev_small_state.q_total_forcing)
 
-        _carry, (q, t, tc, ablevel, dqhdt) = jax.lax.scan(
+        _carry, (q, t, tc, ablevel, dqhdt, q_total_forcing) = jax.lax.scan(
             _step_forward,
             (big_initial_step, dummy_dqhdt, dummy_dqhdt),
             None,
@@ -79,13 +79,12 @@ def make_generate_coarse_traj(coarse_op, num_steps):
         )
         dqhdt = jnp.concatenate(
             [
-                jnp.expand_dims(dummy_dqhdt, 0),
-                jnp.expand_dims(dummy_dqhdt, 0),
+                jnp.zeros(shape=((2, ) + dummy_shape), dtype=dummy_dtype),
                 dqhdt,
             ]
         )
 
-        return q, t, tc, ablevel, dqhdt
+        return q, t, tc, ablevel, dqhdt, q_total_forcing
 
     return make_traj
 
@@ -219,7 +218,7 @@ def gen_qg(out_dir, args, base_logger):
                 out_file = op_files[op_name]
                 traj_gen = traj_gen_ops[op_name]
                 logger.info("Starting trajectory %d for operator %s", traj_num, op_name)
-                q, t, tc, ablevel, dqhdt = jax.device_get(traj_gen(initial_step))
+                q, t, tc, ablevel, dqhdt, q_total_forcing = jax.device_get(traj_gen(initial_step))
                 logger.info("Finished generating trajectory %d for operator %s", traj_num, op_name)
                 # Store the data
                 if traj_num == 0:
@@ -230,7 +229,8 @@ def gen_qg(out_dir, args, base_logger):
                 # Store q and dqhdt
                 out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q", data=q)
                 out_file["trajs"].create_dataset(f"traj{traj_num:05d}_dqhdt", data=dqhdt)
-                del q, t, tc, ablevel, dqhdt
+                out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q_total_forcing", data=q_total_forcing)
+                del q, t, tc, ablevel, dqhdt, q_total_forcing
                 logger.info("Finished storing trajectory %d for operator %s", traj_num, op_name)
 
 
