@@ -116,21 +116,30 @@ class Coarsener:
     def _to_real(self, q):
         return _generic_irfftn(q)
 
+    def _is_spectral(self, var):
+        return var.dtype in {jnp.dtype(t) for t in (jnp.complex64, jnp.complex128)}
+
 
 class SpectralCoarsener(Coarsener):
     def coarsen(self, var):
         assert var.ndim == 3
-        vh = self._to_spec(var)
         dummy_small_var = jnp.zeros(
             (self.small_model.nz, self.small_model.ny, self.small_model.nx),
             dtype=jnp.float32
         )
         dummy_varh = self._to_spec(dummy_small_var)
         nk = dummy_varh.shape[1] // 2
+        if not self._is_spectral(var):
+            vh = self._to_spec(var)
+        else:
+            vh = var
         trunc = jnp.hstack((vh[:, :nk,:nk+1],
                             vh[:,-nk:,:nk+1]))
         filtered = trunc * self.spectral_filter() / self.ratio**2
-        return self._to_real(filtered)
+        if not self._is_spectral(var):
+            return self._to_real(filtered)
+        else:
+            return filtered
 
     def spectral_filter(self):
         raise NotImplementedError("implement in a subclass")
