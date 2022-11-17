@@ -59,8 +59,8 @@ CONFIG_VARS = {
 
 def make_generate_coarse_traj(coarse_op, num_steps):
     dummy_init = coarse_op.small_model.create_initial_state(jax.random.PRNGKey(0))
-    dummy_shape = dummy_init.shape
-    dummy_dtype = dummy_init.dtype
+    dummy_shape = dummy_init.dqhdt.shape
+    dummy_dtype = dummy_init.dqhdt.dtype
 
     def make_traj(big_initial_step):
 
@@ -71,15 +71,18 @@ def make_generate_coarse_traj(coarse_op, num_steps):
             next_big_state = coarse_op.big_model.step_forward(prev_big_state)
             return (next_big_state, prev_small_state.dqhdt, dqhdt_p), (prev_small_state.q, prev_small_state.t, prev_small_state.tc, prev_small_state.ablevel, prev_small_state.dqhdt, prev_small_state.q_total_forcing)
 
+        dummy_dqhdt_single = jnp.zeros(shape=dummy_shape, dtype=dummy_dtype)
+        dummy_dqhdt_double = jnp.zeros(shape=((2, ) + dummy_shape), dtype=dummy_dtype)
+
         _carry, (q, t, tc, ablevel, dqhdt, q_total_forcing) = jax.lax.scan(
             _step_forward,
-            (big_initial_step, dummy_dqhdt, dummy_dqhdt),
+            (big_initial_step, dummy_dqhdt_single, dummy_dqhdt_single),
             None,
             length=num_steps,
         )
         dqhdt = jnp.concatenate(
             [
-                jnp.zeros(shape=((2, ) + dummy_shape), dtype=dummy_dtype),
+                dummy_dqhdt_double,
                 dqhdt,
             ]
         )
