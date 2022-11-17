@@ -1,13 +1,9 @@
 import argparse
 import pathlib
 import math
-import re
 import os
 import random
-import itertools
 import contextlib
-import h5py
-import json
 import jax
 import jax.numpy as jnp
 import diffrax
@@ -17,11 +13,7 @@ import numpy as np
 import logging
 import time
 import functools
-from typing import Callable
-from systems.qg.qg_model import QGModel
-from systems.qg import utils as qg_utils
-from systems.qg.loader import ThreadedQGLoader, SimpleQGLoader, qg_model_from_hdf5
-from methods.unet import UNet
+from systems.qg.loader import ThreadedQGLoader, SimpleQGLoader
 from methods.gz_fcnn import GZFCNN
 import jax_utils
 import utils
