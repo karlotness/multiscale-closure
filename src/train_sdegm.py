@@ -346,38 +346,8 @@ def main():
 
             logger.info("Finished epoch %d", epoch)
 
-    min_mean_loss = None
-    train_rng, rng_ctr = jax.random.split(rng_ctr, 2)
-    for epoch in range(args.num_epochs):
-        # Training
-        logger.info("Starting epoch %d of %d", epoch + 1, args.num_epochs)
-        epoch_start = time.perf_counter()
-        state, train_rng, losses = train_epoch_fn(state, train_rng, train_data)
-        mean_loss = jax.device_get(jnp.mean(losses))
-        final_loss = jax.device_get(losses[-1])
-        epoch_end = time.perf_counter()
-        logger.info("Finished epoch %d in %f sec", epoch + 1, epoch_end - epoch_start)
-        logger.info("Epoch %d mean loss %f", epoch + 1, mean_loss)
-        logger.info("Epoch %d final loss %f", epoch + 1, final_loss)
-
-        # Validation
-        logger.info("Starting sample draw for epoch %d", epoch + 1)
-        val_rng, train_rng = jax.random.split(train_rng, 2)
-        sample_start = time.perf_counter()
-        val_samples = np.asarray(jax.vmap(unscaler)(val_epoch_fn(state.net, val_rng)))
-        sample_end = time.perf_counter()
-        np.save(samples_dir / f"samples_{epoch + 1:05d}.npy", val_samples, allow_pickle=False)
-        logger.info("Finished sample draw for epoch %d in %f sec", epoch + 1, sample_end - sample_start)
-        val_mean = np.mean(val_samples, axis=(0, -1, -2))
-        val_std = np.std(val_samples, axis=(0, -1, -2))
-        logger.info("Val sample mean=(%g, %g) sample std=(%g, %g)", val_mean[0], val_mean[1], val_std[0], val_std[1])
-
-        # Save weights
-        if min_mean_loss is None or (np.isfinite(mean_loss) and mean_loss <= min_mean_loss):
-            min_mean_loss = mean_loss
-            save_network("best_loss", output_dir=weights_dir, state=state, base_logger=logger)
-        if epoch % args.save_interval == 0:
-            save_network("interval", output_dir=weights_dir, state=state, base_logger=logger)
+    # End of training loop
+    logger.info("Finished training")
 
 
 if __name__ == "__main__":
