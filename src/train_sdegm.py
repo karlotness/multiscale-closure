@@ -4,6 +4,7 @@ import math
 import os
 import random
 import contextlib
+import itertools
 import jax
 import jax.numpy as jnp
 import diffrax
@@ -22,6 +23,7 @@ import utils
 parser = argparse.ArgumentParser(description="Train neural networks for closure")
 parser.add_argument("out_dir", type=str, help="Directory to store output (created if non-existing)")
 parser.add_argument("train_set", type=str, help="Directory with training examples")
+parser.add_argument("val_set", type=str, help="Directory with validation examples")
 parser.add_argument("--log_level", type=str, help="Level for logger", default="info", choices=["debug", "info", "warning", "error", "critical"])
 parser.add_argument("--save_interval", type=int, default=1, help="Number of epochs between saves")
 parser.add_argument("--seed", type=int, default=None, help="Seed to use with RNG (if None, select automatically)")
@@ -30,7 +32,8 @@ parser.add_argument("--num_epochs", type=int, default=100, help="Number of train
 parser.add_argument("--batches_per_epoch", type=int, default=100, help="Training batches per epoch")
 parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for optimizer")
 parser.add_argument("--dt", type=float, default=0.01, help="Time step size when running diffusion")
-parser.add_argument("--num_epoch_samples", type=int, default=15, help="Number of samples to draw after each epoch")
+parser.add_argument("--num_val_samples", type=int, default=5, help="Number of samples to draw in each validation period")
+parser.add_argument("--val_interval", type=int, default=1, help="Number of epochs between validation periods")
 
 
 def save_network(output_name, output_dir, state, base_logger=None):
@@ -48,7 +51,7 @@ def save_network(output_name, output_dir, state, base_logger=None):
     logger.info("Saved network parameters to %s in %s", output_name, output_dir)
 
 
-def make_epoch_computer(batch_size, num_steps, loss_weight_func=None):
+def make_batch_computer(batch_size, q_scaler, forcing_scaler, loss_weight_func=None):
     # OU: dY = -0.5 * g(t)
     # beta(t) = 18 * t^2
     # int(beta)(t) = 6 * t^3
@@ -63,58 +66,62 @@ def make_epoch_computer(batch_size, num_steps, loss_weight_func=None):
     if loss_weight_func is None:
         loss_weight_func = lambda t: 1 - jnp.exp(-int_beta_func(t))
 
-    def sample_loss(snapshot, t, rng, net):
-        mean = snapshot * jnp.exp(-0.5 * int_beta_func(t))
+    def sample_loss(snap_q, snap_forcing, t, rng, net):
+        mean = snap_forcing * jnp.exp(-0.5 * int_beta_func(t))
         var = jnp.maximum(min_variance, 1 - jnp.exp(-int_beta_func(t)))
         std = jnp.sqrt(var)
-        noise = jax.random.normal(rng, shape=snapshot.shape)
+        noise = jax.random.normal(rng, shape=snap_forcing.shape)
         y = mean + std * noise
-        pred = net(y, t)
+        net_input = jnp.concatenate([y, snap_q], axis=0)
+        pred = net(net_input, t)
         return loss_weight_func(t) * jnp.mean((pred + noise / std) ** 2)
 
-    def batch_loss(net, snapshots, ts, rng):
+    def batch_loss(net, snap_q, snap_forcing, ts, rng):
         n_batch = snapshots.shape[0]
         rngs = jnp.stack(jax.random.split(rng, n_batch))
-        losses = jax.vmap(functools.partial(sample_loss, net=net))(snapshots, ts, rngs)
+        losses = jax.vmap(functools.partial(sample_loss, net=net))(snap_q, snap_forcing, ts, rngs)
         return jnp.mean(losses)
 
-    def do_batch(carry, _x, m_fixed, train_data):
-        rng_ctr, m_vary = carry
-        state = eqx.combine(m_vary, m_fixed)
+    def do_batch(batch, state, rng):
+        # Extract batch components
+        batch_q = jax.vmap(q_scaler.scale)(batch.q)
+        batch_q_forcing = jax.vmap(forcing_scaler.scale)(batch.q_total_forcing)
         # Produce RNGs
-        rng_times, rng_batch, rng_loss, rng_ctr = jax.random.split(rng_ctr, 4)
+        rng_times, rng_loss, rng_ctr = jax.random.split(rng, 3)
         # Sample times (one in each time bucket)
         times = jax.random.uniform(rng_times, shape=(batch_size, ), minval=0, maxval=((t1 - t0) / batch_size), dtype=jnp.float32)
         times = times + jnp.arange(batch_size, dtype=jnp.float32) * ((t1 - t0) / batch_size)
-        # Select batch
-        batch_idx = jax.random.randint(rng_batch, (batch_size, ), 0, train_data.shape[0], dtype=jnp.uint32)
-        batch = jnp.take(train_data, batch_idx, axis=0)
         # Compute losses
-        loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, batch, times, rng=rng_loss)
+        loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, batch_q, batch_q_forcing, times, rng=rng_loss)
         # Update parameters (if loss is finite)
         out_state = jax.lax.cond(
             jnp.isfinite(loss),
             lambda: state.apply_updates(grads),
             lambda: state,
         )
-        out_state_vary, _out_state_fixed = eqx.partition(out_state, eqx.is_array)
-        return (rng_ctr, out_state_vary), loss
+        return return out_state, rng_ctr, loss
 
-    def do_epoch(state, rng, train_data):
-        m_vary, m_fixed = eqx.partition(state, eqx.is_array)
-        (last_rng, new_vary), losses = jax.lax.scan(
-            functools.partial(do_batch, m_fixed=m_fixed, train_data=train_data),
-            (rng, m_vary),
-            None,
-            length=num_steps
-        )
-        new_state = eqx.combine(new_vary, m_fixed)
-        return new_state, last_rng, losses
-
-    return do_epoch
+    return do_batch
 
 
-def make_sampler(dt, num_samples, sample_shape):
+def do_epoch(train_state, train_rng, batch_iter, batch_fn, logger=None):
+    if logger is None:
+        logger = logging.getLogger("train_epoch")
+    epoch_start = time.perf_counter()
+    losses = []
+    for batch in batch_iter:
+        train_state, train_rng, batch_loss = batch_fn(batch, train_state, train_rng)
+        losses.append(batch_loss)
+    epoch_end = time.perf_counter()
+    mean_loss = jax.device_get(jnp.mean(losses))
+    final_loss = jax.device_get(losses[-1])
+    logger.info("Finished epoch in %f sec", epoch_end - epoch_start)
+    logger.info("Epoch mean loss %f", mean_loss)
+    logger.info("Epoch final loss %f", final_loss)
+    return train_state, train_rng, {"mean_loss": mean_loss, "final_loss": final_loss}
+
+
+def make_sampler(dt, sample_shape, q_scaler, forcing_scaler):
     # OU: dY = -0.5 * g(t)
     # g(t) = t
     # int(g)(t) = t^2/2
@@ -130,29 +137,53 @@ def make_sampler(dt, num_samples, sample_shape):
         return 6 * t**3
 
     def drift(t, y, args):
-        net = args
+        net, q = args
         beta = beta_func(t)
-        return -0.5 * beta * (y + net(y, t))
+        net_input = jnp.concatenate([y, q], axis=0)
+        return -0.5 * beta * (y + net(net_input, t))
 
-    def draw_single_sample(rng, net):
+    def draw_single_sample(batch_q, rng, net):
         snapshot = jax.random.normal(rng, sample_shape, dtype=jnp.float32)
         terms = diffrax.ODETerm(drift)
         solver = diffrax.Tsit5()
         saveat = diffrax.SaveAt(t1=True)
-        sol = diffrax.diffeqsolve(terms, solver, t1, t0, -dt, snapshot, saveat=saveat, adjoint=diffrax.NoAdjoint(), max_steps=max_steps, args=net)
+        sol = diffrax.diffeqsolve(terms, solver, t1, t0, -dt, snapshot, saveat=saveat, adjoint=diffrax.NoAdjoint(), max_steps=max_steps, args=(net, batch_q))
         return sol.ys[0]
 
-    def draw_samples(net, rng):
-        sample_rngs = jnp.stack(jax.random.split(rng, num_samples))
-        samples = jax.vmap(functools.partial(draw_single_sample, net=net))(sample_rngs)
-        return samples
+    def draw_samples(state, batch_q, rng):
+        net = state.net
+        batch_q = jax.vmap(q_scaler.scale)(batch_q)
+        num_samples = batch_q.shape[0]
+        rng_ctr, *sample_rngs = jax.random.split(rng, num_samples + 1)
+        sample_rngs = jnp.stack(sample_rngs)
+        samples = jax.vmap(functools.partial(draw_single_sample, net=net))(batch_q, sample_rngs)
+        samples = jax.vmap(forcing_scaler.unscale)(samples)
+        return samples, rng_ctr
 
     return draw_samples
+
+
+def do_validation(train_state, val_rng, np_rng, loader, sample_fn, num_samples, logger=None):
+    if logger is None:
+        logger = logging.getLogger("validation")
+    # Sample indices
+    traj = np_rng.integers(low=0, high=loader.num_trajs, size=num_samples)
+    step = np_rng.integers(low=0, high=loader.num_steps, size=num_samples)
+    # Load and stack q components
+    logger.info("Starting validation, drawing %d samples", num_samples)
+    val_start = time.perf_counter()
+    batch_q = np.stack([loader.get_trajectory(traj=t, start=s, end=s+1) for t, s in zip(traj, step)])
+    samples, rng_ctr = sample_fn(state=train_state, batch_q=batch_q, rng=val_rng)
+    samples = jax.device_get(samples)
+    val_end = time.perf_counter()
+    logger.info("Finished drawing %d samples in %f sec", num_samples, val_end - val_start)
+    return samples, rng_ctr
+
 
 def init_network(lr, rng):
     net = GZFCNN(
         img_size=64,
-        n_layers=2,
+        n_layers=4,
         key=rng,
     )
     optim = optax.adabelief(learning_rate=lr)
@@ -163,26 +194,31 @@ def init_network(lr, rng):
     return state
 
 
-def make_scalers(data):
-    assert data.ndim == 4
-    assert data.shape[1] == 2
-    assert data.shape[-1] == data.shape[-2]
-    mean = np.expand_dims(np.asarray(jnp.mean(data, axis=(0, -1, -2))), (-1, -2))
-    std = np.expand_dims(np.asarray(jnp.std(data, axis=(0, -1, -2))), (-1, -2))
+class Scaler:
+    def __init__(self, mean, var):
+        self.mean = np.expand_dims(mean, (-1, -2))
+        self.var = np.expand_dims(var, (-1, -2))
+        self.std = np.sqrt(self.var)
 
-    def scaler(snapshot):
-        return (snapshot - mean) / std
+    def scale(self, a):
+        return (a - self.mean) / self.std
 
-    def unscaler(snapshot):
-        return (snapshot * std) + mean
+    def unscale(self, a):
+        return (a * self.std) + self.mean
 
-    def scale_deriv(deriv):
-        return deriv / std
 
-    return scaler, unscaler, scale_deriv, {
-        "mean": tuple(mean.squeeze()),
-        "std": tuple(std.squeeze()),
-    }
+def make_scalers():
+    stats_path = pathlib.Path(__file__).resolve().parent / "systems" / "qg" / "stats_op1.npz"
+    with np.load(stats_path) as stats_file:
+        q_scaler = Scaler(
+            mean=stats_file["q_mean"],
+            var=stats_file["q_var"],
+        )
+        forcing_scaler = Scaler(
+            mean=stats_file["q_total_forcing_mean"],
+            var=stats_file["q_total_forcing_var"],
+        )
+    return q_scaler, forcing_scaler
 
 
 def main():
@@ -207,11 +243,12 @@ def main():
     else:
         seed = args.seed
     logger.info("Using seed %d", seed)
+    np_rng = np.random.default_rng(seed=seed)
 
     # Configure required elements for training
-    rng_ctr = jax.random.PRNGKey(seed=seed)
+    rng_ctr = jax.random.PRNGKey(seed=np_rng.integers(2**32).item())
     train_path = pathlib.Path(args.train_set) / "data.hdf5"
-    train_small_model = qg_model_from_hdf5(file_path=train_path, model="small")
+    val_path = pathlib.Path(args.val_set) / "data.hdf5"
     weights_dir = out_dir / "weights"
     weights_dir.mkdir(exist_ok=True)
     samples_dir = out_dir / "samples"
@@ -223,33 +260,90 @@ def main():
         lr=args.lr,
         rng=rng,
     )
-
-    # Load dataset
-    logger.info("Loading data")
-    with h5py.File(train_path, "r") as train_file:
-        train_data = jax.device_put(train_file["final_q_steps"][:])
-    # Mask out NaNs, put batches at the back, and move to GPU
-    train_data = train_data[jnp.all(jnp.isfinite(train_data), axis=(-1, -2, -3))]
     # Create data normalizer and its inverse
-    scaler, unscaler, scale_deriv, data_stats = make_scalers(train_data)
-    logger.info("Finished loading data, mean=(%g, %g), std=(%g, %g)", data_stats["mean"][0], data_stats["mean"][1], data_stats["std"][0], data_stats["std"][1])
-    # Rescale data to be closer to standard normal per-channel
-    train_data = jax.vmap(scaler)(train_data)
+    q_scaler, forcing_scaler = make_scalers()
 
-    # Training functions
-    train_epoch_fn = eqx.filter_jit(
-        make_epoch_computer(
-            batch_size=args.batch_size,
-            num_steps=args.batches_per_epoch,
+    # Open data files
+    with contextlib.ExitStack() as train_context:
+        # Open data files
+        train_loader = train_context.enter_context(
+            ThreadedQGLoader(
+                file_path=train_path,
+                batch_size=args.batch_size,
+                rollout_steps=1,
+                split_name="train",
+                base_logger=logger,
+                buffer_size=10,
+                seed=np_rng.integers(2**32).item(),
+                num_workers=10,
+                fields=["q", "q_total_forcing"],
+            )
         )
-    )
-    val_epoch_fn = eqx.filter_jit(
-        make_sampler(
-            dt=args.dt,
-            num_samples=args.num_epoch_samples,
-            sample_shape=train_data.shape[1:],
+        val_loader = train_context.enter_context(
+            SimpleQGLoader(
+                file_path=val_path,
+                fields=["q"],
+            )
         )
-    )
+
+        # Training functions
+        train_batch_fn = eqx.filter_jit(
+            make_batch_computer(
+                batch_size=args.batch_size,
+                q_scaler=q_scaler,
+                forcing_scaler=forcing_scaler,
+            )
+        )
+        val_sample_fn = eqx.filter_jit(
+            make_sampler(
+                dt=args.dt,
+                sample_shape=(2, 64, 64),
+                q_scaler=q_scaler,
+                forcing_scaler=forcing_scaler,
+            )
+        )
+
+        # Running statistics
+        min_mean_loss = None
+
+        # Training loop
+        for epoch in range(1, args.num_epochs + 1):
+            logger.info("Starting epoch %d of %d", epoch, args.num_epochs)
+            # Training step
+            with contextlib.closing(train_loader.iter_batches()) as train_batch_iter:
+                state, rng_ctr, epoch_stats = do_epoch(
+                    train_state=state,
+                    train_rng=rng_ctr,
+                    batch_iter=itertools.islice(train_batch_iter, args.batch_per_epoch),
+                    batch_fn=train_batch_fn,
+                    logger=logger.getChild(f"{epoch:05d}_train"),
+                )
+            mean_loss = epoch_stats["mean_loss"]
+
+            # Save snapshots
+            if min_mean_loss is None or (math.isfinite(mean_loss) and mean_loss <= min_mean_loss):
+                min_mean_loss = mean_loss
+                save_network("best_loss", output_dir=weights_dir, state=state, base_logger=logger)
+            if epoch % args.save_interval == 0:
+                save_network("interval", output_dir=weights_dir, state=state, base_logger=logger)
+
+            # Validation step
+            if epoch % args.val_interval == 0:
+                logger.info("Starting validation for epoch %d", epoch)
+                val_samples, rng_ctr = do_validation(
+                    train_state=state,
+                    val_rng=rng_ctr,
+                    np_rng=np_rng,
+                    loader=val_loader,
+                    sample_fn=val_sample_fn,
+                    logger=logger.getChild(f"{epoch:05d}_val"),
+                    num_samples=args.num_val_samples,
+                )
+                np.save(samples_dir / f"samples_{epoch:05d}.npy", val_samples, allow_pickle=False)
+                logger.info("Saved samples to %s", f"samples_{epoch:05d}.npy")
+                val_samples = None
+
+            logger.info("Finished epoch %d", epoch)
 
     min_mean_loss = None
     train_rng, rng_ctr = jax.random.split(rng_ctr, 2)
