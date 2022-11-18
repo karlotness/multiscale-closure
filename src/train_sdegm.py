@@ -77,15 +77,16 @@ def make_batch_computer(batch_size, q_scaler, forcing_scaler, loss_weight_func=N
         return loss_weight_func(t) * jnp.mean((pred + noise / std) ** 2)
 
     def batch_loss(net, snap_q, snap_forcing, ts, rng):
-        n_batch = snapshots.shape[0]
+        assert snap_q.shape == snap_forcing.shape
+        n_batch = snap_q.shape[0]
         rngs = jnp.stack(jax.random.split(rng, n_batch))
         losses = jax.vmap(functools.partial(sample_loss, net=net))(snap_q, snap_forcing, ts, rngs)
         return jnp.mean(losses)
 
     def do_batch(batch, state, rng):
         # Extract batch components
-        batch_q = jax.vmap(q_scaler.scale)(batch.q)
-        batch_q_forcing = jax.vmap(forcing_scaler.scale)(batch.q_total_forcing)
+        batch_q = jax.vmap(q_scaler.scale)(jnp.squeeze(batch.q, 1))
+        batch_q_forcing = jax.vmap(forcing_scaler.scale)(jnp.squeeze(batch.q_total_forcing, 1))
         # Produce RNGs
         rng_times, rng_loss, rng_ctr = jax.random.split(rng, 3)
         # Sample times (one in each time bucket)
@@ -94,12 +95,8 @@ def make_batch_computer(batch_size, q_scaler, forcing_scaler, loss_weight_func=N
         # Compute losses
         loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, batch_q, batch_q_forcing, times, rng=rng_loss)
         # Update parameters (if loss is finite)
-        out_state = jax.lax.cond(
-            jnp.isfinite(loss),
-            lambda: state.apply_updates(grads),
-            lambda: state,
-        )
-        return return out_state, rng_ctr, loss
+        out_state = state.apply_updates(grads)
+        return out_state, rng_ctr, loss
 
     return do_batch
 
@@ -113,7 +110,7 @@ def do_epoch(train_state, train_rng, batch_iter, batch_fn, logger=None):
         train_state, train_rng, batch_loss = batch_fn(batch, train_state, train_rng)
         losses.append(batch_loss)
     epoch_end = time.perf_counter()
-    mean_loss = jax.device_get(jnp.mean(losses))
+    mean_loss = jax.device_get(jnp.mean(jnp.stack(losses)))
     final_loss = jax.device_get(losses[-1])
     logger.info("Finished epoch in %f sec", epoch_end - epoch_start)
     logger.info("Epoch mean loss %f", mean_loss)
@@ -152,7 +149,7 @@ def make_sampler(dt, sample_shape, q_scaler, forcing_scaler):
 
     def draw_samples(state, batch_q, rng):
         net = state.net
-        batch_q = jax.vmap(q_scaler.scale)(batch_q)
+        batch_q = jax.vmap(q_scaler.scale)(jnp.squeeze(batch_q, 1))
         num_samples = batch_q.shape[0]
         rng_ctr, *sample_rngs = jax.random.split(rng, num_samples + 1)
         sample_rngs = jnp.stack(sample_rngs)
@@ -172,7 +169,7 @@ def do_validation(train_state, val_rng, np_rng, loader, sample_fn, num_samples, 
     # Load and stack q components
     logger.info("Starting validation, drawing %d samples", num_samples)
     val_start = time.perf_counter()
-    batch_q = np.stack([loader.get_trajectory(traj=t, start=s, end=s+1) for t, s in zip(traj, step)])
+    batch_q = np.stack([loader.get_trajectory(traj=t, start=s, end=s+1).q for t, s in zip(traj, step)])
     samples, rng_ctr = sample_fn(state=train_state, batch_q=batch_q, rng=val_rng)
     samples = jax.device_get(samples)
     val_end = time.perf_counter()
@@ -315,7 +312,7 @@ def main():
                 state, rng_ctr, epoch_stats = do_epoch(
                     train_state=state,
                     train_rng=rng_ctr,
-                    batch_iter=itertools.islice(train_batch_iter, args.batch_per_epoch),
+                    batch_iter=itertools.islice(train_batch_iter, args.batches_per_epoch),
                     batch_fn=train_batch_fn,
                     logger=logger.getChild(f"{epoch:05d}_train"),
                 )
