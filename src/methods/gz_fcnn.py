@@ -11,11 +11,13 @@ from .eqx_modules import EasyPadConv
 class GZFCNN(eqx.Module):
     conv_seq: eqx.nn.Sequential
     img_size: int = eqx.static_field()
-    n_layers: int = eqx.static_field()
+    n_layers_in: int = eqx.static_field()
+    n_layers_out: int = eqx.static_field()
 
-    def __init__(self, img_size: int, n_layers: int, padding: str = "circular", *, key: Array):
+    def __init__(self, img_size: int, n_layers_in: int, n_layers_out: int, padding: str = "circular", *, key: Array):
         self.img_size = img_size
-        self.n_layers = n_layers
+        self.n_layers_in = n_layers_in
+        self.n_layers_out = n_layers_out
 
         features_kernels = [
             (128, (5, 5)),
@@ -25,10 +27,10 @@ class GZFCNN(eqx.Module):
             (32, (3, 3)),
             (32, (3, 3)),
             (32, (3, 3)),
-            (n_layers, (3, 3)),
+            (self.n_layers_out, (3, 3)),
         ]
         ops = []
-        prev_chans = n_layers + 1
+        prev_chans = self.n_layers_in + 1
         keys = jax.random.split(key, len(features_kernels))
         for (feature, kern_size), conv_key in zip(features_kernels, keys, strict=True):
             conv = EasyPadConv(
@@ -49,7 +51,7 @@ class GZFCNN(eqx.Module):
     def __call__(self, x: Array, t: Float, *, key: Array|None = None):
         assert x.ndim == 3
         assert x.shape[-2:] == (self.img_size, self.img_size)
-        assert x.shape[-3] == self.n_layers
+        assert x.shape[-3] == self.n_layers_in
         # Place time after x dimension
         x = jnp.concatenate(
             [

@@ -183,7 +183,8 @@ def do_validation(train_state, val_rng, np_rng, loader, sample_fn, num_samples, 
 def init_network(lr, rng):
     net = GZFCNN(
         img_size=64,
-        n_layers=4,
+        n_layers_in=4,
+        n_layers_out=2,
         key=rng,
     )
     optim = optax.adabelief(learning_rate=lr)
