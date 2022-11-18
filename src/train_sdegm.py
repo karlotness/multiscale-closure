@@ -273,7 +273,7 @@ def main():
                 base_logger=logger,
                 buffer_size=10,
                 seed=np_rng.integers(2**32).item(),
-                num_workers=10,
+                num_workers=min(64, args.batch_size),
                 fields=["q", "q_total_forcing"],
             )
         )
