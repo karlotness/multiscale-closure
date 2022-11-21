@@ -3,6 +3,7 @@
 # Intended to be applied to training set only
 import argparse
 import pathlib
+import itertools
 import random
 import numpy as np
 import h5py
@@ -52,6 +53,7 @@ def main():
         # Shuffle indices
         indices = np.arange(total_steps, dtype=np.uint64)
         rng.shuffle(indices)
+        trajs, steps = np.divmod(indices, num_steps)
         # Create compound dtypes
         data_dtype = np.dtype(
             [
@@ -65,30 +67,41 @@ def main():
                 ("step", np.uint32),
             ]
         )
+        num_chunks, rem = divmod(total_steps, CHUNK_SIZE)
+        num_chunks += (1 if rem != 0 else 0)
         # Create output record (empty)
         with h5py.File(out_path, "w") as out_data:
             data_dataset = out_data.create_dataset("shuffled", shape=(total_steps, ), dtype=data_dtype)
             source_dataset = out_data.create_dataset("source", shape=(total_steps, ), dtype=source_record_dtype)
-            cursor = 0
-            steps = np.arange(num_steps, dtype=np.uint32)
-            # Write data chunked by permutation
-            for traj in range(num_trajs):
-                logger.info("Shuffling traj %d", traj)
-                q_in = in_data["trajs"][f"traj{traj:05d}_q"]
-                forcing_in = in_data["trajs"][f"traj{traj:05d}_q_total_forcing"]
-                for batch_start in range(0, num_steps, CHUNK_SIZE):
-                    batch_end = batch_start + CHUNK_SIZE
-                    q_chunk = q_in[batch_start:batch_end]
-                    forcing_chunk = forcing_in[batch_start:batch_end]
-                    batch_steps = steps[batch_start:batch_end]
-                    batch_size = q_chunk.shape[0]
-                    save_idxs = indices[cursor:cursor+batch_size]
-                    cursor += batch_size
-                    # Write output
-                    for idx, q, forcing, step in zip(save_idxs, q_chunk, forcing_chunk, batch_steps, strict=True):
-                        data_dataset[idx] = np.array([(q, forcing)], dtype=data_dtype)
-                        source_dataset[idx] = np.array([(np.uint16(traj), step)], dtype=source_record_dtype)
-
+            in_trajs = in_data["trajs"]
+            for chunk, (start, end) in enumerate(itertools.pairwise(itertools.chain(range(0, total_steps, CHUNK_SIZE), [None]))):
+                if chunk % 100 == 0:
+                    logger.info("Starting chunk %d of %d", chunk, num_chunks)
+                q_chunk = []
+                q_forcing_chunk = []
+                source_traj_chunk = []
+                source_step_chunk = []
+                # Load data
+                for traj, step in zip(trajs[start:end], steps[start:end], strict="true"):
+                    q_chunk.append(in_trajs[f"traj{traj:05d}_q"][step])
+                    q_forcing_chunk.append(in_trajs[f"traj{traj:05d}_q_total_forcing"][step])
+                    source_traj_chunk.append(np.uint16(traj))
+                    source_step_chunk.append(np.uint32(step))
+                # Stack and write to file
+                data_dataset[start:end] = np.core.records.fromarrays(
+                    [
+                        np.stack(q_chunk),
+                        np.stack(q_forcing_chunk),
+                    ],
+                    dtype=data_dtype,
+                )
+                source_dataset[start:end] = np.core.records.fromarrays(
+                    [
+                        np.stack(source_traj_chunk),
+                        np.stack(source_step_chunk),
+                    ],
+                    dtype=source_record_dtype,
+                )
     logger.info("Finished shuffling data")
 
 
