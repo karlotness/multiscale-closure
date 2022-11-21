@@ -10,6 +10,7 @@ import contextlib
 import jax
 import jax.numpy as jnp
 import numpy as np
+import random
 import h5py
 from . import kernel
 from .qg_model import QGModel
@@ -550,3 +551,175 @@ class SimpleQGLoader:
     @staticmethod
     def make_reconstruct_state_func(small_model):
         return _make_partial_state_recomputer(small_model)
+
+
+@kernel.register_dataclass_pytree
+@dataclasses.dataclass
+class SnapshotStates:
+    q: jnp.ndarray
+    q_total_forcing: jnp.ndarray
+
+
+class ThreadedPreShuffledSnapshotLoader:
+    def __init__(
+            self,
+            file_path,
+            batch_size,
+            buffer_size=10,
+            chunk_size=61000,
+            seed=None,
+            base_logger=None,
+    ):
+        if base_logger is None:
+            base_logger = logging.getLogger("preshuffle_loader")
+        # Note: Loads only q and q_total_forcing
+        self.fields = ["q", "q_total_forcing"]
+        if seed is None:
+            seed = random.SystemRandom().randint(0, 2**32)
+        # Create queues
+        self._chunk_load_queue = queue.Queue(maxsize=1)
+        self._batch_queue = queue.Queue(maxsize=max(batch_size, 1))
+        self._stop_event = threading.Event()
+        # Spawn threads
+        self._chunk_load_thread = threading.Thread(
+            target=self._load_chunks,
+            daemon=True,
+            kwargs={
+                "file_path": file_path,
+                "chunk_size": chunk_size,
+                "chunk_load_queue": self._chunk_load_queue,
+                "stop_event": self._stop_event,
+                "seed": seed,
+                "logger": base_logger.getChild("chunk_loader"),
+            },
+        )
+        self._batch_thread = threading.Thread(
+            target=self._batch_chunks,
+            daemon=True,
+            kwargs={
+                "chunk_load_queue": self._chunk_load_queue,
+                "batch_queue": self._batch_queue,
+                "batch_size": batch_size,
+                "stop_event": self._stop_event,
+                "logger": base_logger.getChild("batcher"),
+            },
+        )
+        self._chunk_load_thread.start()
+        self._batch_thread.start()
+
+    @staticmethod
+    def _load_chunks(file_path, chunk_size, chunk_load_queue, stop_event, seed, logger):
+        logger.debug("starting chunk loader for size %d", chunk_size)
+        try:
+            rng = np.random.default_rng(seed=seed)
+            with h5py.File(file_path, "r") as in_file:
+                dataset = in_file["shuffled"]
+                num_steps = dataset.shape[0]
+                valid_range = num_steps - chunk_size
+                while not stop_event.is_set():
+                    start = int(rng.integers(valid_range, dtype=np.uint64).item())
+                    end = start + chunk_size
+                    logger.debug("loaded chunk from %d to %d", start, end)
+                    chunk = dataset[start:end]
+                    rng.shuffle(chunk, axis=0)
+                    chunk_load_queue.put(chunk)
+                    chunk = None
+        except Exception:
+            logger.exception("error in background chunk loader")
+            chunk_load_queue.put(None)
+            raise
+        finally:
+            logger.debug("chunk loader exiting")
+
+    @staticmethod
+    def _batch_chunks(chunk_load_queue, batch_queue, batch_size, stop_event, logger):
+        logger.debug("starting batch producer")
+        try:
+            construct_batch = []
+            batch_steps = 0
+            while not stop_event.is_set():
+                # Get a chunk
+                chunk = chunk_load_queue.get()
+                cursor = 0
+                if chunk is None:
+                    # Time to exit
+                    logger.debug("got None chunk, chunk loader exited")
+                    break
+                while cursor < chunk.shape[0] and not stop_event.is_set():
+                    # Keep consuming from this chunk as long as we can
+                    remaining_steps = batch_size - batch_steps
+                    construct_batch.append(chunk[cursor:cursor+remaining_steps])
+                    consumed = construct_batch[-1].shape[0]
+                    cursor += consumed
+                    batch_steps += consumed
+                    if batch_steps >= batch_size:
+                        # A new batch is ready
+                        construct_batch = np.concatenate(construct_batch, axis=0)
+                        batch_queue.put(
+                            jax.device_put(
+                                SnapshotStates(
+                                    q=construct_batch["q"],
+                                    q_total_forcing=construct_batch["q_total_forcing"],
+                                )
+                            )
+                        )
+                        construct_batch = []
+                        batch_steps = 0
+        except Exception:
+            logger.exception("error in background batch producer")
+            batch_queue.put(None)
+            raise
+        finally:
+            logger.debug("batch producer exiting")
+
+    def next_batch(self):
+        if self._stop_event.is_set():
+            raise ValueError("Closed dataset, cannot load batches")
+        res = self._batch_queue.get()
+        if res is None:
+            self.close()
+            raise RuntimeError("background worker stopped prematurely")
+        return res
+
+    def iter_batches(self):
+        # A generator over the batches
+        while True:
+            yield self.next_batch()
+
+    def close(self):
+        if self._stop_event.is_set():
+            # Already cleaned up
+            return
+        self._stop_event.set()
+        # Stop the chunk load thread first
+        try:
+            while True:
+                # Clear it's queue
+                self._chunk_load_queue.get_nowait()
+        except queue.Empty:
+            pass
+        self._chunk_load_thread.join()
+        # Now that it is stopped, clear the queue again and place a None
+        # This will ensure the batch thread exits if it hasn't already
+        try:
+            self._chunk_load_queue.get_nowait()
+        except queue.Empty:
+            pass
+        self._chunk_load_queue.put(None)
+        # Next, stop the batch thread
+        try:
+            while True:
+                self._batch_queue.get_nowait()
+        except queue.Empty:
+            pass
+        # Join the second thread
+        self._batch_thread.join()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        self.close()
