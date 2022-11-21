@@ -75,8 +75,7 @@ def main():
             source_dataset = out_data.create_dataset("source", shape=(total_steps, ), dtype=source_record_dtype)
             in_trajs = in_data["trajs"]
             for chunk, (start, end) in enumerate(itertools.pairwise(itertools.chain(range(0, total_steps, CHUNK_SIZE), [None]))):
-                if chunk % 100 == 0:
-                    logger.info("Starting chunk %d of %d", chunk, num_chunks)
+                logger.info("Starting chunk %d of %d", chunk, num_chunks)
                 q_chunk = []
                 q_forcing_chunk = []
                 source_traj_chunk = []
