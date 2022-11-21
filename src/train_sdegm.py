@@ -271,7 +271,7 @@ def main():
                 buffer_size=10,
                 chunk_size=32000,
                 seed=np_rng.integers(2**32).item(),
-                base_logger=logger.getLogger("train_loader"),
+                base_logger=logger.getChild("train_loader"),
             )
         )
         val_loader = train_context.enter_context(
