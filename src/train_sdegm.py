@@ -14,7 +14,7 @@ import numpy as np
 import logging
 import time
 import functools
-from systems.qg.loader import ThreadedQGLoader, SimpleQGLoader
+from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader
 from methods.gz_fcnn import GZFCNN
 import jax_utils
 import utils
@@ -245,7 +245,7 @@ def main():
 
     # Configure required elements for training
     rng_ctr = jax.random.PRNGKey(seed=np_rng.integers(2**32).item())
-    train_path = pathlib.Path(args.train_set) / "data.hdf5"
+    train_path = pathlib.Path(args.train_set) / "shuffled.hdf5"
     val_path = pathlib.Path(args.val_set) / "data.hdf5"
     weights_dir = out_dir / "weights"
     weights_dir.mkdir(exist_ok=True)
@@ -265,16 +265,13 @@ def main():
     with contextlib.ExitStack() as train_context:
         # Open data files
         train_loader = train_context.enter_context(
-            ThreadedQGLoader(
+            ThreadedPreShuffledSnapshotLoader(
                 file_path=train_path,
                 batch_size=args.batch_size,
-                rollout_steps=1,
-                split_name="train",
-                base_logger=logger,
                 buffer_size=10,
+                chunk_size=32000,
                 seed=np_rng.integers(2**32).item(),
-                num_workers=min(64, args.batch_size),
-                fields=["q", "q_total_forcing"],
+                base_logger=logger.getLogger("train_loader"),
             )
         )
         val_loader = train_context.enter_context(
