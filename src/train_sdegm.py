@@ -85,8 +85,8 @@ def make_batch_computer(batch_size, q_scaler, forcing_scaler, loss_weight_func=N
 
     def do_batch(batch, state, rng):
         # Extract batch components
-        batch_q = jax.vmap(q_scaler.scale)(jnp.squeeze(batch.q, 1))
-        batch_q_forcing = jax.vmap(forcing_scaler.scale)(jnp.squeeze(batch.q_total_forcing, 1))
+        batch_q = jax.vmap(q_scaler.scale)(batch.q)
+        batch_q_forcing = jax.vmap(forcing_scaler.scale)(batch.q_total_forcing)
         # Produce RNGs
         rng_times, rng_loss, rng_ctr = jax.random.split(rng, 3)
         # Sample times (one in each time bucket)
