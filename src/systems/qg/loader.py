@@ -694,7 +694,7 @@ class ThreadedPreShuffledSnapshotLoader:
         # Stop the chunk load thread first
         try:
             while True:
-                # Clear it's queue
+                # Clear its queue
                 self._chunk_load_queue.get_nowait()
         except queue.Empty:
             pass
