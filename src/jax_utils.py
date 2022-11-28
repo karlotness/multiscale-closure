@@ -134,15 +134,24 @@ def icbrt(n):
 
 
 def _get_target_length(xs, length):
-    # This code by me
-    if length is not None:
-        return operator.index(length)
-    else:
-        # Ensure lengths are unique
+    if xs is not None:
         leaf_lengths = set(operator.index(x.shape[0]) for x in jax.tree_util.tree_leaves(xs))
         if len(leaf_lengths) != 1:
-            raise ValueError(f"inconsistent lengths for tree input: {leaf_lengths}")
-        return next(iter(leaf_lengths))
+            raise ValueError(f"inconsistent lengths for tree input: {set(leaf_lengths)}")
+        leaf_lengths = next(iter(leaf_lengths))
+    else:
+        leaf_lengths = None
+    if length is not None:
+        length = operator.index(length)
+    match (leaf_lengths, length):
+        case (None, None):
+            raise ValueError("invalid target length for None inputs")
+        case (l, None) | (None, l):
+            return l
+        case (la, lb) if la == lb:
+            return la
+        case _:
+            raise ValueError(f"ambiguous lengths for scan {leaf_lengths} vs {length}")
 
 
 def checkpoint_chunked_scan(f, init, xs, length=None, chunk_size=5):
