@@ -6,6 +6,48 @@ import jax.numpy as jnp
 import equinox as eqx
 
 
+def strided_scan(f, init, xs, length=None, reverse=False, unroll=1, stride=1):
+    if reverse:
+        raise ValueError(f"reversed scan is not supported")
+    stride = operator.index(stride)
+    if stride < 1:
+        raise ValueError(f"illegal stride value {stride}")
+    elif stride == 1:
+        # Trivial case: stride=1 -> do normal scan
+        return jax.lax.scan(f, init, xs, length=length, reverse=reverse, unroll=unroll)
+    # Continue with full processing
+    target_length = _get_target_length(xs, length)
+    chunks, remainder = divmod(target_length, stride)
+    array_head = chunks * stride
+    # Process xs into chunks and remainder
+    if xs is None:
+        chunked_xs = None
+        remainder_xs = None
+    else:
+        chunked_xs = xs[:array_head].reshape((chunks, stride) + xs.shape[1:])
+        remainder_xs = xs[-remainder:]
+    # Do main chunked scan
+    def inner_scan(carry, x):
+        f_carry, _y = carry
+        new_carry, y = f(f_carry, x)
+        return (new_carry, y), None
+
+    def outer_scan(carry, x):
+        dummy_carry, dummy_y = f(carry, x[0] if x is not None else None)
+        (last_carry, y), _ = jax.lax.scan(inner_scan, (carry, dummy_y), x, length=stride, reverse=reverse, unroll=unroll)
+        return last_carry, y
+
+    carry, ys = jax.lax.scan(outer_scan, init, chunked_xs, length=chunks, reverse=reverse, unroll=unroll)
+    # Do remainder scan
+    def remainder_scan(carry, x):
+        new_carry, _y = f(carry, x)
+        return new_carry, None
+
+    carry, _remys = jax.lax.scan(remainder_scan, carry, remainder_xs, length=remainder, reverse=reverse, unroll=unroll)
+    # Return stacks from the chunk, and final state from the remainder
+    return carry, ys
+
+
 @jax.tree_util.register_pytree_node_class
 class EquinoxTrainState:
     # Fields:
