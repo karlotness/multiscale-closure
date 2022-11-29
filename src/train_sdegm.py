@@ -140,7 +140,7 @@ def make_sampler(dt, sample_shape, q_scaler, forcing_scaler):
     def drift(t, y, args):
         net, q = args
         beta = beta_func(t)
-        net_input = jnp.concatenate([y, q], axis=0).astype(np.float32)
+        net_input = jnp.concatenate([y, q], axis=0)
         return -0.5 * beta * (y + net(net_input, t))
 
     def draw_single_sample(batch_q, rng, net):
