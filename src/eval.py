@@ -6,13 +6,16 @@ import logging
 import json
 import jax
 import jax.numpy as jnp
-import flax.serialization
+import equinox as eqx
 import numpy as np
-from flax.core import frozen_dict
 from systems.qg.loader import SimpleQGLoader, qg_model_from_hdf5
 from systems.qg import utils as qg_utils
 import utils
-from methods import ARCHITECTURES
+import math
+import dataclasses
+from methods.gz_fcnn import GZFCNN
+from train_sdegm import make_sampler, make_scalers
+import jax_utils
 
 
 parser = argparse.ArgumentParser(description="Evaluate neural networks for closure")
@@ -33,50 +36,78 @@ def relerr_loss(real_step, est_step):
 
 
 def load_network(weight_dir, weight_type, small_model):
-    weight_dir = pathlib.Path(weight_dir)
-    dummy_q = jnp.zeros((small_model.nz, small_model.ny, small_model.nx))
-    dummy_u = jnp.zeros((small_model.nz, small_model.ny, small_model.nx))
-    dummy_v = jnp.zeros((small_model.nz, small_model.ny, small_model.nx))
-    # Load weights
-    with open(weight_dir / f"{weight_type}.json", "r", encoding="utf") as args_file:
-        args = json.load(args_file)
-    net = ARCHITECTURES[args["architecture"]](**args["params"])
-    # Initialize the network with dummy values
-    rng = jax.random.PRNGKey(seed=0)
-    match net.param_type:
-        case "uv":
-            params = net.init(rng, dummy_u, dummy_v, False)
-        case "q":
-            params = net.init(rng, dummy_q, dummy_u, dummy_v, False)
-        case _:
-            raise ValueError(f"invalid parameterization type {net.param_type}")
-    # Now, load from saved values
-    if "batch_stats" not in params:
-        params = params.copy(batch_stats=frozen_dict.freeze({}))
-    with open(weight_dir / f"{weight_type}.flaxnn", "rb") as weights_file:
-        params = flax.serialization.from_bytes(params, weights_file.read())
-    batch_stats = params["batch_stats"]
-    params = params["params"]
-    return net, params, batch_stats
+    net = GZFCNN(
+        img_size=64,
+        n_layers_in=4,
+        n_layers_out=2,
+        key=jax.random.PRNGKey(0),
+    )
+    # Ensure all weights are float32
+    def leaf_map(leaf):
+        if isinstance(leaf, jnp.ndarray):
+            if leaf.dtype == jnp.dtype(jnp.float64):
+                return leaf.astype(jnp.float32)
+            if leaf.dtype == jnp.dtype(jnp.complex128):
+                return leaf.astype(jnp.complex64)
+        return leaf
+
+    net = jax.tree_util.tree_map(leaf_map, net)
+    net = eqx.tree_deserialise_leaves(weight_dir / f"{weight_type}.eqx", net)
+    return net
 
 
-def make_eval_traj_computer(net, params, batch_stats, small_model, loss_funcs_dict):
-    apply_fn = functools.partial(net.apply, method=net.parameterization)
-    memory_init_fn = functools.partial(net.apply, method=net.init_memory)
+def make_eval_traj_computer(small_model, num_steps, observe_interval=1, q_param_func=None):
+    total_steps = num_steps * observe_interval
 
-    def do_eval(traj):
-        traj = SimpleQGLoader.make_reconstruct_state_func(small_model)(traj)
-        first_step = qg_utils.slice_kernel_state(traj, 0)
-        tail_steps = qg_utils.slice_kernel_state(traj, slice(1, None))
-        num_steps = traj.q.shape[0] - 1
-        new_states, _last_memory = qg_utils.get_online_rollout(first_step, num_steps, apply_fn, params, small_model, memory_init_fn, batch_stats, net.param_type, False)
-        # Compute losses
-        return {
-            loss_name: jax.vmap(loss_func)(tail_steps.q, new_states.q)
-            for loss_name, loss_func in loss_funcs_dict.items()
-        }
+    def state_scan(carry, x):
+        state, param_state = carry
+
+        def wrap_q_param(system_state):
+            nonlocal param_state
+            dq, param_state = q_param_func(system_state, param_state)
+            return dq
+
+        new_state = small_model.step_forward(state, q_param_func=wrap_q_param if q_param_func is not None else None)
+        return (new_state, param_state), new_state
+
+    def do_eval(initial_state, param_state=None):
+        (final_state, final_param_state), observed_states = jax_utils.strided_scan(
+            state_scan,
+            init=(initial_state, param_state),
+            xs=None,
+            length=num_steps,
+            stride=observe_interval,
+        )
+        return observed_states
 
     return do_eval
+
+
+def make_net_eval_traj_computer(net, small_model, num_steps, observe_interval=1, dt=0.01):
+    q_scaler, forcing_scaler = make_scalers()
+    draw_samples = make_sampler(
+        dt=dt,
+        sample_shape=(2, 64, 64),
+        q_scaler=q_scaler,
+        forcing_scaler=forcing_scaler,
+    )
+    DummyTrainState = dataclasses.make_dataclass("DummyTrainState", ["net"])
+
+    def q_param(state, key):
+        train_state = DummyTrainState(net=net)
+        # Add batch and time dimensions
+        batch_q = jnp.expand_dims(state.q, (0, 1))
+        rng = key
+        # Draw single sample for q subgrid forcing
+        samples, new_rng = draw_samples(train_state, batch_q, rng)
+        return samples.squeeze(0), new_rng
+
+    return make_eval_traj_computer(
+        small_model=small_model,
+        num_steps=num_steps,
+        observe_interval=observe_interval,
+        q_param_func=q_param,
+    )
 
 
 def main():
