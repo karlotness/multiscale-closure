@@ -17,6 +17,7 @@ import functools
 from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader
 from methods.gz_fcnn import GZFCNN
 import jax_utils
+import diffrax_utils
 import utils
 
 
@@ -126,23 +127,26 @@ def make_sampler(dt, sample_shape, q_scaler, forcing_scaler):
     t0 = 0.0
     t1 = 1.0
     max_steps = math.ceil((t1 - t0) / dt) + 2
+    t0 = jnp.float32(t0)
+    t1 = jnp.float32(t1)
+    dt = jnp.float32(dt)
 
     def beta_func(t):
-        return 18 * t**2
+        return jnp.float32(18 * t**2)
 
     def int_beta_func(t):
-        return 6 * t**3
+        return jnp.float32(6 * t**3)
 
     def drift(t, y, args):
         net, q = args
         beta = beta_func(t)
-        net_input = jnp.concatenate([y, q], axis=0)
+        net_input = jnp.concatenate([y, q], axis=0).astype(np.float32)
         return -0.5 * beta * (y + net(net_input, t))
 
     def draw_single_sample(batch_q, rng, net):
         snapshot = jax.random.normal(rng, sample_shape, dtype=jnp.float32)
         terms = diffrax.ODETerm(drift)
-        solver = diffrax.Tsit5()
+        solver = diffrax_utils.Tsit5Float32()
         saveat = diffrax.SaveAt(t1=True)
         sol = diffrax.diffeqsolve(terms, solver, t1, t0, -dt, snapshot, saveat=saveat, adjoint=diffrax.NoAdjoint(), max_steps=max_steps, args=(net, batch_q))
         return sol.ys[0]
@@ -194,8 +198,8 @@ def init_network(lr, rng):
 
 class Scaler:
     def __init__(self, mean, var):
-        self.mean = np.expand_dims(mean, (-1, -2))
-        self.var = np.expand_dims(var, (-1, -2))
+        self.mean = np.expand_dims(mean, (-1, -2)).astype(np.float32)
+        self.var = np.expand_dims(var, (-1, -2)).astype(np.float32)
         self.std = np.sqrt(self.var)
 
     def scale(self, a):
