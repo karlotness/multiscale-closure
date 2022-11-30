@@ -23,9 +23,19 @@ def strided_scan(f, init, xs, length=None, reverse=False, unroll=1, stride=1):
     if xs is None:
         chunked_xs = None
         remainder_xs = None
+        dummy_in_tree = None
     else:
         chunked_xs = xs[:array_head].reshape((chunks, stride) + xs.shape[1:])
         remainder_xs = xs[-remainder:]
+        dummy_in_tree = jax.tree_util.tree_map(operator.itemgetter(0), xs)
+
+    def map_dummy_tree(l):
+        return jnp.zeros(shape=l.shape, dtype=l.dtype)
+
+    # Compute dummy_y_init
+    _jaxpr, out_treedef = jax.make_jaxpr(f, return_shape=True)(init, dummy_in_tree)
+    dummy_y_init = jax.tree_util.tree_map(map_dummy_tree, out_treedef[1])
+
     # Do main chunked scan
     def inner_scan(carry, x):
         f_carry, _y = carry
@@ -33,8 +43,7 @@ def strided_scan(f, init, xs, length=None, reverse=False, unroll=1, stride=1):
         return (new_carry, y), None
 
     def outer_scan(carry, x):
-        dummy_carry, dummy_y = f(carry, x[0] if x is not None else None)
-        (last_carry, y), _ = jax.lax.scan(inner_scan, (carry, dummy_y), x, length=stride, reverse=reverse, unroll=unroll)
+        (last_carry, y), _ = jax.lax.scan(inner_scan, (carry, dummy_y_init), x, length=stride, reverse=reverse, unroll=unroll)
         return last_carry, y
 
     carry, ys = jax.lax.scan(outer_scan, init, chunked_xs, length=chunks, reverse=reverse, unroll=unroll)
