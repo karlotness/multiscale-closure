@@ -25,8 +25,8 @@ def strided_scan(f, init, xs, length=None, reverse=False, unroll=1, stride=1):
         remainder_xs = None
         dummy_in_tree = None
     else:
-        chunked_xs = xs[:array_head].reshape((chunks, stride) + xs.shape[1:])
-        remainder_xs = xs[-remainder:]
+        chunked_xs = jax.tree_util.tree_map(lambda l: l[:array_head].reshape((chunks, stride) + xs.shape[1:]), xs)
+        remainder_xs = jax.tree_util.tree_map(operator.itemgetter(slice(-remainder, None)), xs)
         dummy_in_tree = jax.tree_util.tree_map(operator.itemgetter(0), xs)
 
     def map_dummy_tree(l):
