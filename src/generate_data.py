@@ -7,6 +7,7 @@ import contextlib
 import math
 import os
 import ast
+import sys
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -247,11 +248,8 @@ if __name__ == "__main__":
     logger = logging.getLogger("generate_data")
     logger.info("Arguments: %s", vars(args))
     git_info = utils.get_git_info(base_logger=logger)
-    if not ast.literal_eval(os.environ.get("JAX_ENABLE_X64", "False")):
-        logger.warning("JAX float64 support not enabled, this causes numerical issues")
-        logger.warning("set environment variable JAX_ENABLE_X64=True")
-    else:
-        logger.info("JAX float64 support enabled: JAX_ENABLE_X64=%s", os.environ["JAX_ENABLE_X64"])
+    if not utils.check_environment_variables(base_logger=logger):
+        sys.exit(1)
     if git_info is not None:
         logger.info(
             "Running on commit %s (%s worktree)",

@@ -6,6 +6,29 @@ import os
 import pathlib
 
 
+def check_environment_variables(base_logger=None):
+    if base_logger:
+        logger = base_logger.getChild("jax_env_check")
+    else:
+        logger = logging.getLogger("jax_env_check")
+    ok = True
+    if "JAX_ENABLE_X64" not in os.environ or os.environ["JAX_ENABLE_X64"] != "True":
+        # Float64 not enabled
+        ok = False
+        logger.warning("JAX float64 support is not enabled, this causes numerical issues in QG")
+        logger.info("set environment variable JAX_ENABLE_X64=True")
+    else:
+        logger.info("JAX float64 support enabled")
+    if "JAX_DEFAULT_DTYPE_BITS" not in os.environ or os.environ["JAX_DEFAULT_DTYPE_BITS"] != "32":
+        # wrong default dtype size
+        ok = False
+        logger.warning("Default dtype size is not 32bits. This will create float64 constants by default")
+        logger.info("set environment variable JAX_DEFAULT_DTYPE_BITS=32")
+    else:
+        logger.info("JAX dtypes defaulting to 32 bits")
+    return ok
+
+
 def set_up_logging(level="info", out_file=None):
     num_level = getattr(logging, level.upper(), None)
     if not isinstance(num_level, int):

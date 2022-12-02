@@ -4,6 +4,7 @@ import functools
 import utils
 import logging
 import json
+import sys
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -136,6 +137,8 @@ def main():
             git_info.hash,
             "clean" if git_info.clean_worktree else "dirty"
         )
+    if not utils.check_environment_variables(base_logger=logger):
+        sys.exit(1)
     logger.info("Saving results to: %s", out_dir)
     # Find the training data file
     eval_file = pathlib.Path(args.eval_set) / "data.hdf5"
