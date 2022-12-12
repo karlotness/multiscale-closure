@@ -196,6 +196,7 @@ def init_network(lr, rng):
     return state
 
 
+@jax.tree_util.register_pytree_node_class
 class Scaler:
     def __init__(self, mean, var):
         self.mean = np.expand_dims(mean, (-1, -2)).astype(np.float32)
@@ -207,6 +208,18 @@ class Scaler:
 
     def unscale(self, a):
         return (a * self.std) + self.mean
+
+    def tree_flatten(self):
+        return (self.mean, self.var, self.std), None
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        mean, var, std = children
+        obj = cls.__new__(cls)
+        obj.mean = mean
+        obj.var = var
+        obj.std = std
+        return obj
 
 
 def make_scalers():
