@@ -27,11 +27,10 @@ def make_spectrum_computer(type='power', averaging=False, truncate=False, includ
         # Package for return
         return sp, k
 
-    def spectrum_computer(*_x):
-        x = []
-        for xx in _x:
-            # TODO: Normalize dimensions [run, time, level, y, x]
-            x.append(xx)
+    def spectrum_computer(*x):
+        if any(xx.ndim != 5 for xx in x):
+            # Expect dimensions: [run, time, lev, Ny, Nx]
+            raise ValueError(f"wrong number of dimensions on spectrum input need 5 had {xx.ndim}")
 
         match type:
             case "power":
