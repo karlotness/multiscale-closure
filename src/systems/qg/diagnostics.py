@@ -1,0 +1,57 @@
+# Derived from code courtesy of Pavel Perezhogin
+
+import jax.numpy as jnp
+import jax
+from .spectral import make_spectrum_computer
+from .kernel import register_dataclass_pytree
+
+@register_dataclass_pytree
+class SubgridScoreResult:
+    l2_mean: jnp.ndarray
+    l2_total: jnp.ndarray
+    l2_residual: jnp.ndarray
+    var_ratio: jnp.ndarray
+
+
+def subgrid_scores(true, mean, gen):
+    """
+    Docs from original code:
+    Compute scalar metrics for three components of subgrid forcing:
+    - Mean subgrid forcing      ~ close to true forcing in MSE
+    - Generated subgrid forcing ~ close to true forcing in spectrum
+    - Genereted residual        ~ close to true residual in spectrum
+    true - xarray with true forcing
+    mean - mean prediction
+    gen  - generated prediction
+
+    Result is score, i.e. 1-mse/normalization
+
+    Here we assume that dataset has dimensions run x time x lev x Ny x Nx
+    """
+    def l2(x, x_true):
+        dims = tuple(d for d in range(-x.ndim, 0) if d != -3)
+        return jnp.mean(jnp.sqrt(jnp.mean((x - x_true)**2, axis=dims) / jnp.mean((x_true**2), axis=dims)))
+
+    sp = make_spectrum_computer(type="power", averaging=False, truncate=False, include_k=False)
+
+    l2_mean = l2(mean, true)
+    sp_true = sp(true)
+    sp_gen = sp(gen)
+    l2_total = l2(sp_gen, sp_true)
+    sp_true_res = sp(true - mean)
+    sp_gen_res = sp(gen - mean)
+    l2_residual = l2(sp_gen_res, sp_true_res)
+
+    # Compute var_ratio
+    gen_res = gen - mean
+    true_res = true - mean
+    dims = tuple(d for d in range(-mean.ndim, 0) if d != -3)
+    var_ratio = jnp.array(jnp.mean((gen_res**2) axis=dims) / jnp.mean(true_res**2, axis=dims))
+
+    # Return results
+    return SubgridScoreResult(
+        l2_mean=l2_mean,
+        l2_total=l2_total,
+        l2_residual=l2_residual,
+        var_ratio=var_ratio,
+    )
