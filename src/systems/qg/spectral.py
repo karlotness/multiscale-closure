@@ -6,7 +6,7 @@ import functools
 from .qg_model import QGModel
 
 
-def make_spectrum_computer(type='power', averaging=False, truncate=False, include_k=False):
+def make_spectrum_computer(type='power', averaging=False, truncate=False):
 
     def fft2d(arr):
         M = arr.shape[-1] * arr.shape[-2]
@@ -21,16 +21,16 @@ def make_spectrum_computer(type='power', averaging=False, truncate=False, includ
             raise ValueError("unsupported spectrum type 'cross_layer'")
 
         def _comp_ispec(af):
-            k, sp = calc_ispec(m, af, averaging=averaging, truncate=truncate)
-            return k, sp
+            _k, sp = calc_ispec(m, af, averaging=averaging, truncate=truncate)
+            return sp
         sp = jax.vmap(_comp_ispec)(af2)
         # Package for return
-        return sp, k
+        return sp
 
     def spectrum_computer(*x):
         if any(xx.ndim != 5 for xx in x):
             # Expect dimensions: [run, time, lev, Ny, Nx]
-            raise ValueError(f"wrong number of dimensions on spectrum input need 5 had {xx.ndim}")
+            raise ValueError(f"wrong number of dimensions on spectrum input need 5 for [run, time, lev, Ny, Nx]")
 
         match type:
             case "power":
@@ -44,20 +44,23 @@ def make_spectrum_computer(type='power', averaging=False, truncate=False, includ
 
         af2 = jnp.mean(af2, axis=(0, 1))
 
-        sp, k = isotropize(af2, *x)
+        sp = isotropize(af2, *x)
 
-        if include_k:
-            return sp, k
-        else:
-            return sp
+        return sp
 
     return spectrum_computer
 
 
 def calc_ispec(model, var_dens, averaging=True, truncate=True, nd_wavenumber=False, nfactor=1):
     # account for complex conjugate
-    var_dens[...,0] /= 2
-    var_dens[...,-1] /= 2
+    jnp.concatenate(
+        [
+            jnp.expand_dims(var_dens[..., 0] / 2, -1),
+            var_dens[..., 1:-1],
+            jnp.expand_dims(var_dens[..., -1] / 2, -1),
+        ],
+        axis=-1
+    )
 
     ll_max = jnp.max(jnp.abs(model.ll))
     kk_max = jnp.max(jnp.abs(model.kk))
@@ -74,12 +77,27 @@ def calc_ispec(model, var_dens, averaging=True, truncate=True, nd_wavenumber=Fal
     # left border of bins
     kr = jnp.arange(kmin, kmax-dkr, dkr)
 
+    # Shape for nx=64 -> wv=(64, 33), kr=(31,), dkr=(), var_dens=(64, 33)
+    # so fkr should have shape (31, 64, 33)
+
     if averaging:
-        fkr = (model.wv >= kr) & (model.wv <= kr + dkr)
-        phr = jnp.vmap(functools.partial(jnp.mean, where=fkr), var_dens) * (kr + dkr / 2) * jnp.pi / (model.dk * model.dl)
+
+        def _avg(kri):
+            fkr = (model.wv >= kri) & (model.wv <= kri + dkr)
+            return jax.lax.cond(
+                jnp.any(fkr),
+                (lambda: jnp.mean(var_dens, where=fkr) * (kri + dkr / 2) * jnp.pi / (model.dk * model.dl)),
+                (lambda: jnp.zeros_like(var_dens, shape=())),
+            )
+
+        phr = jax.vmap(_avg)(kr)
     else:
-        fkr = (model.wv >= kr) & (model.wv < kr + dkr)
-        phr = jnp.vmap(functools.partial(jnp.sum, where=fkr), var_dens) / dkr
+
+        def _sum(kri):
+            fkr = (model.wv >= kri) & (model.wv < kri + dkr)
+            return jnp.sum(var_dens, where=fkr) / dkr
+
+        phr = jax.vmap(_sum)(kr)
 
     phr = phr * 2
 
