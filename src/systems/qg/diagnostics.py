@@ -1,11 +1,14 @@
 # Derived from code courtesy of Pavel Perezhogin
 
+import dataclasses
 import jax.numpy as jnp
 import jax
 from .spectral import make_spectrum_computer
 from .kernel import register_dataclass_pytree
 
+
 @register_dataclass_pytree
+@dataclasses.dataclass
 class SubgridScoreResult:
     l2_mean: jnp.ndarray
     l2_total: jnp.ndarray
@@ -32,7 +35,7 @@ def subgrid_scores(true, mean, gen):
         dims = tuple(d for d in range(-x.ndim, 0) if d != -3)
         return jnp.mean(jnp.sqrt(jnp.mean((x - x_true)**2, axis=dims) / jnp.mean((x_true**2), axis=dims)))
 
-    sp = make_spectrum_computer(type="power", averaging=False, truncate=False, include_k=False)
+    sp = make_spectrum_computer(type="power", averaging=False, truncate=False)
 
     l2_mean = l2(mean, true)
     sp_true = sp(true)
@@ -46,7 +49,7 @@ def subgrid_scores(true, mean, gen):
     gen_res = gen - mean
     true_res = true - mean
     dims = tuple(d for d in range(-mean.ndim, 0) if d != -3)
-    var_ratio = jnp.array(jnp.mean((gen_res**2) axis=dims) / jnp.mean(true_res**2, axis=dims))
+    var_ratio = jnp.array(jnp.mean(gen_res**2, axis=dims) / jnp.mean(true_res**2, axis=dims))
 
     # Return results
     return SubgridScoreResult(
