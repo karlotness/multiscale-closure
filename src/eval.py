@@ -6,6 +6,8 @@ import logging
 import types
 import json
 import sys
+import random
+import operator
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -60,7 +62,7 @@ def load_network(weight_file):
         return leaf
 
     net = jax.tree_util.tree_map(leaf_map, net)
-    net = eqx.tree_deserialise_leaves(weight_dir / f"{weight_type}.eqx", net)
+    net = eqx.tree_deserialise_leaves(weight_file, net)
     return net
 
 
@@ -105,7 +107,7 @@ def make_simple_sampler(net, dt=0.01, sample_shape=(2, 64, 64)):
         assert q.ndim == 3
         # Expand to have batch and time dimensions
         batch_q = jnp.expand_dims(q, (0, 1))
-        sample, _new_rng = draw_samples(train_state, batch_q, rng)
+        sample, _new_rng = base_sampler(train_state, batch_q, rng)
         return jnp.squeeze(sample, 0)
 
     return draw_sample
@@ -148,14 +150,14 @@ def run_generative_offline_stats(net, eval_file, num_step_samples, spectrum_seed
         assert q_stack.shape == forcing_stack.shape
         num_qs = q_stack.shape[0]
         rng = jax.random.split(rng_ctr, num_qs)
-        mean_samples = jax.vmap(inner_sample)(q, rng)
+        mean_samples = jax.vmap(inner_sample)(q_stack, rng)
         # Mean samples has shape (num_qs, num_means, forcing...)
         single_samples = mean_samples[:, 0]
         means = jnp.mean(mean_samples, axis=1)
         stats = qg_spec_diag.subgrid_scores(
-            true=forcing_stack,
-            mean=means,
-            gen=single_samples,
+            true=jnp.expand_dims(forcing_stack, 1),
+            mean=jnp.expand_dims(means, 1),
+            gen=jnp.expand_dims(single_samples, 1),
         )
         return stats
 
@@ -174,12 +176,12 @@ def run_generative_offline_stats(net, eval_file, num_step_samples, spectrum_seed
         q_stack = []
         forcing_stack = []
         for traj, step in zip(sample_trajs, sample_steps):
-            loaded = eval_loader.get_trajectory(traj=traj, start=step, end=step+1)
+            loaded = eval_loader.get_trajectory(traj=operator.index(traj), start=operator.index(step), end=operator.index(step) + 1)
             q_stack.append(loaded.q)
             forcing_stack.append(loaded.q_total_forcing)
         loaded = None
     q_stack = jnp.concatenate(q_stack, axis=0)
-    forcing_stack = jnp.concatenate(q_stack, axis=0)
+    forcing_stack = jnp.concatenate(forcing_stack, axis=0)
     logger.info("Finished loading evaluation data")
     # With loaded data on device, compute statistics
     logger.info("Starting statistics computation")
@@ -281,47 +283,6 @@ def main():
     json_results["gen_offline_stats"] = gen_json_res
     bulk_results.update({f"gen_offline_stats_{k}": v for k, v in gen_bulk_res.items()})
 
-    # TRAJECTORY ROLLOUT MSES
-    # Evaluate over each trajectory in turn
-    json_results["traj_info"] = {}
-    with SimpleQGLoader(eval_file) as eval_loader:
-        eval_func = jax.jit(
-            make_eval_traj_computer(
-                net=net,
-                params=params,
-                batch_stats=batch_stats,
-                small_model=eval_small_model,
-                loss_funcs_dict={
-                    "mse": mse_loss,
-                    "relerr": relerr_loss,
-                },
-            )
-        )
-        logger.info("Starting to evaluate on %d trajectories of %d steps", eval_loader.num_trajs, eval_loader.num_steps)
-        for traj_num in range(eval_loader.num_trajs):
-            logger.debug("Starting to load trajectory %d", traj_num)
-            traj = eval_loader.get_trajectory(traj_num)
-            logger.debug("Finished loading trajectory %d", traj_num)
-            logger.info("Starting rollout of trajectory %d", traj_num)
-            traj_result = jax.device_get(eval_func(traj))
-            logger.info("Finished rollout of trajectory %d", traj_num)
-            # Report some results for the losses
-            json_results["traj_info"][traj_num] = {}
-            json_results["traj_info"][traj_num]["loss_keys"] = {}
-            for loss_name, loss_result in traj_result.items():
-                loss_key = f"{traj_num:05}_{loss_name}"
-                json_results["traj_info"][traj_num]["loss_keys"][loss_name] = loss_key
-                bulk_results[loss_key] = loss_result
-            traj_horizons = {loss_name: {} for loss_name in traj_result.keys()}
-            for horizon in sorted({5, 10, 25, 50, 100, 250, 500, 750, 1000}):
-                horizon_report_components = []
-                for loss_name in sorted(traj_result.keys()):
-                    horiz_loss = float(np.mean(traj_result[loss_name][:horizon]))
-                    traj_horizons[loss_name][horizon] = horiz_loss
-                    horizon_report_components.append(f"{loss_name}: {horiz_loss:<15.5g}")
-                # Build report string
-                logger.info("Traj %05d horizon %5d: %s", traj_num, horizon, " ".join(horizon_report_components))
-            json_results["traj_info"][traj_num]["loss_horizons"] = traj_horizons
     # Save results
     np.savez(out_dir / "results.npz", **bulk_results)
     with open(out_dir / "results.json", "w", encoding="utf8") as json_file:
