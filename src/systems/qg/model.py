@@ -137,3 +137,6 @@ class Model(kernel.PseudoSpectralKernel):
     @classmethod
     def from_param_json(cls, param_str):
         return cls(**json.loads(param_str))
+
+    def compute_ke_spec(self, state):
+        return self.wv2 * jnp.abs(state.ph)**2 / self.M**2
