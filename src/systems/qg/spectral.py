@@ -2,6 +2,7 @@
 
 import jax.numpy as jnp
 import jax
+import numpy as np
 import functools
 from .qg_model import QGModel
 
@@ -14,8 +15,9 @@ def make_spectrum_computer(type='power', averaging=False, truncate=False):
 
     def isotropize(af2, *x):
         # TODO: check computation of nx
-        nx = x[0].shape[-1]
-        m = QGModel(nx=nx)
+        with jax.ensure_compile_time_eval():
+            nx = x[0].shape[-1]
+            m = QGModel(nx=nx)
 
         if type == "cross_layer":
             raise ValueError("unsupported spectrum type 'cross_layer'")
@@ -53,7 +55,7 @@ def make_spectrum_computer(type='power', averaging=False, truncate=False):
 
 def calc_ispec(model, var_dens, averaging=True, truncate=True, nd_wavenumber=False, nfactor=1):
     # account for complex conjugate
-    jnp.concatenate(
+    var_dens = jnp.concatenate(
         [
             jnp.expand_dims(var_dens[..., 0] / 2, -1),
             var_dens[..., 1:-1],
@@ -62,20 +64,22 @@ def calc_ispec(model, var_dens, averaging=True, truncate=True, nd_wavenumber=Fal
         axis=-1
     )
 
-    ll_max = jnp.max(jnp.abs(model.ll))
-    kk_max = jnp.max(jnp.abs(model.kk))
+    with jax.ensure_compile_time_eval():
+        ll_max = jnp.max(jnp.abs(model.ll))
+        kk_max = jnp.max(jnp.abs(model.kk))
 
-    if truncate:
-        kmax = jnp.minimum(ll_max, kk_max)
-    else:
-        kmax = jnp.sqrt(ll_max**2 + kk_max**2)
+        if truncate:
+            kmax = jnp.minimum(ll_max, kk_max)
+        else:
+            kmax = jnp.sqrt(ll_max**2 + kk_max**2)
 
-    kmin = jnp.minimum(model.dk, model.dl)
+        kmin = jnp.minimum(model.dk, model.dl)
 
-    dkr = jnp.sqrt(model.dk**2 + model.dl**2) * nfactor
+        dkr = jnp.sqrt(model.dk**2 + model.dl**2) * nfactor
+        kdiff = kmax - dkr
+        # left border of bins
+        kr = jnp.arange(kmin, kdiff, dkr)
 
-    # left border of bins
-    kr = jnp.arange(kmin, kmax-dkr, dkr)
 
     # Shape for nx=64 -> wv=(64, 33), kr=(31,), dkr=(), var_dens=(64, 33)
     # so fkr should have shape (31, 64, 33)
