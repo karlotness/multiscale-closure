@@ -148,7 +148,7 @@ def make_sampler(dt, sample_shape, q_scaler, forcing_scaler):
         terms = diffrax.ODETerm(drift)
         solver = diffrax_utils.Tsit5Float32()
         saveat = diffrax.SaveAt(t1=True)
-        sol = diffrax.diffeqsolve(terms, solver, t1, t0, -dt, snapshot, saveat=saveat, adjoint=diffrax.NoAdjoint(), max_steps=max_steps, args=(net, batch_q))
+        sol = diffrax.diffeqsolve(terms, solver, t1, t0, -dt, snapshot, saveat=saveat, adjoint=diffrax_utils.NoAdjointFloat32(), max_steps=max_steps, args=(net, batch_q))
         return sol.ys[0]
 
     def draw_samples(state, batch_q, rng):

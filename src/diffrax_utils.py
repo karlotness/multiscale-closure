@@ -8,7 +8,27 @@ from diffrax.local_interpolation import AbstractLocalInterpolation
 from diffrax.custom_types import Array, PyTree, Scalar
 from diffrax.solver.base import vector_tree_dot
 from diffrax.solution import RESULTS, is_okay
+from diffrax import NoAdjoint
 from typing import Optional
+
+
+def _leaf_map(leaf):
+    if isinstance(leaf, jnp.ndarray):
+        if leaf.dtype == jnp.dtype(jnp.float64):
+            return leaf.astype(jnp.float32)
+        if leaf.dtype == jnp.dtype(jnp.complex128):
+            return leaf.astype(jnp.complex64)
+    return leaf
+
+class NoAdjointFloat32(NoAdjoint):
+    def loop(self, *args, **kwargs):
+        # Process init_state argument
+        if "init_state" in kwargs:
+            kwargs["init_state"] = jax.tree_util.tree_map(_leaf_map, kwargs["init_state"])
+        return super().loop(
+            *args,
+            **kwargs,
+        )
 
 # CODE BELOW BASED ON DIFFRAX
 # Adding explicit float32 dtypes where needed
