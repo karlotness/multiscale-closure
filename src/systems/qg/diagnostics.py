@@ -33,7 +33,11 @@ def subgrid_scores(true, mean, gen):
     """
     def l2(x, x_true):
         dims = tuple(d for d in range(-x.ndim, 0) if d != -3)
-        return jnp.mean(jnp.sqrt(jnp.mean((x - x_true)**2, axis=dims) / jnp.mean((x_true**2), axis=dims)))
+        # Temporarily use float64 for these (accuracy)
+        x = x.astype(jnp.float64)
+        x_true = x_true.astype(jnp.float64)
+        res = jnp.mean(jnp.sqrt(jnp.mean((x - x_true)**2, axis=dims) / jnp.mean((x_true**2), axis=dims)))
+        return res.astype(x.dtype)
 
     sp = make_spectrum_computer(type="power", averaging=False, truncate=False)
 
