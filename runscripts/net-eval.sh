@@ -35,5 +35,6 @@ git clone "$ORIGIN_REPO_DIR" "$CHECKOUT_DIR"
 
 # Run
 export JAX_ENABLE_X64=True
+export JAX_DEFAULT_DTYPE_BITS=32
 singularity run --nv "$SINGULARITY_CONTAINER" \
             python "${CHECKOUT_DIR}/src/eval.py" "$NET_DIR" "$EVAL_DATA_DIR" "$EVAL_TYPE"
