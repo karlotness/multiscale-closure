@@ -141,17 +141,14 @@ def make_sampler(dt, sample_shape, q_scaler, forcing_scaler):
         net, q = args
         beta = beta_func(t)
         net_input = jnp.concatenate([y, q], axis=0)
-        ret = -0.5 * beta * (y + net(net_input, t))
-        assert ret.dtype == jnp.dtype(jnp.float32)
-        return ret
+        return -0.5 * beta * (y + net(net_input, t))
 
     def draw_single_sample(batch_q, rng, net):
         snapshot = jax.random.normal(rng, sample_shape, dtype=jnp.float32)
         terms = diffrax.ODETerm(drift)
-        solver = diffrax.Tsit5()
+        solver = diffrax_utils.Tsit5Float32()
         saveat = diffrax.SaveAt(t1=True)
         sol = diffrax.diffeqsolve(terms, solver, t1, t0, -dt, snapshot, saveat=saveat, adjoint=diffrax.NoAdjoint(), max_steps=max_steps, args=(net, batch_q))
-        assert sol.ys[0].dtype == jnp.dtype(jnp.float32)
         return sol.ys[0]
 
     def draw_samples(state, batch_q, rng):
@@ -162,7 +159,6 @@ def make_sampler(dt, sample_shape, q_scaler, forcing_scaler):
         sample_rngs = jnp.stack(sample_rngs)
         samples = jax.vmap(functools.partial(draw_single_sample, net=net))(batch_q, sample_rngs)
         samples = jax.vmap(forcing_scaler.unscale)(samples)
-        assert samples.dtype == jnp.dtype(jnp.float32)
         return samples, rng_ctr
 
     return draw_samples
