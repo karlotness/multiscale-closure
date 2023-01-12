@@ -16,6 +16,17 @@ class SubgridScoreResult:
     var_ratio: jnp.ndarray
 
 
+def _find_level_index(shape):
+    if len(shape) == 2:
+        candidate = -2
+    else:
+        candidate = -3
+    candidate = len(shape) + candidate
+    if shape[candidate] != 2:
+        raise ValueError(f"failed to infer dimension 'lev', expected two layers")
+    return candidate
+
+
 def subgrid_scores(true, mean, gen):
     """
     Docs from original code:
@@ -32,7 +43,9 @@ def subgrid_scores(true, mean, gen):
     Here we assume that dataset has dimensions run x time x lev x Ny x Nx
     """
     def l2(x, x_true):
-        dims = tuple(d for d in range(-x.ndim, 0) if d != -3)
+        assert x.shape == x_true.shape
+        lev_dim = _find_level_index(x.shape)
+        dims = tuple(d for d in range(x.ndim) if d != lev_dim)
         # Temporarily use float64 for these (accuracy)
         x = x.astype(jnp.float64)
         x_true = x_true.astype(jnp.float64)
@@ -52,7 +65,8 @@ def subgrid_scores(true, mean, gen):
     # Compute var_ratio
     gen_res = gen - mean
     true_res = true - mean
-    dims = tuple(d for d in range(-mean.ndim, 0) if d != -3)
+    lev_dim = _find_level_index(mean.shape)
+    dims = tuple(d for d in range(mean.ndim) if d != lev_dim)
     var_ratio = jnp.array(jnp.mean(gen_res**2, axis=dims) / jnp.mean(true_res**2, axis=dims))
 
     # Return results
