@@ -18,6 +18,7 @@ def _grid_kl(kk, ll):
     return k, l
 
 
+@jax.tree_util.register_pytree_node_class
 class Model(kernel.PseudoSpectralKernel):
 
     def __init__(
@@ -207,3 +208,8 @@ class Model(kernel.PseudoSpectralKernel):
 
     def compute_ke_spec(self, state):
         return self.wv2 * jnp.abs(state.ph)**2 / self.M**2
+
+    def tree_flatten(self):
+        attributes = ("nz", "nx", "ny", "L", "W", "dt", "tmax", "tavestart", "taveint", "rek", "filterfac", "f", "g")
+        children = [getattr(self, attr) for attr in attributes]
+        return children, attributes

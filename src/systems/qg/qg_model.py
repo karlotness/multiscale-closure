@@ -7,6 +7,8 @@ import jax.random
 from . import model
 from .kernel import DTYPE_COMPLEX, DTYPE_REAL
 
+
+@jax.tree_util.register_pytree_node_class
 class QGModel(model.Model):
     def __init__(
             self,
@@ -166,3 +168,15 @@ class QGModel(model.Model):
     @classmethod
     def from_param_json(cls, param_str):
         return cls(**json.loads(param_str))
+
+    def tree_flatten(self):
+        attributes = ["beta", "rd", "delta", "H1", "U1", "U2"]
+        children = [getattr(self, attr) for attr in attributes]
+        super_children, super_aux = super().tree_flatten()
+        for key, val in zip(super_aux, super_children):
+            if key == "nz":
+                # Need to remove parameter nz since QGModel sets it internally
+                continue
+            attributes.append(key)
+            children.append(val)
+        return children, tuple(attributes)

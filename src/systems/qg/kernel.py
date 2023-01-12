@@ -97,6 +97,7 @@ def _zeros_property(shape, dtype):
     return property(fget=get_zeros)
 
 
+@jax.tree_util.register_pytree_node_class
 class PseudoSpectralKernel:
 
     def __init__(self, nz, ny, nx, dt, rek=0):
@@ -279,3 +280,13 @@ class PseudoSpectralKernel:
     def from_param_json(cls, param_str):
         params = json.loads(param_str)
         return cls(**params)
+
+    def tree_flatten(self):
+        attributes = ("nz", "ny", "nx", "dt", "rek")
+        children = [getattr(self, attr) for attr in attributes]
+        return children, attributes
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        # Merge together into dictionary of arguments to construct new object
+        return cls(**dict(zip(aux_data, children, strict=True)))
