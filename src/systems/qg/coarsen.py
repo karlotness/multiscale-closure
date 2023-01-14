@@ -110,6 +110,9 @@ class Coarsener:
     def coarsen(self, var):
         raise NotImplementedError("implement in a subclass")
 
+    def uncoarsen(self, var):
+        raise NotImplementedError("implement in a subclass")
+
     def _to_spec(self, q):
         return _generic_rfftn(q)
 
@@ -123,11 +126,12 @@ class Coarsener:
 class SpectralCoarsener(Coarsener):
     def coarsen(self, var):
         assert var.ndim == 3
-        dummy_small_var = jnp.zeros(
-            (self.small_model.nz, self.small_model.ny, self.small_model.nx),
-            dtype=jnp.float32
+        dummy_varh = self._to_spec(
+            jnp.zeros(
+                (self.small_model.nz, self.small_model.ny, self.small_model.nx),
+                dtype=jnp.float32
+            )
         )
-        dummy_varh = self._to_spec(dummy_small_var)
         nk = dummy_varh.shape[1] // 2
         if not self._is_spectral(var):
             vh = self._to_spec(var)
@@ -140,6 +144,45 @@ class SpectralCoarsener(Coarsener):
             return self._to_real(filtered)
         else:
             return filtered
+
+    def uncoarsen(self, var):
+        # Steps:
+        # 1. compute target size
+        # 2. compute needed zeros
+        # 3. concatenate resulting signal
+        dummy_big_varh = self._to_spec(
+            jnp.zeros(
+                (self.big_model.nz, self.big_model.ny, self.big_model.nx),
+                dtype=jnp.float32
+            )
+        )
+        big_nk = dummy_big_varh.shape[1] // 2
+        if not self._is_spectral(var):
+            vh = self._to_spec(var)
+        else:
+            vh = var
+        # Do our spectral scaling operation
+        nk = vh.shape[-2] // 2
+        row_pad_shape = vh.shape[:-2] + (dummy_big_varh.shape[-2] - vh.shape[-2], vh.shape[-1])
+        col_pad_shape = dummy_big_varh.shape[:-1] + (dummy_big_varh.shape[-1] - vh.shape[-1], )
+        # Unscale vh (at least by the ratio, not by self.spectral_filter)
+        vh = vh * self.ratio**2
+        # Pad back missing values
+        untrunc = jnp.concatenate(
+            [
+                vh[..., :, :nk, :],
+                jnp.zeros_like(vh, shape=row_pad_shape),
+                vh[..., :, -nk:, :],
+            ],
+            axis=-2,
+        )
+        untrunc = jnp.concatenate([untrunc, jnp.zeros_like(vh, shape=col_pad_shape)], axis=-1)
+        if not self._is_spectral(var):
+            return self._to_real(untrunc)
+        else:
+            return untrunc
+
+
 
     def spectral_filter(self):
         raise NotImplementedError("implement in a subclass")
