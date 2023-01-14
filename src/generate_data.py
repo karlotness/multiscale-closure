@@ -238,7 +238,6 @@ def gen_qg(out_dir, args, base_logger):
     rng_ctr = jax.random.PRNGKey(seed=args.seed)
     # Create trajectory generation function
     num_steps = math.ceil(args.tmax / args.dt)
-    logger.info("Generating %d trajectories with %d steps (subsample by a factor of %d to %d steps)", args.num_trajs, num_steps, args.subsample, num_steps // args.subsample)
     traj_gen_func = jax.jit(
         make_generate_coarse_traj(
             big_model=big_model,
@@ -249,7 +248,7 @@ def gen_qg(out_dir, args, base_logger):
         )
     )
     # Do computations
-    logger.info("Generating %d trajectories with %d steps (subsample by a factor of %d to %d steps)", args.num_trajs, num_steps, args.subsample, num_steps // args.subsample)
+    logger.info("Generating %d trajectories with %d steps (subsampled by a factor of %d to %d steps)", args.num_trajs, num_steps, args.subsample, num_steps // args.subsample)
     # Create directory for this operator
     op_directory = out_dir / op_name
     op_directory.mkdir(exist_ok=True)
