@@ -27,23 +27,27 @@ FIELD_Q_RE = re.compile(rf"^traj\d{{5}}_q$")
 FIELD_Q_FORCING_RE = re.compile(rf"^traj\d{{5}}_q_total_forcing$")
 
 
+def get_field_info(data_dtype, field_name):
+    dummy = np.zeros(1, dtype=data_dtype)[field_name].copy()
+    shape = data_dtype[field_name].shape
+    return shape, dummy.dtype, dummy.nbytes
+
+
 async def proc_worker(in_queue, out_queue, data_file, data_dtype):
     try:
-        q_shape = data_dtype["q"].shape
-        forcing_shape = data_dtype["q_total_forcing"].shape
-        q_dtype = np.zeros(1, dtype=data_dtype)["q"].dtype
-        forcing_dtype = np.zeros(1, dtype=data_dtype)["q_total_forcing"].dtype
-        q_bytes = np.zeros(1, dtype=data_dtype)["q"].nbytes
-        forcing_bytes = np.zeros(1, dtype=data_dtype)["q_total_forcing"].nbytes
-        total_bytes = q_bytes + forcing_bytes
+        total_bytes = 0
+        field_infos = []
+        for field_name in data_dtype.names:
+            field_shape, field_dtype, field_bytes = get_field_info(data_dtype, field_name)
+            total_bytes += field_bytes
+            field_infos.append((field_name, field_shape, field_dtype, field_bytes))
         proc = await asyncio.create_subprocess_exec(
             sys.executable,
             str(pathlib.Path(__file__).resolve().parent / "systems" / "qg" / "_loader.py"),
             str(data_file),
             "1",
             "--fields",
-            "q",
-            "q_total_forcing",
+            *[name for (name, _, _, _) in field_infos],
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
         )
@@ -55,12 +59,14 @@ async def proc_worker(in_queue, out_queue, data_file, data_dtype):
             proc.stdin.write(f"{traj:d} {step:d}\n".encode("utf8"))
             await proc.stdin.drain()
             data_bytes = await proc.stdout.readexactly(total_bytes)
-            q_result = np.frombuffer(data_bytes[:q_bytes], dtype=q_dtype).reshape(q_shape)
-            forcing_result = np.frombuffer(data_bytes[-forcing_bytes:], dtype=forcing_dtype).reshape(forcing_shape)
+            ret = np.empty((), dtype=data_dtype)
+            byte_cursor = 0
+            for field_name, field_shape, field_dtype, field_bytes in field_infos:
+                ret[field_name] = np.frombuffer(data_bytes[byte_cursor:byte_cursor + field_bytes], dtype=field_dtype).reshape(field_shape)
+                byte_cursor += field_bytes
             data_bytes = None
-            await out_queue.put((job_id, q_result, forcing_result))
-            q_result = None
-            forcing_result = None
+            await out_queue.put((job_id, ret))
+            ret = None
         # Cleanup the process
         proc.stdin.write_eof()
         return_code = await proc.wait()
@@ -106,13 +112,7 @@ async def do_work(out_path, in_path, data_dtype, source_record_dtype, num_chunks
                     batch_results.append(result)
                 batch_results.sort(key=operator.itemgetter(0))
                 # Stack results and write
-                data_dataset[start:end] = np.core.records.fromarrays(
-                    [
-                        np.stack([b[1] for b in batch_results], axis=0),
-                        np.stack([b[2] for b in batch_results], axis=0),
-                    ],
-                    dtype=data_dtype,
-                )
+                data_dataset[start:end] = np.stack([b[1] for b in batch_results], axis=0)
                 source_dataset[start:end] = np.core.records.fromarrays(
                     [
                         trajs[start:end],
@@ -160,12 +160,20 @@ def main():
         rng.shuffle(indices)
         trajs, steps = np.divmod(indices, num_steps)
         # Create compound dtypes
-        data_dtype = np.dtype(
-            [
-                ("q", in_data["trajs"]["traj00000_q"].dtype, in_data["trajs"]["traj00000_q"].shape[1:]),
-                ("q_total_forcing", in_data["trajs"]["traj00000_q_total_forcing"].dtype, in_data["trajs"]["traj00000_q_total_forcing"].shape[1:]),
-            ]
-        )
+        small_sizes = set()
+        forcing_prefix = "traj00000_q_total_forcing_"
+        for key in in_data["trajs"].keys():
+            if key.startswith(forcing_prefix):
+                small_sizes.add(int(key[len(forcing_prefix):]))
+        small_sizes = sorted(small_sizes)
+        data_dtype_fields = [
+            ("q", in_data["trajs"]["traj00000_q"].dtype, in_data["trajs"]["traj00000_q"].shape[1:])
+        ]
+        for size in small_sizes:
+            data_dtype_fields.append(
+                (f"q_total_forcing_{size}", in_data["trajs"][f"traj00000_q_total_forcing_{size}"].dtype, in_data["trajs"][f"traj00000_q_total_forcing_{size}"].shape[1:])
+            )
+        data_dtype = np.dtype(data_dtype_fields)
         source_record_dtype = np.dtype(
             [
                 ("traj", np.uint16),
