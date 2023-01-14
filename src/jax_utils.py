@@ -1,9 +1,24 @@
 import math
 import functools
 import operator
+import dataclasses
 import jax
 import jax.numpy as jnp
 import equinox as eqx
+
+
+def register_pytree_dataclass(cls):
+    fields = tuple(f.name for f in dataclasses.fields(cls))
+
+    def flatten(obj):
+        return [getattr(obj, name) for name in fields], None
+
+    def unflatten(aux_data, flat_contents):
+        args = {name: value for name, value in zip(fields, flat_contents)}
+        return cls(**args)
+
+    jax.tree_util.register_pytree_node(cls, flatten, unflatten)
+    return cls
 
 
 def strided_scan(f, init, xs, length=None, reverse=False, unroll=1, stride=1):
