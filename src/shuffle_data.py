@@ -187,6 +187,7 @@ def main():
             total_steps=total_steps,
         )
     )
+    logger.info("Finished shuffling process")
 
 
 if __name__ == "__main__":
