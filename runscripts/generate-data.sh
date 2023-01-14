@@ -22,7 +22,7 @@ TRAIN_JOBID=$(get_job_id "$TRAIN_OUT")
 VAL_JOBID=$(get_job_id "$VAL_OUT")
 TEST_JOBID=$(get_job_id "$TEST_OUT")
 
-SHUF_OUT=$(sbatch --wrap="singularity exec '${SCRATCH}/closure/closure.sif' python shuffle_data.py '${SCRATCH}/closure/data/train/'" --job-name="qg-shuf-train" --time="8:00:00" --cpus-per-task=8 --mem="8G" --dependency="afterok:$TRAIN_JOBID" --kill-on-invalid-dep=yes)
+SHUF_OUT=$(sbatch --wrap="singularity exec '${SCRATCH}/closure/closure.sif' python shuffle_data.py '${SCRATCH}/closure/data/train/op1/'" --job-name="qg-shuf-train" --time="8:00:00" --cpus-per-task=8 --mem="8G" --dependency="afterok:$TRAIN_JOBID" --kill-on-invalid-dep=yes)
 SHUF_JOBID=$(get_job_id "$SHUF_OUT")
 
 echo "Generate train: $TRAIN_JOBID"
