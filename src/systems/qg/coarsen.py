@@ -123,6 +123,23 @@ class Coarsener:
         return var.dtype in {jnp.dtype(t) for t in (jnp.complex64, jnp.complex128)}
 
 
+class NoOpCoarsener(Coarsener):
+    def __init__(self, big_model, small_nx):
+        # Unusual: don't call super() init, handle everything here
+        assert big_model.nx == big_model.ny
+        assert small_nx == big_model.nx
+        assert small_nx % 2 == 0
+        self.big_model = big_model
+        self.small_model = big_model
+        self.ratio = 1.0
+
+    def coarsen(self, var):
+        return var
+
+    def uncoarsen(self, var):
+        return var
+
+
 class SpectralCoarsener(Coarsener):
     def coarsen(self, var):
         assert var.ndim == 3
