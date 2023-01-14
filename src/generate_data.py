@@ -6,15 +6,19 @@ import logging
 import contextlib
 import math
 import os
+import operator
 import ast
 import sys
+import dataclasses
 import jax
+from jaxtyping import Array
 import jax.numpy as jnp
 import numpy as np
 import h5py
 from systems.qg import utils as qg_utils
 from systems.qg.qg_model import QGModel
 from systems.qg import coarsen
+import jax_utils
 
 parser = argparse.ArgumentParser(description="Generate data for a variety of systems")
 parser.add_argument("out_dir", type=str, help="Directory to store output (created if non-existing)")
@@ -27,10 +31,11 @@ parser_qg.add_argument("seed", type=int, help="RNG seed, must be unique for uniq
 parser_qg.add_argument("--dt", type=float, default=3600.0, help="Time step size")
 parser_qg.add_argument("--tmax", type=float, default=311040000.0, help="End time for the model")
 parser_qg.add_argument("--big_size", type=int, default=256, help="Scale of large model")
-parser_qg.add_argument("--small_size", type=int, default=64, help="Scale of small model")
+parser_qg.add_argument("--small_size", type=int, nargs="+", default=[128, 96, 64], help="Scale of small model")
+parser_qg.add_argument("--subsample", type=int, default=1, help="Stride used to select how many generated steps to keep")
 parser_qg.add_argument("--num_trajs", type=int, default=1, help="Number of trajectories to generate")
 parser_qg.add_argument("--config", type=str, default="eddy", help="Eddy or jet configuration", choices=["eddy", "jet"])
-parser_qg.add_argument("--coarse_op", type=str, nargs="+", default=["op1", "op2"], help="Which coarsening operators to apply", choices=sorted(coarsen.COARSEN_OPERATORS.keys()))
+parser_qg.add_argument("--coarse_op", type=str, default="op1", help="Which coarsening operators to apply", choices=sorted(coarsen.COARSEN_OPERATORS.keys()))
 
 # QG snapshot options
 parser_qg_snap = subparsers.add_parser("qg_snap", help="Generate training data like PyQG")
@@ -58,37 +63,83 @@ CONFIG_VARS = {
 }
 
 
-def make_generate_coarse_traj(coarse_op, num_steps):
-    dummy_init = coarse_op.small_model.create_initial_state(jax.random.PRNGKey(0))
-    dummy_shape = dummy_init.dqhdt.shape
-    dummy_dtype = dummy_init.dqhdt.dtype
+@jax_utils.register_pytree_dataclass
+@dataclasses.dataclass
+class CoarseTrajResult:
+    q: Array
+    t: Array
+    tc: Array
+    ablevel: Array
+    dqhdt: Array
+    q_total_forcings: dict[int, Array]
+
+
+def make_generate_coarse_traj(big_model, small_sizes, coarse_op_cls, num_steps, subsample):
+    coarse_ops = {}
+    for size in set(small_sizes):
+        size = operator.index(size)
+        if size != big_model.nx:
+            op = coarse_op_cls(
+                big_model=big_model,
+                small_nx=size,
+            )
+        else:
+            op = coarsen.NoOpCoarsener(
+                big_model=big_model,
+                small_nx=size,
+            )
+        coarse_ops[size] = op
+    size_main_states = max(map(operator.index, small_sizes))
+
+    # Compute dummy initialization shapes
+    _jaxpr, dummy_init_treedef = jax.make_jaxpr(coarse_ops[size_main_states].small_model.create_initial_state, return_shape=True)(jax.random.PRNGKey(0))
+    dummy_shape = dummy_init_treedef.dqhdt.shape
+    dummy_dtype = dummy_init_treedef.dqhdt.dtype
 
     def make_traj(big_initial_step):
 
         def _step_forward(carry, x):
+            # Unpack carry
             prev_big_state, small_dqhdt, small_dqhdt_p = carry
-            prev_small_state = coarse_op._coarsen_step(prev_big_state)
+            # Produce new "main size" state for output
+            prev_small_state = coarse_ops[size_main_states]._coarsen_step(prev_big_state)
+            # Shift over dqhdts
             dqhdt_p = small_dqhdt
-            next_big_state = coarse_op.big_model.step_forward(prev_big_state)
-            return (next_big_state, prev_small_state.dqhdt, dqhdt_p), (prev_small_state.q, prev_small_state.t, prev_small_state.tc, prev_small_state.ablevel, prev_small_state.dqhdt, prev_small_state.q_total_forcing)
+            # Step the large state forward
+            next_big_state = big_model.step_forward(prev_big_state)
+            # Return carry, y
+            return (next_big_state, prev_small_state.dqhdt, dqhdt_p), CoarseTrajResult(
+                q=prev_small_state.q,
+                t=prev_small_state.t,
+                tc=prev_small_state.tc,
+                ablevel=prev_small_state.ablevel,
+                dqhdt=prev_small_state.dqhdt,
+                q_total_forcings={
+                    k: op._coarsen_step(prev_big_state).q_total_forcing
+                    for k, op in coarse_ops.items()
+                },
+            )
 
         dummy_dqhdt_single = jnp.zeros(shape=dummy_shape, dtype=dummy_dtype)
         dummy_dqhdt_double = jnp.zeros(shape=((2, ) + dummy_shape), dtype=dummy_dtype)
 
-        _carry, (q, t, tc, ablevel, dqhdt, q_total_forcing) = jax.lax.scan(
+        _carry, results = jax_utils.strided_scan(
             _step_forward,
             (big_initial_step, dummy_dqhdt_single, dummy_dqhdt_single),
             None,
             length=num_steps,
+            stride=subsample,
         )
-        dqhdt = jnp.concatenate(
-            [
-                dummy_dqhdt_double,
-                dqhdt,
-            ]
+        results = dataclasses.replace(
+            results,
+            dqhdt=jnp.concatenate(
+                [
+                    dummy_dqhdt_double,
+                    results.dqhdt,
+                ],
+            )
         )
-
-        return q, t, tc, ablevel, dqhdt, q_total_forcing
+        return results
 
     return make_traj
 
@@ -177,65 +228,63 @@ def gen_qg(out_dir, args, base_logger):
     out_dir = pathlib.Path(out_dir)
     logger = base_logger.getChild("qg")
     logger.info("Generating trajectory for QG with seed %d", args.seed)
-    # Initialize models
+    # Initialize model and locate coarsening class
+    small_sizes = sorted(set(map(operator.index, args.small_size)))
     big_model = QGModel(nx=args.big_size, ny=args.big_size, dt=args.dt, tmax=args.tmax, **CONFIG_VARS[args.config])
-    # Initialize coarsening operators
-    coarsen_operators = {
-        op_name: coarsen.COARSEN_OPERATORS[op_name](big_model=big_model, small_nx=args.small_size)
-        for op_name in args.coarse_op
-    }
+    initial_state_fn = jax.jit(big_model.create_initial_state)
+    op_name = args.coarse_op
+    coarse_cls = coarsen.COARSEN_OPERATORS[op_name]
     # Set up data generator
     rng_ctr = jax.random.PRNGKey(seed=args.seed)
-    # Do computations
+    # Create trajectory generation function
     num_steps = math.ceil(args.tmax / args.dt)
-    traj_gen_ops = {
-        op_name: jax.jit(
-            make_generate_coarse_traj(op, num_steps)
+    logger.info("Generating %d trajectories with %d steps (subsample by a factor of %d to %d steps)", args.num_trajs, num_steps, args.subsample, num_steps // args.subsample)
+    traj_gen_func = jax.jit(
+        make_generate_coarse_traj(
+            big_model=big_model,
+            small_sizes=small_sizes,
+            coarse_op_cls=coarse_cls,
+            num_steps=num_steps,
+            subsample=args.subsample,
         )
-        for op_name, op in coarsen_operators.items()
-    }
-    logger.info("Generating %d trajectories with %d steps", args.num_trajs, num_steps)
-    # Create directories for each operator
-    op_directories = {}
-    for op_name in coarsen_operators.keys():
-        op_directories[op_name] = out_dir / op_name
-        op_directories[op_name].mkdir(exist_ok=True)
-    with contextlib.ExitStack() as exit_stack:
-        # Create and open files for each operator
-        op_files = {
-            op_name: exit_stack.enter_context(h5py.File(op_directories[op_name] / "data.hdf5", "w", libver="latest"))
-            for op_name in coarsen_operators.keys()
-        }
+    )
+    # Do computations
+    logger.info("Generating %d trajectories with %d steps (subsample by a factor of %d to %d steps)", args.num_trajs, num_steps, args.subsample, num_steps // args.subsample)
+    # Create directory for this operator
+    op_directory = out_dir / op_name
+    op_directory.mkdir(exist_ok=True)
+    with h5py.File(op_directory / "data.hdf5", "w", libver="latest") as out_file:
         # Store model parameters in each file
-        for op_name, op in coarsen_operators.items():
-            out_file = op_files[op_name]
-            param_group = out_file.create_group("params")
-            param_group.create_dataset("big_model", data=big_model.param_json())
-            param_group.create_dataset("small_model", data=op.small_model.param_json())
-            out_file.create_group("trajs")
+        main_small_size = max(map(operator.index, small_sizes))
+        param_group = out_file.create_group("params")
+        param_group.create_dataset("big_model", data=big_model.param_json())
+        for size in set(small_sizes):
+            size = operator.index(size)
+            size_coarse_cls = coarse_cls if size != args.big_size else coarsen.NoOpCoarsener
+            param_group.create_dataset(f"small_model_{size}", data=size_coarse_cls(big_model=big_model, small_nx=size).small_model.param_json())
+        param_group["small_model"] = h5py.SoftLink(f"/params/small_model_{main_small_size}")
         # Generate trajectories
         compound_dtype = None
+        out_file.create_group("trajs")
         for traj_num in range(args.num_trajs):
             rng, rng_ctr = jax.random.split(rng_ctr, 2)
-            initial_step = big_model.create_initial_state(rng)
-            for op_name, op in coarsen_operators.items():
-                out_file = op_files[op_name]
-                traj_gen = traj_gen_ops[op_name]
-                logger.info("Starting trajectory %d for operator %s", traj_num, op_name)
-                q, t, tc, ablevel, dqhdt, q_total_forcing = jax.device_get(traj_gen(initial_step))
-                logger.info("Finished generating trajectory %d for operator %s", traj_num, op_name)
-                # Store the data
-                if traj_num == 0:
-                    # First trajectory, store t, tc, ablevel
-                    out_file["trajs"].create_dataset("t", data=t)
-                    out_file["trajs"].create_dataset("tc", data=tc)
-                    out_file["trajs"].create_dataset("ablevel", data=ablevel)
-                # Store q and dqhdt
-                out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q", data=q)
-                out_file["trajs"].create_dataset(f"traj{traj_num:05d}_dqhdt", data=dqhdt)
-                out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q_total_forcing", data=q_total_forcing)
-                del q, t, tc, ablevel, dqhdt, q_total_forcing
-                logger.info("Finished storing trajectory %d for operator %s", traj_num, op_name)
+            logger.info("Starting trajectory %d", traj_num)
+            result = jax.device_get(traj_gen_func(initial_state_fn(rng)))
+            logger.info("Finished generating trajectory %d", traj_num)
+            if traj_num == 0:
+                # First trajectory, store t, tc, ablevel
+                out_file["trajs"].create_dataset("t", data=result.t)
+                out_file["trajs"].create_dataset("tc", data=result.tc)
+                out_file["trajs"].create_dataset("ablevel", data=result.ablevel)
+            # Store q and dqhdt
+            out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q", data=result.q)
+            out_file["trajs"].create_dataset(f"traj{traj_num:05d}_dqhdt", data=result.dqhdt)
+            # Store forcings
+            for size in small_sizes:
+                forcing_dataset = out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q_total_forcing_{size}", data=result.q_total_forcings[size])
+            out_file["trajs"][f"traj{traj_num:05d}_q_total_forcing"] = h5py.SoftLink(f"/trajs/traj{traj_num:05d}_q_total_forcing_{main_small_size}")
+            result = None
+            logger.info("Finished storing trajectory %d", traj_num)
 
 
 if __name__ == "__main__":
