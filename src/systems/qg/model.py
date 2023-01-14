@@ -183,29 +183,6 @@ class Model(kernel.PseudoSpectralKernel):
         state = self.forward_timestep(state)
         return state
 
-    def param_json(self):
-        params = {
-            "nz": self.nz,
-            "nx": self.nx,
-            "ny": self.ny,
-            "L": self.L,
-            "W": self.W,
-            "dt": self.dt,
-            "tmax": self.tmax,
-            "tavestart": self.tavestart,
-            "taveint": self.taveint,
-            "rek": self.rek,
-            "filterfac": self.filterfac,
-            "g": self.g,
-        }
-        if hasattr(self, "f"):
-            params["f"] = self.f
-        return json.dumps(params)
-
-    @classmethod
-    def from_param_json(cls, param_str):
-        return cls(**json.loads(param_str))
-
     def compute_ke_spec(self, state):
         return self.wv2 * jnp.abs(state.ph)**2 / self.M**2
 

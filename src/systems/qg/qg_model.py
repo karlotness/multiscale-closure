@@ -150,25 +150,6 @@ class QGModel(model.Model):
         ph = jnp.concatenate([ph_head, ph_tail], axis=0).reshape(qh_orig_shape)
         return jnp.moveaxis(ph, -1, 0)
 
-    def param_json(self):
-        super_params = json.loads(super().param_json())
-        del super_params["nz"]
-        super_params.update(
-            {
-                "beta": self.beta,
-                "rd": self.rd,
-                "delta": self.delta,
-                "H1": self.H1,
-                "U1": self.U1,
-                "U2": self.U2,
-            }
-        )
-        return json.dumps(super_params)
-
-    @classmethod
-    def from_param_json(cls, param_str):
-        return cls(**json.loads(param_str))
-
     def tree_flatten(self):
         attributes = ["beta", "rd", "delta", "H1", "U1", "U2"]
         children = [getattr(self, attr) for attr in attributes]

@@ -266,15 +266,8 @@ class PseudoSpectralKernel:
         return ph
 
     def param_json(self):
-        return json.dumps(
-            {
-                "nz": self.nz,
-                "ny": self.ny,
-                "nx": self.nx,
-                "dt": self.dt,
-                "rek": self.rek,
-            }
-        )
+        children, attributes = self.tree_flatten()
+        return json.dumps(dict(zip(attributes, children)))
 
     @classmethod
     def from_param_json(cls, param_str):
