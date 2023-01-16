@@ -121,6 +121,11 @@ async def do_work(out_path, in_path, data_dtype, source_record_dtype, num_chunks
                     dtype=source_record_dtype,
                 )
                 batch_results = None
+            # After shuffling, copy over statistics from source file
+            with h5py.File(in_path, "r") as in_data:
+                logger.info("Copying statistics")
+                in_data.copy(source=in_data["/stats"], dest=out_data["/"], shallow=False, expand_soft=True, expand_external=True, expand_refs=True, without_attrs=False)
+                logger.info("Finished copying statistics")
     finally:
         # Stop our remaining workers
         for _ in range(NUM_WORKERS):
