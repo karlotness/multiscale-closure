@@ -67,7 +67,8 @@ def strided_scan(f, init, xs, length=None, reverse=False, unroll=1, stride=1):
         new_carry, _y = f(carry, x)
         return new_carry, None
 
-    carry, _remys = jax.lax.scan(remainder_scan, carry, remainder_xs, length=remainder, reverse=reverse, unroll=unroll)
+    if remainder > 0:
+        carry, _remys = jax.lax.scan(remainder_scan, carry, remainder_xs, length=remainder, reverse=reverse, unroll=unroll)
     # Return stacks from the chunk, and final state from the remainder
     return carry, ys
 
