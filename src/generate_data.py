@@ -305,6 +305,7 @@ def gen_qg(out_dir, args, base_logger):
             size_coarse_cls = coarse_cls if size != args.big_size else coarsen.NoOpCoarsener
             param_group.create_dataset(f"small_model_{size}", data=size_coarse_cls(big_model=big_model, small_nx=size).small_model.param_json())
         param_group["small_model"] = h5py.SoftLink(f"/params/small_model_{main_small_size}")
+        param_group.create_dataset("coarsen_op", data=op_name)
         # Generate trajectories
         compound_dtype = None
         out_file.create_group("trajs")
