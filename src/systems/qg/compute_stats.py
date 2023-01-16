@@ -80,13 +80,27 @@ def compute_stats(batch_iter):
     return stat_accum.finalize()
 
 
+def determine_target_fields(h5_path):
+    target_field_re = re.compile(rf"^traj\d{{5}}_(?P<name>q|q_total_forcing_\d+)$")
+    fields = set()
+    with h5py.File(h5_path, "r") as data_file:
+        trajs_group = data_file["trajs"]
+        for k in trajs_group.keys():
+            if match := target_field_re.match(k):
+                fields.add(match.group("name"))
+    return fields
+
+
 def main():
     args = parser.parse_args()
+    fields = determine_target_fields(args.in_file)
     stats = {}
-    for field in ["q", "q_total_forcing"]:
+    for field in fields:
+        print(f"Computing stats for field {field}")
         with contextlib.closing(traj_chunk_iter(args.in_file, field)) as batch_iter:
             for k, v in dataclasses.asdict(compute_stats(batch_iter)).items():
                 stats[f"{field}_{k}"] = v
+        print(f"Finished stats for field {field}")
     np.savez(
         args.out_file,
         **stats,
