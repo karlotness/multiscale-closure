@@ -199,9 +199,9 @@ def init_network(lr, rng):
 @jax.tree_util.register_pytree_node_class
 class Scaler:
     def __init__(self, mean, var):
-        self.mean = np.expand_dims(mean, (-1, -2)).astype(np.float32)
-        self.var = np.expand_dims(var, (-1, -2)).astype(np.float32)
-        self.std = np.sqrt(self.var)
+        self.mean = jnp.expand_dims(jnp.asarray(mean, dtype=jnp.float32), (-1, -2))
+        self.var = jnp.expand_dims(jnp.asarray(var, dtype=jnp.float32), (-1, -2))
+        self.std = jnp.sqrt(self.var)
 
     def scale(self, a):
         return (a - self.mean) / self.std
