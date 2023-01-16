@@ -17,7 +17,7 @@ import numpy as np
 import h5py
 from systems.qg import utils as qg_utils
 from systems.qg.qg_model import QGModel
-from systems.qg import coarsen
+from systems.qg import coarsen, compute_stats
 import jax_utils
 
 parser = argparse.ArgumentParser(description="Generate data for a variety of systems")
@@ -61,6 +61,23 @@ CONFIG_VARS = {
         "beta": 1e-11,
     },
 }
+
+
+def make_coarsen_to_size(coarse_op, big_model):
+
+    def do_coarsening(var, small_nx):
+        assert var.shape[-2:] == (big_model.ny, big_model.nx)
+        if big_model.nx == small_nx:
+            # No coarsening needed
+            res = coarsen.NoOpCoarsener(big_model=big_model, small_nx=small_nx).coarsen(var)
+        else:
+            res = coarse_op(big_model=big_model, small_nx=small_nx).coarsen(var)
+
+        assert res.shape[-2:] == (small_nx, small_nx)
+        return res
+
+    return do_coarsening
+
 
 
 @jax_utils.register_pytree_dataclass
@@ -230,6 +247,7 @@ def gen_qg(out_dir, args, base_logger):
     logger.info("Generating trajectory for QG with seed %d", args.seed)
     # Initialize model and locate coarsening class
     small_sizes = sorted(set(map(operator.index, args.small_size)))
+    main_small_size = max(map(operator.index, small_sizes))
     big_model = QGModel(nx=args.big_size, ny=args.big_size, dt=args.dt, tmax=args.tmax, **CONFIG_VARS[args.config])
     initial_state_fn = jax.jit(big_model.create_initial_state)
     op_name = args.coarse_op
@@ -247,14 +265,26 @@ def gen_qg(out_dir, args, base_logger):
             subsample=args.subsample,
         )
     )
+    coarsen_fn = jax.jit(
+        jax.vmap(
+            make_coarsen_to_size(
+                coarse_op=coarse_cls,
+                big_model=coarse_cls(big_model=big_model, small_nx=main_small_size).small_model,
+            ),
+            in_axes=(0, None),
+        ),
+        static_argnums=(1, ),
+    )
     # Do computations
     logger.info("Generating %d trajectories with %d steps (subsampled by a factor of %d to %d steps)", args.num_trajs, num_steps, args.subsample, num_steps // args.subsample)
     # Create directory for this operator
     op_directory = out_dir / op_name
     op_directory.mkdir(exist_ok=True)
+    # Prep stats computers
+    forcing_stats = {sz: compute_stats.QGStatAccumulator() for sz in small_sizes}
+    q_stats = {sz: compute_stats.QGStatAccumulator() for sz in small_sizes}
     with h5py.File(op_directory / "data.hdf5", "w", libver="latest") as out_file:
         # Store model parameters in each file
-        main_small_size = max(map(operator.index, small_sizes))
         param_group = out_file.create_group("params")
         param_group.create_dataset("big_model", data=big_model.param_json())
         for size in set(small_sizes):
@@ -268,22 +298,57 @@ def gen_qg(out_dir, args, base_logger):
         for traj_num in range(args.num_trajs):
             rng, rng_ctr = jax.random.split(rng_ctr, 2)
             logger.info("Starting trajectory %d", traj_num)
-            result = jax.device_get(traj_gen_func(initial_state_fn(rng)))
+            result = traj_gen_func(initial_state_fn(rng))
             logger.info("Finished generating trajectory %d", traj_num)
             if traj_num == 0:
                 # First trajectory, store t, tc, ablevel
-                out_file["trajs"].create_dataset("t", data=result.t)
-                out_file["trajs"].create_dataset("tc", data=result.tc)
-                out_file["trajs"].create_dataset("ablevel", data=result.ablevel)
+                out_file["trajs"].create_dataset("t", data=np.asarray(result.t))
+                out_file["trajs"].create_dataset("tc", data=np.asarray(result.tc))
+                out_file["trajs"].create_dataset("ablevel", data=np.asarray(result.ablevel))
             # Store q and dqhdt
-            out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q", data=result.q)
-            out_file["trajs"].create_dataset(f"traj{traj_num:05d}_dqhdt", data=result.dqhdt)
+            out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q", data=np.asarray(result.q))
+            out_file["trajs"].create_dataset(f"traj{traj_num:05d}_dqhdt", data=np.asarray(result.dqhdt))
             # Store forcings
             for size in small_sizes:
-                forcing_dataset = out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q_total_forcing_{size}", data=result.q_total_forcings[size])
+                forcing_dataset = out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q_total_forcing_{size}", data=np.asarray(result.q_total_forcings[size]))
             out_file["trajs"][f"traj{traj_num:05d}_q_total_forcing"] = h5py.SoftLink(f"/trajs/traj{traj_num:05d}_q_total_forcing_{main_small_size}")
-            result = None
             logger.info("Finished storing trajectory %d", traj_num)
+            # Keep only q and forcings and discard the rest
+            logger.info("Updating statistics for trajectory %d", traj_num)
+            traj_q = result.q
+            traj_forcings = result.q_total_forcings
+            result = None
+            # Update statistics
+            #   First, the forcings
+            for size in small_sizes:
+                forcing_stats[size].add_batch(np.asarray(traj_forcings[size]).astype(np.float64))
+            traj_forcings = None
+            #   Next, the q values which require their own coarsening steps
+            for size in small_sizes:
+                q_stats[size].add_batch(np.asarray(coarsen_fn(traj_q, size)).astype(np.float64))
+            logger.info("Finished staticstics for trajectory %d", traj_num)
+            # Finished processing this trajectory
+        # Store out statistics
+        logger.info("Finalizing statistics")
+        stats_group = out_file.create_group("stats")
+        forcing_stats_group = stats_group.create_group("q_total_forcing")
+        for size in small_sizes:
+            stats = forcing_stats[size].finalize()
+            group = forcing_stats_group.create_group(f"{size}")
+            group.create_dataset("mean", data=stats.mean)
+            group.create_dataset("var", data=stats.var)
+            group.create_dataset("min", data=stats.min)
+            group.create_dataset("max", data=stats.max)
+        q_stats_group = stats_group.create_group("q")
+        for size in small_sizes:
+            stats = q_stats[size].finalize()
+            group = q_stats_group.create_group(f"{size}")
+            group.create_dataset("mean", data=stats.mean)
+            group.create_dataset("var", data=stats.var)
+            group.create_dataset("min", data=stats.min)
+            group.create_dataset("max", data=stats.max)
+        logger.info("Finished storing statistics")
+
 
 
 if __name__ == "__main__":
