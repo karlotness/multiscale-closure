@@ -79,6 +79,19 @@ def make_coarsen_to_size(coarse_op, big_model):
     return do_coarsening
 
 
+def as_chunk_host_iter(source_arr, dtype, chunk_size=1000):
+    arr_size = source_arr.shape[0]
+    num_batches, remainder = divmod(arr_size, chunk_size)
+    # Yield chunks
+    for i in range(num_batches):
+        start = i * chunk_size
+        end = start + chunk_size
+        yield np.asarray(source_arr[start:end]).astype(dtype)
+    # Yield remainder
+    if remainder != 0:
+        yield np.asarray(source_arr[-remainder:]).astype(dtype)
+
+
 
 @jax_utils.register_pytree_dataclass
 @dataclasses.dataclass
@@ -321,11 +334,14 @@ def gen_qg(out_dir, args, base_logger):
             # Update statistics
             #   First, the forcings
             for size in small_sizes:
-                forcing_stats[size].add_batch(np.asarray(traj_forcings[size]).astype(np.float64))
+                for batch in as_chunk_host_iter(traj_forcings[size], dtype=np.float64, chunk_size=1000):
+                    forcing_stats[size].add_batch(batch)
             traj_forcings = None
             #   Next, the q values which require their own coarsening steps
             for size in small_sizes:
-                q_stats[size].add_batch(np.asarray(coarsen_fn(traj_q, size)).astype(np.float64))
+                for batch in as_chunk_host_iter(coarsen_fn(traj_q, size), dtype=np.float64, chunk_size=1000):
+                    q_stats[size].add_batch(batch)
+            traj_q = None
             logger.info("Finished staticstics for trajectory %d", traj_num)
             # Finished processing this trajectory
         # Store out statistics
