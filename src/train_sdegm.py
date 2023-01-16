@@ -44,12 +44,8 @@ def save_network(output_name, output_dir, state, base_logger=None):
     else:
         logger = base_logger.getChild("save")
     output_dir = pathlib.Path(output_dir)
-    eqx.tree_serialise_leaves(output_dir / f"{output_name}.eqx.PART", state.net)
-    try:
-        os.remove(output_dir / f"{output_name}.eqx")
-    except FileNotFoundError:
-        pass
-    os.rename(output_dir / f"{output_name}.eqx.PART", output_dir / f"{output_name}.eqx")
+    with utils.rename_save_file(output_dir / f"{output_name}.eqx", "wb") as eqx_out:
+        eqx.tree_serialise_leaves(eqx_out, state.net)
     logger.info("Saved network parameters to %s in %s", output_name, output_dir)
 
 
