@@ -134,6 +134,7 @@ class NoOpCoarsener(Coarsener):
         self.ratio = 1.0
 
     def coarsen(self, var):
+        assert self._is_spectral(var) or var.shape[-2:] == (self.big_model.ny, self.big_model.nx)
         return var
 
     def uncoarsen(self, var):
@@ -142,6 +143,7 @@ class NoOpCoarsener(Coarsener):
 
 class SpectralCoarsener(Coarsener):
     def coarsen(self, var):
+        assert self._is_spectral(var) or var.shape[-2:] == (self.big_model.ny, self.big_model.nx)
         assert var.ndim == 3
         dummy_varh = self._to_spec(
             jnp.zeros(
