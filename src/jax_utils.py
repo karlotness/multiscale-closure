@@ -7,6 +7,32 @@ import jax.numpy as jnp
 import equinox as eqx
 
 
+@jax.tree_util.register_pytree_node_class
+class Scaler:
+    def __init__(self, mean, var):
+        self.mean = jnp.expand_dims(jnp.asarray(mean, dtype=jnp.float32), (-1, -2))
+        self.var = jnp.expand_dims(jnp.asarray(var, dtype=jnp.float32), (-1, -2))
+        self.std = jnp.sqrt(self.var)
+
+    def scale(self, a):
+        return (a - self.mean) / self.std
+
+    def unscale(self, a):
+        return (a * self.std) + self.mean
+
+    def tree_flatten(self):
+        return (self.mean, self.var, self.std), None
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        mean, var, std = children
+        obj = cls.__new__(cls)
+        obj.mean = mean
+        obj.var = var
+        obj.std = std
+        return obj
+
+
 def register_pytree_dataclass(cls):
     fields = tuple(f.name for f in dataclasses.fields(cls))
 

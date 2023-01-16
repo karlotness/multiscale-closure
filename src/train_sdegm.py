@@ -17,6 +17,7 @@ import functools
 from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader
 from methods.gz_fcnn import GZFCNN
 import jax_utils
+from jax_utils import Scaler
 import diffrax_utils
 import utils
 
@@ -194,32 +195,6 @@ def init_network(lr, rng):
         optim=optim,
     )
     return state
-
-
-@jax.tree_util.register_pytree_node_class
-class Scaler:
-    def __init__(self, mean, var):
-        self.mean = jnp.expand_dims(jnp.asarray(mean, dtype=jnp.float32), (-1, -2))
-        self.var = jnp.expand_dims(jnp.asarray(var, dtype=jnp.float32), (-1, -2))
-        self.std = jnp.sqrt(self.var)
-
-    def scale(self, a):
-        return (a - self.mean) / self.std
-
-    def unscale(self, a):
-        return (a * self.std) + self.mean
-
-    def tree_flatten(self):
-        return (self.mean, self.var, self.std), None
-
-    @classmethod
-    def tree_unflatten(cls, aux_data, children):
-        mean, var, std = children
-        obj = cls.__new__(cls)
-        obj.mean = mean
-        obj.var = var
-        obj.std = std
-        return obj
 
 
 def make_scalers():
