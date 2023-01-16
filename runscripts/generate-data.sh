@@ -25,11 +25,7 @@ TEST_JOBID=$(get_job_id "$TEST_OUT")
 SHUF_OUT=$(sbatch --wrap="singularity exec '${SCRATCH}/closure/closure.sif' python shuffle_data.py '${SCRATCH}/closure/data/train/op1/'" --job-name="qg-shuf-train" --time="8:00:00" --cpus-per-task=4 --mem="4G" --dependency="afterok:$TRAIN_JOBID" --kill-on-invalid-dep=yes)
 SHUF_JOBID=$(get_job_id "$SHUF_OUT")
 
-TRAIN_STAT_OUT=$(sbatch --wrap="singularity exec '${SCRATCH}/closure/closure.sif' python systems/qg/compute_stats.py '${SCRATCH}/closure/data/train/op1/stats.npz' '${SCRATCH}/closure/data/train/op1/data.hdf5'" --job-name="qg-stat-train" --time="3:00:00" --cpus-per-task=1 --mem="4G" --dependency="afterok:$TRAIN_JOBID" --kill-on-invalid-dep=yes)
-TRAIN_STAT_JOBID=$(get_job_id "$TRAIN_STAT_OUT")
-
 echo "Generate train: $TRAIN_JOBID"
 echo "Generate val:   $VAL_JOBID"
 echo "Generate test:  $TEST_JOBID"
 echo "Shuffle train:  $SHUF_JOBID"
-echo "Train stats:    $TRAIN_STAT_JOBID"
