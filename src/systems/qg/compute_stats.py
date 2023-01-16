@@ -28,18 +28,18 @@ def traj_chunk_iter(h5_path, field, *, chunk_size=1000, include_remainders=True)
             for i in range(num_batches):
                 start = i * chunk_size
                 end = start + chunk_size
-                yield record[start:end]
+                yield record[start:end].astype(np.float64)
             # Yield the remainder
             if include_remainders and remainder != 0:
-                yield record[-remainder:]
+                yield record[-remainder:].astype(np.float64)
 
 
 @dataclasses.dataclass
 class QGStats:
-    mean: npt.NDArray[np.float32]
-    var: npt.NDArray[np.float32]
-    min: npt.NDArray[np.float32]
-    max: npt.NDArray[np.float32]
+    mean: npt.NDArray[np.float64]
+    var: npt.NDArray[np.float64]
+    min: npt.NDArray[np.float64]
+    max: npt.NDArray[np.float64]
 
 
 class QGStatAccumulator:
