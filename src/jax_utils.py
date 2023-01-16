@@ -167,6 +167,8 @@ def _get_target_length(xs, length):
         leaf_lengths = None
     if length is not None:
         length = operator.index(length)
+        if length < 0:
+            raise ValueError(f"invalid length {length}, must not be negative")
     match (leaf_lengths, length):
         case (None, None):
             raise ValueError("invalid target length for None inputs")
