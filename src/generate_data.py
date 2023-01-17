@@ -308,6 +308,7 @@ def gen_qg(out_dir, args, base_logger):
             param_group.create_dataset(f"small_model_{size}", data=size_coarse_cls(big_model=big_model, small_nx=size).small_model.param_json())
         param_group["small_model"] = h5py.SoftLink(f"/params/small_model_{main_small_size}")
         param_group.create_dataset("coarsen_op", data=op_name)
+        out_file.flush()
         # Generate trajectories
         compound_dtype = None
         out_file.create_group("trajs")
@@ -321,13 +322,18 @@ def gen_qg(out_dir, args, base_logger):
                 out_file["trajs"].create_dataset("t", data=np.asarray(result.t))
                 out_file["trajs"].create_dataset("tc", data=np.asarray(result.tc))
                 out_file["trajs"].create_dataset("ablevel", data=np.asarray(result.ablevel))
+                out_file.flush()
             # Store q and dqhdt
             out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q", data=np.asarray(result.q))
+            out_file.flush()
             out_file["trajs"].create_dataset(f"traj{traj_num:05d}_dqhdt", data=np.asarray(result.dqhdt))
+            out_file.flush()
             # Store forcings
             for size in small_sizes:
                 forcing_dataset = out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q_total_forcing_{size}", data=np.asarray(result.q_total_forcings[size]))
+                out_file.flush()
             out_file["trajs"][f"traj{traj_num:05d}_q_total_forcing"] = h5py.SoftLink(f"/trajs/traj{traj_num:05d}_q_total_forcing_{main_small_size}")
+            out_file.flush()
             logger.info("Finished storing trajectory %d", traj_num)
             # Keep only q and forcings and discard the rest
             logger.info("Updating statistics for trajectory %d", traj_num)
