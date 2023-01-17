@@ -63,9 +63,9 @@ CONFIG_VARS = {
 }
 
 
-def make_coarsen_to_size(coarse_op, big_model):
+def make_coarsen_to_size(coarse_op, big_model, small_nx):
 
-    def do_coarsening(var, small_nx):
+    def do_coarsening(var):
         assert var.shape[-2:] == (big_model.ny, big_model.nx)
         if big_model.nx == small_nx:
             # No coarsening needed
@@ -80,7 +80,7 @@ def make_coarsen_to_size(coarse_op, big_model):
 
 
 def as_chunk_host_iter(source_arr, dtype, chunk_size=1000):
-    arr_size = source_arr.shape[0]
+    arr_size = operator.index(source_arr.shape[0])
     num_batches, remainder = divmod(arr_size, chunk_size)
     # Yield chunks
     for i in range(num_batches):
@@ -278,16 +278,18 @@ def gen_qg(out_dir, args, base_logger):
             subsample=args.subsample,
         )
     )
-    coarsen_fn = jax.jit(
-        jax.vmap(
-            make_coarsen_to_size(
-                coarse_op=coarse_cls,
-                big_model=coarse_cls(big_model=big_model, small_nx=main_small_size).small_model,
+    coarsen_fns = {
+        size: jax.jit(
+            jax.vmap(
+                make_coarsen_to_size(
+                    coarse_op=coarse_cls,
+                    big_model=coarse_cls(big_model=big_model, small_nx=main_small_size).small_model,
+                    small_nx=size,
+                ),
             ),
-            in_axes=(0, None),
-        ),
-        static_argnums=(1, ),
-    )
+        )
+        for size in small_sizes
+    }
     # Do computations
     logger.info("Generating %d trajectories with %d steps (subsampled by a factor of %d to %d steps)", args.num_trajs, num_steps, args.subsample, num_steps // args.subsample)
     # Create directory for this operator
@@ -335,15 +337,17 @@ def gen_qg(out_dir, args, base_logger):
             # Update statistics
             #   First, the forcings
             for size in small_sizes:
-                for batch in as_chunk_host_iter(traj_forcings[size], dtype=np.float64, chunk_size=1000):
-                    forcing_stats[size].add_batch(batch)
+                with contextlib.closing(as_chunk_host_iter(traj_forcings[size], dtype=np.float64, chunk_size=1000)) as batch_iter:
+                    for batch in batch_iter:
+                        forcing_stats[size].add_batch(batch)
             traj_forcings = None
             #   Next, the q values which require their own coarsening steps
             for size in small_sizes:
-                for batch in as_chunk_host_iter(coarsen_fn(traj_q, size), dtype=np.float64, chunk_size=1000):
-                    q_stats[size].add_batch(batch)
+                with contextlib.closing(as_chunk_host_iter(coarsen_fns[size](traj_q), dtype=np.float64, chunk_size=1000)) as batch_iter:
+                    for batch in batch_iter:
+                        q_stats[size].add_batch(batch)
             traj_q = None
-            logger.info("Finished staticstics for trajectory %d", traj_num)
+            logger.info("Finished statistics for trajectory %d", traj_num)
             # Finished processing this trajectory
         # Store out statistics
         logger.info("Finalizing statistics")
