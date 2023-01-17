@@ -30,7 +30,7 @@ class PartialState:
     t: jnp.ndarray
     tc: jnp.ndarray
     ablevel: jnp.ndarray
-    q_total_forcing: jnp.ndarray
+    q_total_forcings: dict[int, jnp.ndarray]
 
 
 def qg_model_from_hdf5(file_path, model="small"):
@@ -123,13 +123,19 @@ class SimpleQGLoader:
             end = operator.index(end)
         slicer = slice(start, end)
         slicer_dqhdt = slice(start, end + 2 if end is not None else None)
-        result_fields = {k: None for k in ("q", "dqhdt_seq", "t", "tc", "ablevel", "q_total_forcing")}
+        result_fields = {k: None for k in ("q", "dqhdt_seq", "t", "tc", "ablevel")}
+        result_fields["q_total_forcings"] = {}
         for field in self._core_fields:
             result_fields[field] = getattr(self._core_traj_data, field)[slicer]
         for field in self._non_core_fields:
-            result_fields[field if field != "dqhdt" else "dqhdt_seq"] = jax.device_put(
-                self._trajs_group[f"traj{traj:05d}_{field}"][slicer if field != "dqhdt" else slicer_dqhdt]
-            )
+            if field.startswith("q_total_forcing_"):
+                # Handle forcings specially
+                size = int(field[len("q_total_forcing_"):])
+                result_fields["q_total_forcings"][size] = self._trajs_group[f"traj{traj:05d}_{field}"][slicer]
+            else:
+                result_fields[field if field != "dqhdt" else "dqhdt_seq"] = jax.device_put(
+                    self._trajs_group[f"traj{traj:05d}_{field}"][slicer if field != "dqhdt" else slicer_dqhdt]
+                )
         return jax.device_put(PartialState(**result_fields))
 
     @staticmethod
