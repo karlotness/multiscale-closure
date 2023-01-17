@@ -340,12 +340,16 @@ def gen_qg(out_dir, args, base_logger):
                 with contextlib.closing(as_chunk_host_iter(traj_forcings[size], dtype=np.float64, chunk_size=1000)) as batch_iter:
                     for batch in batch_iter:
                         forcing_stats[size].add_batch(batch)
+                        batch = None
+                batch_iter = None
             traj_forcings = None
             #   Next, the q values which require their own coarsening steps
             for size in small_sizes:
                 with contextlib.closing(as_chunk_host_iter(coarsen_fns[size](traj_q), dtype=np.float64, chunk_size=1000)) as batch_iter:
                     for batch in batch_iter:
                         q_stats[size].add_batch(batch)
+                        batch = None
+                batch_iter = None
             traj_q = None
             logger.info("Finished statistics for trajectory %d", traj_num)
             # Finished processing this trajectory
