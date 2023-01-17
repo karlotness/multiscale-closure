@@ -557,7 +557,7 @@ class SimpleQGLoader:
 @dataclasses.dataclass
 class SnapshotStates:
     q: jnp.ndarray
-    q_total_forcing: jnp.ndarray
+    q_total_forcings: dict[int, jnp.ndarray]
 
 
 class ThreadedPreShuffledSnapshotLoader:
@@ -568,11 +568,14 @@ class ThreadedPreShuffledSnapshotLoader:
             chunk_size=61000,
             seed=None,
             base_logger=None,
+            fields=("q", "q_total_forcing_64"),
     ):
         if base_logger is None:
             base_logger = logging.getLogger("preshuffle_loader")
         # Note: Loads only q and q_total_forcing
-        self.fields = ["q", "q_total_forcing"]
+        self.fields = sorted(set(fields))
+        if not all(f.startswith("q_total_forcing_") or f == "q" for f in self.fields):
+            raise ValueError("invalid field, can only load q and q_total_forcing")
         if seed is None:
             seed = random.SystemRandom().randint(0, 2**32)
         # Create queues
@@ -588,6 +591,7 @@ class ThreadedPreShuffledSnapshotLoader:
                 "chunk_size": chunk_size,
                 "chunk_load_queue": self._chunk_load_queue,
                 "stop_event": self._stop_event,
+                "fields": self.fields,
                 "seed": seed,
                 "logger": base_logger.getChild("chunk_loader"),
             },
@@ -599,6 +603,7 @@ class ThreadedPreShuffledSnapshotLoader:
                 "chunk_load_queue": self._chunk_load_queue,
                 "batch_queue": self._batch_queue,
                 "batch_size": batch_size,
+                "fields": self.fields,
                 "stop_event": self._stop_event,
                 "logger": base_logger.getChild("batcher"),
             },
@@ -607,8 +612,14 @@ class ThreadedPreShuffledSnapshotLoader:
         self._batch_thread.start()
 
     @staticmethod
-    def _load_chunks(file_path, chunk_size, chunk_load_queue, stop_event, seed, logger):
+    def _load_chunks(file_path, chunk_size, chunk_load_queue, stop_event, fields, seed, logger):
         logger.debug("starting chunk loader for size %d", chunk_size)
+
+        def load_chunk(dataset, start, end):
+            chunk = dataset[start:end]
+            rng.shuffle(chunk, axis=0)
+            return tuple(chunk[field].copy() for field in fields)
+
         try:
             rng = np.random.default_rng(seed=seed)
             with h5py.File(file_path, "r") as in_file:
@@ -618,11 +629,10 @@ class ThreadedPreShuffledSnapshotLoader:
                 while not stop_event.is_set():
                     start = int(rng.integers(valid_range, dtype=np.uint64).item())
                     end = start + chunk_size
-                    logger.debug("loaded chunk from %d to %d", start, end)
-                    chunk = dataset[start:end]
-                    rng.shuffle(chunk, axis=0)
-                    chunk_load_queue.put(chunk)
-                    chunk = None
+                    logger.debug("loading chunk from %d to %d", start, end)
+                    chunk_load_queue.put(
+                        load_chunk(dataset, start, end)
+                    )
         except Exception:
             logger.exception("error in background chunk loader")
             chunk_load_queue.put(None)
@@ -631,10 +641,33 @@ class ThreadedPreShuffledSnapshotLoader:
             logger.debug("chunk loader exiting")
 
     @staticmethod
-    def _batch_chunks(chunk_load_queue, batch_queue, batch_size, stop_event, logger):
+    def _batch_chunks(chunk_load_queue, batch_queue, batch_size, stop_event, fields, logger):
         logger.debug("starting batch producer")
+        len_q_total_forcing = len("q_total_forcing_")
+
+        def apportion_batches(construct_batch, chunk, cursor, remaining_steps):
+            slicer = slice(cursor, cursor+remaining_steps)
+            for dest, field_chunk in zip(construct_batch, chunk, strict=True):
+                sliced = field_chunk[slicer]
+                dest.append(sliced)
+            return sliced.shape[0]
+
+        def build_snapshot_states(fields, construct_batch):
+            q = None
+            q_total_forcings = {}
+            for field, field_stack in zip(fields, construct_batch, strict=True):
+                if field.startswith("q_total_forcing_"):
+                    q_total_forcings[int(field[len_q_total_forcing:])] = np.concatenate(field_stack, axis=0)
+                else:
+                    # This must be q
+                    q = np.concatenate(field_stack, axis=0)
+            return SnapshotStates(
+                q=q,
+                q_total_forcings=q_total_forcings,
+            )
+
         try:
-            construct_batch = []
+            construct_batch = tuple([] for _ in fields)
             batch_steps = 0
             while not stop_event.is_set():
                 # Get a chunk
@@ -644,25 +677,21 @@ class ThreadedPreShuffledSnapshotLoader:
                     # Time to exit
                     logger.debug("got None chunk, chunk loader exited")
                     break
-                while cursor < chunk.shape[0] and not stop_event.is_set():
+                chunk_size = chunk[0].shape[0]
+                while cursor < chunk_size and not stop_event.is_set():
                     # Keep consuming from this chunk as long as we can
                     remaining_steps = batch_size - batch_steps
-                    construct_batch.append(chunk[cursor:cursor+remaining_steps])
-                    consumed = construct_batch[-1].shape[0]
+                    consumed = apportion_batches(construct_batch, chunk, cursor, remaining_steps)
                     cursor += consumed
                     batch_steps += consumed
                     if batch_steps >= batch_size:
                         # A new batch is ready
-                        construct_batch = np.concatenate(construct_batch, axis=0)
                         batch_queue.put(
                             jax.device_put(
-                                SnapshotStates(
-                                    q=construct_batch["q"],
-                                    q_total_forcing=construct_batch["q_total_forcing"],
-                                )
+                                build_snapshot_states(fields, construct_batch)
                             )
                         )
-                        construct_batch = []
+                        construct_batch = tuple([] for _ in fields)
                         batch_steps = 0
         except Exception:
             logger.exception("error in background batch producer")
@@ -701,7 +730,8 @@ class ThreadedPreShuffledSnapshotLoader:
         # Now that it is stopped, clear the queue again and place a None
         # This will ensure the batch thread exits if it hasn't already
         try:
-            self._chunk_load_queue.get_nowait()
+            while True:
+                self._chunk_load_queue.get_nowait()
         except queue.Empty:
             pass
         self._chunk_load_queue.put(None)
