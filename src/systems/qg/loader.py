@@ -155,7 +155,7 @@ class ThreadedPreShuffledSnapshotLoader:
             self,
             file_path,
             batch_size,
-            chunk_size=61000,
+            chunk_size=5425,
             seed=None,
             base_logger=None,
             fields=("q", "q_total_forcing_64"),
