@@ -114,7 +114,6 @@ def make_simple_sampler(net, dt=0.01, sample_shape=(2, 64, 64)):
 
 
 def make_net_eval_traj_computer(net, small_model, num_steps, observe_interval=1, dt=0.01):
-    q_scaler, forcing_scaler = make_scalers()
     draw_samples = make_simple_sampler(
         net=net,
         dt=dt,
