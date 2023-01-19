@@ -368,7 +368,7 @@ def make_coarseners(source_data, target_size, input_channels):
             big_model_size = max(target_size, size)
             small_size = min(target_size, size)
             if big_model_size not in models:
-                models[big_model_size] = QGModel.from_param_json(data_file["params"][f"small_model_{size}"].asstr()[()])
+                models[big_model_size] = QGModel.from_param_json(data_file["params"][f"small_model_{big_model_size}"].asstr()[()])
             big_model = models[big_model_size]
             if size == target_size:
                 coarsener = coarsen.NoOpCoarsener(big_model=big_model, small_nx=small_size)
