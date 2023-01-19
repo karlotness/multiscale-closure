@@ -14,11 +14,17 @@ class Scaler:
         self.var = jnp.expand_dims(jnp.asarray(var, dtype=jnp.float32), (-1, -2))
         self.std = jnp.sqrt(self.var)
 
-    def scale(self, a):
+    def scale_to_standard(self, a):
         return (a - self.mean) / self.std
 
-    def unscale(self, a):
+    def scale(self, a):
+        return self.scale_to_standard(a)
+
+    def scale_from_standard(self, a):
         return (a * self.std) + self.mean
+
+    def unscale(self, a):
+        return self.scale_from_standard(a)
 
     def tree_flatten(self):
         return (self.mean, self.var, self.std), None
