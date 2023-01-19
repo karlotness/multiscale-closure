@@ -10,15 +10,13 @@ import contextlib
 
 
 @contextlib.contextmanager
-def rename_save_file(file, mode, *args, **kwargs):
-    final_path = pathlib.Path(file)
-    rand_suffix = random.choices(string.ascii_lowercase + string.digits, k=15)
-    target_path = final_path.with_name(f"{final_path.name}.PART{rand_suffix}")
-    # Open temporary file
-    if mode.lower() not in {"w", "wb", "bw"}:
-        raise ValueError("file must be opened for writing")
-    with open(target_path, mode.lower().replace("w", "x"), **kwargs) as target_file:
-        yield target_file
+def rename_save_file_path(path):
+    final_path = pathlib.Path(path).resolve()
+    rand_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=15))
+    target_path = final_path.with_name(f"{final_path.name}.PART{rand_suffix}").resolve()
+    with open(target_path, "x") as _target_file:
+        pass
+    yield str(target_path)
     # Do the final rename
     os.replace(target_path, final_path)
 
