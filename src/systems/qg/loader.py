@@ -155,6 +155,7 @@ class ThreadedPreShuffledSnapshotLoader:
             self,
             file_path,
             batch_size,
+            buffer_size=10,
             chunk_size=5425,
             seed=None,
             base_logger=None,
@@ -170,7 +171,7 @@ class ThreadedPreShuffledSnapshotLoader:
             seed = random.SystemRandom().randint(0, 2**32)
         # Create queues
         self._chunk_load_queue = queue.Queue(maxsize=1)
-        self._batch_queue = queue.Queue(maxsize=max(batch_size, 1))
+        self._batch_queue = queue.Queue(maxsize=max(buffer_size, 1))
         self._stop_event = threading.Event()
         # Spawn threads
         self._chunk_load_thread = threading.Thread(
