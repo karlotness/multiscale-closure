@@ -131,6 +131,7 @@ def make_batch_computer(scalers, coarseners, input_channels, output_size):
         y = mean + std * noise
         net_input = jnp.concatenate([y, fixed_input], axis=0)
         pred = net(net_input, t)
+        assert pred.shape[-2:] == (output_size, output_size)
         return loss_weight_func(t) * jnp.mean((pred + noise / std) ** 2)
 
     def batch_loss(net, fixed_input, targets, ts, rng):
