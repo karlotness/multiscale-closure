@@ -10,6 +10,7 @@ seaborn
 jupyterlab
 ipywidgets
 tqdm
+zarr
 h5py
 diffrax
 distrax
