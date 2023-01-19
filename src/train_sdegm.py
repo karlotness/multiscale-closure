@@ -3,6 +3,7 @@ import dataclasses
 import pathlib
 import math
 import os
+import sys
 import random
 import contextlib
 import itertools
@@ -126,7 +127,7 @@ def make_batch_computer(scalers, coarseners, input_channels, output_size):
         mean = targets * jnp.exp(-0.5 * int_beta_func(t))
         var = jnp.maximum(min_variance, 1 - jnp.exp(-int_beta_func(t)))
         std = jnp.sqrt(var)
-        noise = jax.random.normal(rng, shape=targets.shape)
+        noise = jax.random.normal(rng, shape=targets.shape, dtype=jnp.float32)
         y = mean + std * noise
         net_input = jnp.concatenate([y, fixed_input], axis=0)
         pred = net(net_input, t)
@@ -300,6 +301,15 @@ def do_validation(train_state, val_rng, np_rng, loader, sample_stat_fn, num_samp
 
 
 def init_network(lr, rng, output_size, input_channels):
+
+    def leaf_map(leaf):
+        if isinstance(leaf, jnp.ndarray):
+            if leaf.dtype == jnp.dtype(jnp.float64):
+                return leaf.astype(jnp.float32)
+            if leaf.dtype == jnp.dtype(jnp.complex128):
+                return leaf.astype(jnp.complex64)
+        return leaf
+
     num_inputs = len(input_channels)
     args = {
         "img_size": output_size,
@@ -311,6 +321,8 @@ def init_network(lr, rng, output_size, input_channels):
         key=rng,
     )
     optim = optax.adabelief(learning_rate=lr)
+    net = jax.tree_util.tree_map(leaf_map, net)
+    optim = jax.tree_util.tree_map(leaf_map, optim)
     state = jax_utils.EquinoxTrainState(
         net=net,
         optim=optim,
@@ -386,6 +398,8 @@ def main():
             git_info.hash,
             "clean" if git_info.clean_worktree else "dirty"
         )
+    if not utils.check_environment_variables(base_logger=logger):
+        sys.exit(1)
     # Select seed
     if args.seed is None:
         seed = random.SystemRandom().randint(0, 2**32)
