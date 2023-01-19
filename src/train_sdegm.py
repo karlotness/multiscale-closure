@@ -1,4 +1,5 @@
 import argparse
+import dataclasses
 import pathlib
 import math
 import os
@@ -10,11 +11,15 @@ import jax.numpy as jnp
 import diffrax
 import equinox as eqx
 import optax
+import h5py
 import numpy as np
 import logging
 import time
+import json
 import functools
 from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader
+from systems.qg import coarsen, diagnostics as qg_spec_diag
+from systems.qg.qg_model import QGModel
 from methods.gz_fcnn import GZFCNN
 import jax_utils
 from jax_utils import Scaler
@@ -34,8 +39,11 @@ parser.add_argument("--num_epochs", type=int, default=100, help="Number of train
 parser.add_argument("--batches_per_epoch", type=int, default=100, help="Training batches per epoch")
 parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for optimizer")
 parser.add_argument("--dt", type=float, default=0.01, help="Time step size when running diffusion")
-parser.add_argument("--num_val_samples", type=int, default=5, help="Number of samples to draw in each validation period")
+parser.add_argument("--num_val_samples", type=int, default=10, help="Number of samples to draw in each validation period")
+parser.add_argument("--val_mean_samples", type=int, default=25, help="Number of samples used to compute empirical means")
 parser.add_argument("--val_interval", type=int, default=1, help="Number of epochs between validation periods")
+parser.add_argument("--output_size", type=int, default=64, help="Scale of output forcing to generate")
+parser.add_argument("--input_channels", type=str, nargs="+", default=["q_64"], help="Channels to show the network as input")
 
 
 def save_network(output_name, output_dir, state, base_logger=None):
@@ -44,12 +52,64 @@ def save_network(output_name, output_dir, state, base_logger=None):
     else:
         logger = base_logger.getChild("save")
     output_dir = pathlib.Path(output_dir)
-    with utils.rename_save_file(output_dir / f"{output_name}.eqx", "wb") as eqx_out:
-        eqx.tree_serialise_leaves(eqx_out, state.net)
+    with utils.rename_save_file_path(output_dir / f"{output_name}.eqx") as eqx_out_path:
+        eqx.tree_serialise_leaves(eqx_out_path, state.net)
     logger.info("Saved network parameters to %s in %s", output_name, output_dir)
 
 
-def make_batch_computer(batch_size, q_scaler, forcing_scaler, loss_weight_func=None):
+def determine_required_fields(input_channels, output_size):
+    fields = {f"q_total_forcing_{output_size}"}
+    for chan in input_channels:
+        if chan.startswith("q_total_forcing_"):
+            fields.add(chan)
+        elif chan.startswith("q_"):
+            fields.add("q")
+        else:
+            raise ValueError(f"Unsupported input field {chan}")
+    return sorted(fields)
+
+
+def determine_channel_sizes(input_channels):
+    sizes = set()
+    for chan in input_channels:
+        if chan.startswith("q_total_forcing_"):
+            sizes.add(int(chan[len("q_total_forcing_"):]))
+        elif chan.startswith("q_"):
+            sizes.add(int(chan[len("q_"):]))
+        else:
+            raise ValueError(f"Unsupported input field {chan}")
+    return sizes
+
+
+def build_fixed_input_from_batch(batch, input_channels, scalers, coarseners):
+    input_stack = []
+    for chan in sorted(set(input_channels)):
+        if chan.startswith("q_total_forcing_"):
+            # Stack a forcing channel
+            size = int(chan[len("q_total_forcing_"):])
+            input_stack.append(
+                jax.vmap(scalers.q_total_forcing_scaler.scale_to_standard)(
+                    jax.vmap(coarseners[size])(
+                        batch.q_total_forcings[size]
+                    )
+                )
+            )
+        elif chan.startswith("q_"):
+            # Stack the q channel
+            size = batch.q.shape[-1]
+            input_stack.append(
+                jax.vmap(scalers.q_scaler.scale_to_standard)(
+                    jax.vmap(coarseners[size])(
+                        batch.q
+                    )
+                )
+            )
+        else:
+            raise ValueError(f"Unsupported input field {chan}")
+    return jnp.concatenate(input_stack, axis=-3)
+
+
+def make_batch_computer(scalers, coarseners, input_channels, output_size):
     # OU: dY = -0.5 * g(t)
     # beta(t) = 18 * t^2
     # int(beta)(t) = 6 * t^3
@@ -60,38 +120,41 @@ def make_batch_computer(batch_size, q_scaler, forcing_scaler, loss_weight_func=N
         return 6 * t**3
 
     min_variance = 1e-6
+    loss_weight_func = lambda t: 1 - jnp.exp(-int_beta_func(t))
 
-    if loss_weight_func is None:
-        loss_weight_func = lambda t: 1 - jnp.exp(-int_beta_func(t))
-
-    def sample_loss(snap_q, snap_forcing, t, rng, net):
-        mean = snap_forcing * jnp.exp(-0.5 * int_beta_func(t))
+    def sample_loss(fixed_input, targets, t, rng, net):
+        mean = targets * jnp.exp(-0.5 * int_beta_func(t))
         var = jnp.maximum(min_variance, 1 - jnp.exp(-int_beta_func(t)))
         std = jnp.sqrt(var)
-        noise = jax.random.normal(rng, shape=snap_forcing.shape)
+        noise = jax.random.normal(rng, shape=targets.shape)
         y = mean + std * noise
-        net_input = jnp.concatenate([y, snap_q], axis=0)
+        net_input = jnp.concatenate([y, fixed_input], axis=0)
         pred = net(net_input, t)
         return loss_weight_func(t) * jnp.mean((pred + noise / std) ** 2)
 
-    def batch_loss(net, snap_q, snap_forcing, ts, rng):
-        assert snap_q.shape == snap_forcing.shape
-        n_batch = snap_q.shape[0]
+    def batch_loss(net, fixed_input, targets, ts, rng):
+        n_batch = targets.shape[0]
         rngs = jnp.stack(jax.random.split(rng, n_batch))
-        losses = jax.vmap(functools.partial(sample_loss, net=net))(snap_q, snap_forcing, ts, rngs)
+        losses = jax.vmap(functools.partial(sample_loss, net=net))(fixed_input, targets, ts, rngs)
         return jnp.mean(losses)
 
     def do_batch(batch, state, rng):
         # Extract batch components
-        batch_q = jax.vmap(q_scaler.scale)(batch.q)
-        batch_q_forcing = jax.vmap(forcing_scaler.scale)(batch.q_total_forcing)
+        fixed_input = build_fixed_input_from_batch(
+            batch=batch,
+            input_channels=input_channels,
+            scalers=scalers,
+            coarseners=coarseners,
+        )
+        targets = jax.vmap(scalers.q_total_forcing_scaler.scale_to_standard)(batch.q_total_forcings[output_size])
+        batch_size = targets.shape[0]
         # Produce RNGs
         rng_times, rng_loss, rng_ctr = jax.random.split(rng, 3)
         # Sample times (one in each time bucket)
         times = jax.random.uniform(rng_times, shape=(batch_size, ), minval=0, maxval=((t1 - t0) / batch_size), dtype=jnp.float32)
         times = times + jnp.arange(batch_size, dtype=jnp.float32) * ((t1 - t0) / batch_size)
         # Compute losses
-        loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, batch_q, batch_q_forcing, times, rng=rng_loss)
+        loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, fixed_input, targets, times, rng=rng_loss)
         # Update parameters (if loss is finite)
         out_state = state.apply_updates(grads)
         return out_state, rng_ctr, loss
@@ -116,7 +179,7 @@ def do_epoch(train_state, train_rng, batch_iter, batch_fn, logger=None):
     return train_state, train_rng, {"mean_loss": mean_loss, "final_loss": final_loss}
 
 
-def make_sampler(dt, sample_shape, q_scaler, forcing_scaler):
+def make_sampler(scalers, coarseners, input_channels, dt=0.01):
     # OU: dY = -0.5 * g(t)
     # g(t) = t
     # int(g)(t) = t^2/2
@@ -135,54 +198,116 @@ def make_sampler(dt, sample_shape, q_scaler, forcing_scaler):
         return jnp.float32(6 * t**3)
 
     def drift(t, y, args):
-        net, q = args
+        net, fixed_input = args
         beta = beta_func(t)
-        net_input = jnp.concatenate([y, q], axis=0)
+        net_input = jnp.concatenate([y, fixed_input], axis=0)
         return -0.5 * beta * (y + net(net_input, t))
 
-    def draw_single_sample(batch_q, rng, net):
+    def draw_single_sample(fixed_input, rng, net, sample_shape):
         snapshot = jax.random.normal(rng, sample_shape, dtype=jnp.float32)
         terms = diffrax.ODETerm(drift)
         solver = diffrax_utils.Tsit5Float32()
         saveat = diffrax.SaveAt(t1=True)
-        sol = diffrax.diffeqsolve(terms, solver, t1, t0, -dt, snapshot, saveat=saveat, adjoint=diffrax_utils.NoAdjointFloat32(), max_steps=max_steps, args=(net, batch_q))
+        sol = diffrax.diffeqsolve(terms, solver, t1, t0, -dt, snapshot, saveat=saveat, adjoint=diffrax_utils.NoAdjointFloat32(), max_steps=max_steps, args=(net, fixed_input))
         return sol.ys[0]
 
-    def draw_samples(state, batch_q, rng):
-        net = state.net
-        batch_q = jax.vmap(q_scaler.scale)(jnp.squeeze(batch_q, 1))
-        num_samples = batch_q.shape[0]
-        rng_ctr, *sample_rngs = jax.random.split(rng, num_samples + 1)
-        sample_rngs = jnp.stack(sample_rngs)
-        samples = jax.vmap(functools.partial(draw_single_sample, net=net))(batch_q, sample_rngs)
-        samples = jax.vmap(forcing_scaler.unscale)(samples)
+    def draw_samples(batch, net, rng):
+        # Batch needs to have all required fields present (at least q and the relevant forcing dimensions)
+        fixed_input = build_fixed_input_from_batch(
+            batch=batch,
+            input_channels=input_channels,
+            scalers=scalers,
+            coarseners=coarseners
+        )
+        n_batch = fixed_input.shape[0]
+        output_size = fixed_input.shape[-1]
+        rng_ctr, *rngs = jax.random.split(rng, n_batch + 1)
+        samples = jax.vmap(functools.partial(draw_single_sample, net=net, sample_shape=(2, output_size, output_size)))(fixed_input, jnp.stack(rngs))
+        samples = jax.vmap(scalers.q_total_forcing_scaler.scale_from_standard)(samples)
         return samples, rng_ctr
 
     return draw_samples
 
 
-def do_validation(train_state, val_rng, np_rng, loader, sample_fn, num_samples, logger=None):
+def make_validation_stats_function(num_mean_samples, scalers, coarseners, dt, input_channels, output_size):
+
+    def multi_sampler(net, batch, rng):
+        rng_ctr, *batch_rngs = jax.random.split(rng, num_mean_samples + 1)
+        batch_rngs = jnp.stack(batch_rngs)
+        sample_fn = jax.vmap(
+            functools.partial(
+                make_sampler(
+                    scalers=scalers,
+                    coarseners=coarseners,
+                    input_channels=input_channels,
+                    dt=dt,
+                ),
+                net=net,
+                batch=batch,
+            )
+        )
+        samples, _unused_rng_ctr = sample_fn(rng=batch_rngs)
+        return samples, rng_ctr
+
+    def compute_stats(batch, net, rng):
+        # Dimensions: [samples, batch, lev=2, ny, nx]
+        targets = batch.q_total_forcings[output_size]
+        samples, rng_ctr = multi_sampler(net, batch, rng)
+        single_samples = samples[0]
+        means = jnp.mean(samples, axis=0)
+        # Compute stats
+        # (expand dim to size [samples, time=1, lev=2, ny, nx]
+        stats = qg_spec_diag.subgrid_scores(
+            true=jnp.expand_dims(targets, 1),
+            mean=jnp.expand_dims(means, 1),
+            gen=jnp.expand_dims(single_samples, 1),
+        )
+        return stats, rng_ctr
+
+    return compute_stats
+
+
+def do_validation(train_state, val_rng, np_rng, loader, sample_stat_fn, num_samples, logger=None):
     if logger is None:
         logger = logging.getLogger("validation")
     # Sample indices
     traj = np_rng.integers(low=0, high=loader.num_trajs, size=num_samples)
     step = np_rng.integers(low=0, high=loader.num_steps, size=num_samples)
     # Load and stack q components
-    logger.info("Starting validation, drawing %d samples", num_samples)
+    logger.info("Loading %d samples of validation data", num_samples)
+    batch = jax.tree_util.tree_map(
+        lambda *args: jnp.concatenate(args, axis=0),
+        *(loader.get_trajectory(traj=t, start=s, end=s+1) for t, s in zip(traj, step, strict=True))
+    )
+    logger.info("Starting validation")
     val_start = time.perf_counter()
-    batch_q = np.stack([loader.get_trajectory(traj=t, start=s, end=s+1).q for t, s in zip(traj, step)])
-    samples, rng_ctr = sample_fn(state=train_state, batch_q=batch_q, rng=val_rng)
-    samples = jax.device_get(samples)
+    stats, rng_ctr = sample_stat_fn(batch, train_state.net, val_rng)
+    stats = jax.device_get(stats)
     val_end = time.perf_counter()
-    logger.info("Finished drawing %d samples in %f sec", num_samples, val_end - val_start)
-    return samples, rng_ctr
+    logger.info("Finished validation in %f sec", val_end - val_start)
+    # Report statistics in JSON-serializable format
+    stats_report = {
+        "l2_mean": stats.l2_mean.item(),
+        "l2_total": stats.l2_total.item(),
+        "l2_residual": stats.l2_residual.item(),
+        "var_ratio": stats.var_ratio.tolist(),
+    }
+    logger.info("l2_mean: %f", stats.l2_mean.item())
+    logger.info("l2_total: %f", stats.l2_total.item())
+    logger.info("l2_residual: %f", stats.l2_residual.item())
+    logger.info("var_ratio: [%f, %f]", stats.var_ratio[0].item(), stats.var_ratio[1].item())
+    return stats_report, rng_ctr
 
 
-def init_network(lr, rng):
+def init_network(lr, rng, output_size, input_channels):
+    num_inputs = len(input_channels)
+    args = {
+        "img_size": output_size,
+        "n_layers_in": 2 + (num_inputs * 2),
+        "n_layers_out": 2,
+    }
     net = GZFCNN(
-        img_size=64,
-        n_layers_in=4,
-        n_layers_out=2,
+        **args,
         key=rng,
     )
     optim = optax.adabelief(learning_rate=lr)
@@ -190,21 +315,59 @@ def init_network(lr, rng):
         net=net,
         optim=optim,
     )
-    return state
+    network_info = {
+        "arch": "gz-fcnn-v1",
+        "args": args,
+        "input_channels": input_channels,
+        "output_size": output_size,
+    }
+    return state, network_info
 
 
-def make_scalers():
-    stats_path = pathlib.Path(__file__).resolve().parent / "systems" / "qg" / "stats_op1.npz"
-    with np.load(stats_path) as stats_file:
-        q_scaler = Scaler(
-            mean=stats_file["q_mean"],
-            var=stats_file["q_var"],
+@jax_utils.register_pytree_dataclass
+@dataclasses.dataclass
+class Scalers:
+    q_scaler: jax_utils.Scaler
+    q_total_forcing_scaler: jax_utils.Scaler
+
+
+def make_scalers(source_data, target_size):
+    with h5py.File(source_data, "r") as data_file:
+        return Scalers(
+            q_scaler=Scaler(
+                mean=data_file["stats"]["q"][str(target_size)]["mean"][:],
+                var=data_file["stats"]["q"][str(target_size)]["var"][:],
+            ),
+            q_total_forcing_scaler=Scaler(
+                mean=data_file["stats"]["q_total_forcing"][str(target_size)]["mean"][:],
+                var=data_file["stats"]["q_total_forcing"][str(target_size)]["var"][:],
+            ),
         )
-        forcing_scaler = Scaler(
-            mean=stats_file["q_total_forcing_mean"],
-            var=stats_file["q_total_forcing_var"],
-        )
-    return q_scaler, forcing_scaler
+
+
+def make_coarseners(source_data, target_size, input_channels):
+    sizes = determine_channel_sizes(input_channels=input_channels)
+    models = {}
+    coarseners = {}
+    with h5py.File(source_data, "r") as data_file:
+        q_size = json.loads(data_file["params"]["small_model"].asstr()[()])["nx"]
+        coarse_cls = coarsen.COARSEN_OPERATORS[data_file["params"]["coarsen_op"].asstr()[()]]
+        for size in set(itertools.chain(sizes, [q_size])):
+            big_model_size = max(target_size, size)
+            small_size = min(target_size, size)
+            if big_model_size not in models:
+                models[big_model_size] = QGModel.from_param_json(data_file["params"][f"small_model_{size}"].asstr()[()])
+            big_model = models[big_model_size]
+            if size == target_size:
+                coarsener = coarsen.NoOpCoarsener(big_model=big_model, small_nx=small_size)
+            else:
+                coarsener = coarse_cls(big_model=big_model, small_nx=small_size)
+            if size > small_size:
+                coarsen_fn = coarsener.coarsen
+            else:
+                coarsen_fn = coarsener.uncoarsen
+            coarseners[size] = coarsen_fn
+    return coarseners
 
 
 def main():
@@ -239,15 +402,36 @@ def main():
     weights_dir.mkdir(exist_ok=True)
     samples_dir = out_dir / "samples"
     samples_dir.mkdir(exist_ok=True)
+    # Determine what inputs we need
+    input_channels = sorted(set(args.input_channels))
+    output_size = args.output_size
+    required_fields = determine_required_fields(
+        input_channels=input_channels,
+        output_size=output_size,
+    )
     # Construct neural net
     rng, rng_ctr = jax.random.split(rng_ctr, 2)
     logger.info("Training network: gzfcnn")
-    state = init_network(
+    state, network_info = init_network(
         lr=args.lr,
         rng=rng,
+        output_size=output_size,
+        input_channels=input_channels,
     )
+    # Store network info
+    with open(weights_dir / "network_info.json", "w", encoding="utf8") as net_info_file:
+        json.dump(network_info, net_info_file)
+
     # Create data normalizer and its inverse
-    q_scaler, forcing_scaler = make_scalers()
+    scalers = make_scalers(
+        source_data=train_path,
+        target_size=output_size,
+    )
+    coarseners = make_coarseners(
+        source_data=train_path,
+        target_size=output_size,
+        input_channels=input_channels,
+    )
 
     # Open data files
     with contextlib.ExitStack() as train_context:
@@ -257,32 +441,35 @@ def main():
                 file_path=train_path,
                 batch_size=args.batch_size,
                 buffer_size=10,
-                chunk_size=32000,
                 seed=np_rng.integers(2**32).item(),
                 base_logger=logger.getChild("train_loader"),
+                fields=required_fields,
             )
         )
         val_loader = train_context.enter_context(
             SimpleQGLoader(
                 file_path=val_path,
-                fields=["q"],
+                fields=required_fields,
             )
         )
 
         # Training functions
         train_batch_fn = eqx.filter_jit(
             make_batch_computer(
-                batch_size=args.batch_size,
-                q_scaler=q_scaler,
-                forcing_scaler=forcing_scaler,
+                scalers=scalers,
+                coarseners=coarseners,
+                input_channels=input_channels,
+                output_size=output_size,
             )
         )
         val_sample_fn = eqx.filter_jit(
-            make_sampler(
+            make_validation_stats_function(
+                num_mean_samples=args.val_mean_samples,
+                scalers=scalers,
+                coarseners=coarseners,
                 dt=args.dt,
-                sample_shape=(2, 64, 64),
-                q_scaler=q_scaler,
-                forcing_scaler=forcing_scaler,
+                input_channels=input_channels,
+                output_size=output_size,
             )
         )
 
@@ -313,18 +500,15 @@ def main():
             # Validation step
             if epoch % args.val_interval == 0:
                 logger.info("Starting validation for epoch %d", epoch)
-                val_samples, rng_ctr = do_validation(
+                val_stat_report, rng_ctr = do_validation(
                     train_state=state,
                     val_rng=rng_ctr,
                     np_rng=np_rng,
                     loader=val_loader,
-                    sample_fn=val_sample_fn,
+                    sample_stat_fn=val_sample_fn,
                     logger=logger.getChild(f"{epoch:05d}_val"),
                     num_samples=args.num_val_samples,
                 )
-                np.save(samples_dir / f"samples_{epoch:05d}.npy", val_samples, allow_pickle=False)
-                logger.info("Saved samples to %s", f"samples_{epoch:05d}.npy")
-                val_samples = None
 
             logger.info("Finished epoch %d", epoch)
 
