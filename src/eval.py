@@ -59,7 +59,7 @@ def load_network(weight_file):
 
 def make_generative_sampler(net, num_mean_samples, sample_dt, scalers, coarseners, input_channels):
 
-    def compute_samples_mean(batch, rng):
+    def do_sample(rng, batch):
         # Function of batch, net, rng
         sample_fn = functools.partial(
             make_sampler(
@@ -71,14 +71,16 @@ def make_generative_sampler(net, num_mean_samples, sample_dt, scalers, coarsener
             batch=batch,
             net=net,
         )
+        sample, _rng = sample_fn(rng=rng)
+        return sample
+
+    def compute_samples_mean(batch, rng):
         rngs = jax.random.split(rng, num_mean_samples)
         # Scan instead of vmap to save memory at the cost of parallelism
-        _carry, mean_samples = jax.lax.scan(
-            lambda _carry, x: (None, sample_fn(rng=x)[0]),
-            None,
-            rngs,
-            length=num_mean_samples,
-        )
+        mean_samples = jax_utils.chunked_vmap(
+            functools.partial(do_sample, batch=batch),
+            chunk_size=100,
+        )(rng=rngs)
         sample = mean_samples[0]
         mean = jnp.mean(mean_samples, axis=0)
         return sample, mean
@@ -88,9 +90,7 @@ def make_generative_sampler(net, num_mean_samples, sample_dt, scalers, coarsener
 
 def make_generative_stat_computer(net, num_mean_samples, sample_dt, scalers, coarseners, input_channels):
 
-    def map_gen_sampler(_carry, x):
-        batch_elem, rng = x
-        # Function of (batch, rng)
+    def map_gen_sampler(batch_elem, rng):
         sampler_fn = make_generative_sampler(
             net=net,
             num_mean_samples=num_mean_samples,
@@ -105,17 +105,16 @@ def make_generative_stat_computer(net, num_mean_samples, sample_dt, scalers, coa
         )
         sample = jnp.squeeze(sample, 0)
         mean = jnp.squeeze(mean, 0)
-        return None, (sample, mean)
+        return sample, mean
 
     def compute_stats(batch, rng):
         batch_size = jax.tree_util.tree_leaves(batch)[0].shape[0]
         rng_ctr, *rngs = jax.random.split(rng, batch_size + 1)
         rngs = jnp.stack(rngs)
-        _carry, (samples, means) = jax.lax.scan(
+        samples, means = jax_utils.chunked_vmap(
             map_gen_sampler,
-            None,
-            (batch, rngs),
-        )
+            chunk_size=1,
+        )(batch, rngs)
         # Add time dimensions and compute stats
         output_size = samples.shape[-1]
         true_forcings = batch.q_total_forcings[output_size]
