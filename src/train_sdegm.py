@@ -181,7 +181,7 @@ def do_epoch(train_state, train_rng, batch_iter, batch_fn, logger=None):
     return train_state, train_rng, {"mean_loss": mean_loss, "final_loss": final_loss}
 
 
-def make_sampler(scalers, coarseners, input_channels, dt=0.01):
+def make_raw_sampler(dt=0.01):
     # OU: dY = -0.5 * g(t)
     # g(t) = t
     # int(g)(t) = t^2/2
@@ -213,7 +213,20 @@ def make_sampler(scalers, coarseners, input_channels, dt=0.01):
         sol = diffrax.diffeqsolve(terms, solver, t1, t0, -dt, snapshot, saveat=saveat, adjoint=diffrax_utils.NoAdjointFloat32(), max_steps=max_steps, args=(net, fixed_input))
         return sol.ys[0]
 
+    def draw_raw_samples(fixed_input, net, rng):
+        n_batch = fixed_input.shape[0]
+        output_size = fixed_input.shape[-1]
+        rng_ctr, *rngs = jax.random.split(rng, n_batch + 1)
+        samples = jax.vmap(functools.partial(draw_single_sample, net=net, sample_shape=(2, output_size, output_size)))(fixed_input, jnp.stack(rngs))
+        return samples, rng_ctr
+
+    return draw_raw_samples
+
+
+def make_sampler(scalers, coarseners, input_channels, dt=0.01):
+
     def draw_samples(batch, net, rng):
+        raw_sampler = make_raw_sampler(dt=dt)
         # Batch needs to have all required fields present (at least q and the relevant forcing dimensions)
         fixed_input = build_fixed_input_from_batch(
             batch=batch,
@@ -221,11 +234,8 @@ def make_sampler(scalers, coarseners, input_channels, dt=0.01):
             scalers=scalers,
             coarseners=coarseners
         )
-        n_batch = fixed_input.shape[0]
-        output_size = fixed_input.shape[-1]
-        rng_ctr, *rngs = jax.random.split(rng, n_batch + 1)
-        samples = jax.vmap(functools.partial(draw_single_sample, net=net, sample_shape=(2, output_size, output_size)))(fixed_input, jnp.stack(rngs))
-        samples = jax.vmap(scalers.q_total_forcing_scaler.scale_from_standard)(samples)
+        raw_samples, rng_ctr = raw_sampler(fixed_input, net, rng)
+        samples = jax.vmap(scalers.q_total_forcing_scaler.scale_from_standard)(raw_samples)
         return samples, rng_ctr
 
     return draw_samples

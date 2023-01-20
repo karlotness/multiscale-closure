@@ -19,7 +19,7 @@ import math
 import dataclasses
 from methods.gz_fcnn import GZFCNN
 from methods import ARCHITECTURES
-from train_sdegm import determine_required_fields, build_fixed_input_from_batch, make_scalers, make_coarseners, make_sampler
+from train_sdegm import determine_required_fields, build_fixed_input_from_batch, make_scalers, make_coarseners, make_raw_sampler
 import jax_utils
 
 
@@ -57,30 +57,28 @@ def load_network(weight_file):
     return net, net_info
 
 
-def make_generative_sampler(net, num_mean_samples, sample_dt, scalers, coarseners, input_channels):
+def make_generative_sampler(net, num_mean_samples, sample_dt, scalers):
 
-    def do_sample(rng, batch):
-        # Function of batch, net, rng
+    def do_sample(rng, fixed_input):
+        # Function of fixed_input, net, rng
         sample_fn = functools.partial(
-            make_sampler(
-                scalers=scalers,
-                coarseners=coarseners,
-                input_channels=input_channels,
+            make_raw_sampler(
                 dt=sample_dt,
             ),
-            batch=batch,
+            fixed_input=fixed_input,
             net=net,
         )
         sample, _rng = sample_fn(rng=rng)
         return sample
 
-    def compute_samples_mean(batch, rng):
+    def compute_samples_mean(fixed_input, rng):
         rngs = jax.random.split(rng, num_mean_samples)
         # Scan instead of vmap to save memory at the cost of parallelism
         mean_samples = jax_utils.chunked_vmap(
-            functools.partial(do_sample, batch=batch),
+            functools.partial(do_sample, fixed_input=fixed_input),
             chunk_size=100,
         )(rng=rngs)
+        mean_samples = jax.vmap(scalers.q_total_forcing_scaler.scale_from_standard)(mean_samples)
         sample = mean_samples[0]
         mean = jnp.mean(mean_samples, axis=0)
         return sample, mean
@@ -88,36 +86,33 @@ def make_generative_sampler(net, num_mean_samples, sample_dt, scalers, coarsener
     return compute_samples_mean
 
 
-def make_generative_stat_computer(net, num_mean_samples, sample_dt, scalers, coarseners, input_channels):
+def make_generative_stat_computer(net, num_mean_samples, sample_dt, scalers):
 
-    def map_gen_sampler(batch_elem, rng):
+    def map_gen_sampler(fixed_input_elem, rng):
         sampler_fn = make_generative_sampler(
             net=net,
             num_mean_samples=num_mean_samples,
             sample_dt=sample_dt,
             scalers=scalers,
-            coarseners=coarseners,
-            input_channels=input_channels,
         )
         sample, mean = sampler_fn(
-            batch=jax.tree_map(lambda arr: jnp.expand_dims(arr, 0), batch_elem),
+            fixed_input=jax.tree_map(lambda arr: jnp.expand_dims(arr, 0), fixed_input_elem),
             rng=rng,
         )
         sample = jnp.squeeze(sample, 0)
         mean = jnp.squeeze(mean, 0)
         return sample, mean
 
-    def compute_stats(batch, rng):
-        batch_size = jax.tree_util.tree_leaves(batch)[0].shape[0]
+    def compute_stats(fixed_input, target, rng):
+        batch_size = fixed_input.shape[0]
         rng_ctr, *rngs = jax.random.split(rng, batch_size + 1)
         rngs = jnp.stack(rngs)
         samples, means = jax_utils.chunked_vmap(
             map_gen_sampler,
             chunk_size=1,
-        )(batch, rngs)
+        )(fixed_input, rngs)
         # Add time dimensions and compute stats
-        output_size = samples.shape[-1]
-        true_forcings = batch.q_total_forcings[output_size]
+        true_forcings = target
         stats = qg_spec_diag.subgrid_scores(
             true=jnp.expand_dims(true_forcings, 1),
             mean=jnp.expand_dims(means, 1),
@@ -144,6 +139,16 @@ def run_generative_offline_stats(net, eval_file, num_step_samples, spectrum_seed
             lambda *args: jnp.concatenate(args, axis=0),
             *(eval_loader.get_trajectory(traj=operator.index(t), start=operator.index(s), end=operator.index(s)+1) for t, s in zip(sample_trajs, sample_steps, strict=True))
         )
+        target = batch.q_total_forcings[output_size]
+        fixed_input = jax.jit(
+                lambda batch: build_fixed_input_from_batch(
+                    batch=batch,
+                    input_channels=input_channels,
+                    scalers=scalers,
+                    coarseners=coarseners,
+                )
+        )(batch)
+        batch = None
     logger.info("Finished loading evaluation data")
     # With loaded data on device, compute statistics
     logger.info("Starting statistics computation")
@@ -153,11 +158,9 @@ def run_generative_offline_stats(net, eval_file, num_step_samples, spectrum_seed
             num_mean_samples=num_mean_samples,
             sample_dt=sample_dt,
             scalers=scalers,
-            coarseners=coarseners,
-            input_channels=input_channels,
         )
     )
-    stats, rng_ctr = stats_fn(batch, rng_ctr)
+    stats, rng_ctr = stats_fn(fixed_input, target, rng_ctr)
     stats = jax.device_get(stats)
     logger.info("Finished statistics computation")
     logger.info(f"Stat l2_mean: {stats.l2_mean:<15.5g}")
