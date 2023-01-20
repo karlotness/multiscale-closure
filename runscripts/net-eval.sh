@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #SBATCH --job-name=net-eval
-#SBATCH --time=01:00:00
-#SBATCH --cpus-per-task=2
+#SBATCH --time=12:00:00
+#SBATCH --cpus-per-task=1
 #SBATCH --mem=16GB
 #SBATCH --gres=gpu:1
 
@@ -28,6 +28,7 @@ readonly SINGULARITY_CONTAINER="${SCRATCH}/closure/closure.sif"
 readonly ORIGIN_REPO_DIR="${HOME}/repos/closure.git"
 readonly CHECKOUT_DIR="${SLURM_JOBTMP}/Closure/"
 readonly EVAL_DATA_DIR="${SCRATCH}/closure/data/test/op1/"
+readonly TRAIN_DATA_DIR="${SCRATCH}/closure/data/train/op1/"
 
 # Clone Repository
 mkdir -p "$CHECKOUT_DIR"
@@ -37,4 +38,8 @@ git clone "$ORIGIN_REPO_DIR" "$CHECKOUT_DIR"
 export JAX_ENABLE_X64=True
 export JAX_DEFAULT_DTYPE_BITS=32
 singularity run --nv "$SINGULARITY_CONTAINER" \
-            python "${CHECKOUT_DIR}/src/eval.py" "$NET_DIR" "$EVAL_DATA_DIR" "$EVAL_TYPE"
+            python "${CHECKOUT_DIR}/src/eval.py" "$NET_DIR" "$EVAL_DATA_DIR" "$EVAL_TYPE" "$TRAIN_DATA_DIR" \
+            --seed=0 \
+            --num_spectrum_samples=100 \
+            --spectrum_seed=0 \
+            --num_mean_samples=1000
