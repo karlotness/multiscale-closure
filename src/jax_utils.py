@@ -105,6 +105,62 @@ def strided_scan(f, init, xs, length=None, reverse=False, unroll=1, stride=1):
     return carry, ys
 
 
+def chunked_vmap(fun, chunk_size):
+
+    def split_args(args, kwargs, num_chunks, remainder):
+        leading_args = jax.tree_util.tree_map(
+            (lambda arr: arr[:num_chunks * chunk_size].reshape((num_chunks, chunk_size) + arr.shape[1:])),
+            args,
+        )
+        leading_kwargs = jax.tree_util.tree_map(
+            (lambda arr: arr[:num_chunks * chunk_size].reshape((num_chunks, chunk_size) + arr.shape[1:])),
+            kwargs,
+        )
+        # Remainder
+        if remainder < 1:
+            rem_args = None
+            rem_kwargs = None
+        else:
+            rem_args = jax.tree_util.tree_map(
+                operator.itemgetter(slice(-remainder, None)),
+                args,
+            )
+            rem_kwargs = jax.tree_util.tree_map(
+                operator.itemgetter(slice(-remainder, None)),
+                kwargs,
+            )
+        return leading_args, leading_kwargs, rem_args, rem_kwargs
+
+    def outer_scan(_carry, x):
+        args, kwargs = x
+        ret = jax.vmap(fun)(*args, **kwargs)
+        return None, ret
+
+    def wrapped_fun(*args, **kwargs):
+        # Compute leading axis size
+        size = jax.tree_util.tree_leaves((args, list(kwargs.values())))[0].shape[0]
+        num_chunks, remainder = divmod(size, operator.index(chunk_size))
+        if num_chunks < 1:
+            # Trivial case: small input. we only need one chunk
+            return jax.vmap(fun)(*args, **kwargs)
+        # Divide into an outer scan and an inner vmap
+        leading_args, leading_kwargs, rem_args, rem_kwargs = split_args(args, kwargs, num_chunks, remainder)
+        _carry, ret = jax.lax.scan(outer_scan, None, (leading_args, leading_kwargs), length=num_chunks)
+        # Restore size of ret
+        ret = jax.tree_util.tree_map(lambda arr: arr.reshape((-1, ) + arr.shape[2:]), ret)
+        # Next, do the remainder if needed
+        if remainder > 0:
+            ret = jnp.concatenate(
+                [
+                    ret,
+                    jax.vmap(fun)(*rem_args, **rem_kwargs),
+                ]
+            )
+        return ret
+
+    return wrapped_fun
+
+
 @jax.tree_util.register_pytree_node_class
 class EquinoxTrainState:
     # Fields:
