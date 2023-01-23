@@ -82,7 +82,17 @@ def determine_channel_sizes(input_channels):
     return sizes
 
 
+def determine_residual_size(input_channels, output_size):
+    # The residual is the largest total_forcing channel with size <= output_size
+    sizes = set()
+    for chan in input_channels:
+        if chan.startswith("q_total_forcing_"):
+            sizes.add(int(chan[len("q_total_forcing_"):]))
+    return max((s for s in sizes if s <= output_size), default=None)
+
+
 def build_fixed_input_from_batch(batch, input_channels, scalers, coarseners):
+    # For each input: 1. uncoarsen it up to processing_size, then 2. apply distribution scaling
     input_stack = []
     for chan in sorted(set(input_channels)):
         if chan.startswith("q_total_forcing_"):
@@ -123,16 +133,19 @@ def make_batch_computer(scalers, coarseners, input_channels, output_size):
     min_variance = 1e-6
     loss_weight_func = lambda t: 1 - jnp.exp(-int_beta_func(t))
 
+    residual_size = determine_residual_size(input_channels, output_size)
+
     def sample_loss(fixed_input, targets, t, rng, net):
         mean = targets * jnp.exp(-0.5 * int_beta_func(t))
         var = jnp.maximum(min_variance, 1 - jnp.exp(-int_beta_func(t)))
         std = jnp.sqrt(var)
         noise = jax.random.normal(rng, shape=targets.shape, dtype=jnp.float32)
         y = mean + std * noise
-        net_input = jnp.concatenate([y, fixed_input], axis=0)
+        big_y = coarseners["output_rev"](y)
+        net_input = jnp.concatenate([big_y, fixed_input], axis=0)
         pred = net(net_input, t)
-        assert pred.shape[-2:] == (output_size, output_size)
-        return loss_weight_func(t) * jnp.mean((pred + noise / std) ** 2)
+        small_pred = coarseners["output"](pred)
+        return loss_weight_func(t) * jnp.mean((small_pred + noise / std) ** 2)
 
     def batch_loss(net, fixed_input, targets, ts, rng):
         n_batch = targets.shape[0]
@@ -148,7 +161,15 @@ def make_batch_computer(scalers, coarseners, input_channels, output_size):
             scalers=scalers,
             coarseners=coarseners,
         )
-        targets = jax.vmap(scalers.q_total_forcing_scaler.scale_to_standard)(batch.q_total_forcings[output_size])
+        # If necessary, make sure we target the residual from the closest-sized input forcing channel
+        targets = jax.vmap(scalers.q_total_forcing_output_scaler.scale_to_standard)(batch.q_total_forcings[output_size])
+        if residual_size is not None:
+            existing_target = jax.vmap(scalers.q_total_forcing_output_scaler.scale_to_standard)(
+                jax.vmap(coarseners["residual"])(
+                    batch.q_total_forcings[residual_size]
+                )
+            )
+            targets = (targets - existing_target) / jnp.sqrt(2).astype(jnp.float32)
         batch_size = targets.shape[0]
         # Produce RNGs
         rng_times, rng_loss, rng_ctr = jax.random.split(rng, 3)
@@ -181,7 +202,7 @@ def do_epoch(train_state, train_rng, batch_iter, batch_fn, logger=None):
     return train_state, train_rng, {"mean_loss": mean_loss, "final_loss": final_loss}
 
 
-def make_raw_sampler(dt=0.01):
+def make_raw_sampler(coarseners, output_size, dt=0.01):
     # OU: dY = -0.5 * g(t)
     # g(t) = t
     # int(g)(t) = t^2/2
@@ -202,8 +223,11 @@ def make_raw_sampler(dt=0.01):
     def drift(t, y, args):
         net, fixed_input = args
         beta = beta_func(t)
-        net_input = jnp.concatenate([y, fixed_input], axis=0)
-        return -0.5 * beta * (y + net(net_input, t))
+        big_y = coarseners["output_rev"](y)
+        net_input = jnp.concatenate([big_y, fixed_input], axis=0)
+        pred = net(net_input, t)
+        small_pred = coarseners["output"](pred)
+        return -0.5 * beta * (y + small_pred)
 
     def draw_single_sample(fixed_input, rng, net, sample_shape):
         snapshot = jax.random.normal(rng, sample_shape, dtype=jnp.float32)
@@ -215,7 +239,6 @@ def make_raw_sampler(dt=0.01):
 
     def draw_raw_samples(fixed_input, net, rng):
         n_batch = fixed_input.shape[0]
-        output_size = fixed_input.shape[-1]
         rng_ctr, *rngs = jax.random.split(rng, n_batch + 1)
         samples = jax.vmap(functools.partial(draw_single_sample, net=net, sample_shape=(2, output_size, output_size)))(fixed_input, jnp.stack(rngs))
         return samples, rng_ctr
@@ -223,10 +246,12 @@ def make_raw_sampler(dt=0.01):
     return draw_raw_samples
 
 
-def make_sampler(scalers, coarseners, input_channels, dt=0.01):
+def make_sampler(scalers, coarseners, output_size, input_channels, dt=0.01):
+
+    residual_size = determine_residual_size(input_channels, output_size)
 
     def draw_samples(batch, net, rng):
-        raw_sampler = make_raw_sampler(dt=dt)
+        raw_sampler = make_raw_sampler(coarseners=coarseners, output_size=output_size, dt=dt)
         # Batch needs to have all required fields present (at least q and the relevant forcing dimensions)
         fixed_input = build_fixed_input_from_batch(
             batch=batch,
@@ -235,6 +260,14 @@ def make_sampler(scalers, coarseners, input_channels, dt=0.01):
             coarseners=coarseners
         )
         raw_samples, rng_ctr = raw_sampler(fixed_input, net, rng)
+        if residual_size is not None:
+            # Handle adding the residual
+            existing_target = jax.vmap(scalers.q_total_forcing_output_scaler.scale_to_standard)(
+                jax.vmap(coarseners["residual"])(
+                    batch.q_total_forcings[residual_size]
+                )
+            )
+            raw_samples = (jnp.sqrt(2).astype(jnp.float32) * raw_samples) + existing_target
         samples = jax.vmap(scalers.q_total_forcing_scaler.scale_from_standard)(raw_samples)
         return samples, rng_ctr
 
@@ -251,6 +284,7 @@ def make_validation_stats_function(num_mean_samples, scalers, coarseners, dt, in
                 make_sampler(
                     scalers=scalers,
                     coarseners=coarseners,
+                    output_size=output_size,
                     input_channels=input_channels,
                     dt=dt,
                 ),
@@ -311,7 +345,7 @@ def do_validation(train_state, val_rng, np_rng, loader, sample_stat_fn, num_samp
     return stats_report, rng_ctr
 
 
-def init_network(lr, rng, output_size, input_channels):
+def init_network(lr, rng, output_size, input_channels, processing_size):
 
     def leaf_map(leaf):
         if isinstance(leaf, jnp.ndarray):
@@ -323,7 +357,7 @@ def init_network(lr, rng, output_size, input_channels):
 
     num_inputs = len(input_channels)
     args = {
-        "img_size": output_size,
+        "img_size": processing_size,
         "n_layers_in": 2 + (num_inputs * 2),
         "n_layers_out": 2,
     }
@@ -352,16 +386,24 @@ def init_network(lr, rng, output_size, input_channels):
 class Scalers:
     q_scaler: jax_utils.Scaler
     q_total_forcing_scaler: jax_utils.Scaler
+    q_total_forcing_output_scaler: jax_utils.Scaler
 
 
-def make_scalers(source_data, target_size):
+def make_scalers(source_data, target_size, input_channels):
+    sizes = determine_channel_sizes(input_channels=input_channels)
+    processing_size = max(max(sizes), target_size)
     with h5py.File(source_data, "r") as data_file:
         return Scalers(
             q_scaler=Scaler(
-                mean=data_file["stats"]["q"][str(target_size)]["mean"][:],
-                var=data_file["stats"]["q"][str(target_size)]["var"][:],
+                mean=data_file["stats"]["q"][str(processing_size)]["mean"][:],
+                var=data_file["stats"]["q"][str(processing_size)]["var"][:],
             ),
             q_total_forcing_scaler=Scaler(
+                mean=data_file["stats"]["q_total_forcing"][str(processing_size)]["mean"][:],
+                var=data_file["stats"]["q_total_forcing"][str(processing_size)]["var"][:],
+            ),
+            # TODO: handle case where output is a residual (i.e. recompute mean/var of the difference?)
+            q_total_forcing_output_scaler=Scaler(
                 mean=data_file["stats"]["q_total_forcing"][str(target_size)]["mean"][:],
                 var=data_file["stats"]["q_total_forcing"][str(target_size)]["var"][:],
             ),
@@ -370,18 +412,23 @@ def make_scalers(source_data, target_size):
 
 def make_coarseners(source_data, target_size, input_channels):
     sizes = determine_channel_sizes(input_channels=input_channels)
+    processing_size = max(max(sizes), target_size)
     models = {}
     coarseners = {}
+
+    def _make_model(size, data_file):
+        if size not in models:
+            models[size] = QGModel.from_param_json(data_file["params"][f"small_model_{big_model_size}"].asstr()[()])
+        return models[size]
+
     with h5py.File(source_data, "r") as data_file:
         q_size = json.loads(data_file["params"]["small_model"].asstr()[()])["nx"]
         coarse_cls = coarsen.COARSEN_OPERATORS[data_file["params"]["coarsen_op"].asstr()[()]]
         for size in set(itertools.chain(sizes, [q_size])):
-            big_model_size = max(target_size, size)
-            small_size = min(target_size, size)
-            if big_model_size not in models:
-                models[big_model_size] = QGModel.from_param_json(data_file["params"][f"small_model_{big_model_size}"].asstr()[()])
-            big_model = models[big_model_size]
-            if size == target_size:
+            big_model_size = max(processing_size, size)
+            small_size = min(processing_size, size)
+            big_model = _make_model(big_model_size, data_file)
+            if size == processing_size:
                 coarsener = coarsen.NoOpCoarsener(big_model=big_model, small_nx=small_size)
             else:
                 coarsener = coarse_cls(big_model=big_model, small_nx=small_size)
@@ -390,6 +437,26 @@ def make_coarseners(source_data, target_size, input_channels):
             else:
                 coarsen_fn = coarsener.uncoarsen
             coarseners[size] = coarsen_fn
+        # Add coarsener for output processing
+        big_model = _make_model(processing_size, data_file)
+        if processing_size == target_size:
+            out_coarse = coarsen.NoOpCoarsener(big_model=big_model, small_nx=target_size)
+            coarseners["output"] = out_coarse.coarsen
+            coarseners["output_rev"] = out_coarse.uncoarsen
+        else:
+            assert target_size < processing_size
+            out_coarse = coarse_cls(big_model=big_model, small_nx=target_size)
+            coarseners["output"] = out_coarse.coarsen
+            coarseners["output_rev"] = out_coarse.uncoarsen
+        # Add coarsener for residual
+        residual_size = determine_residual_size(input_channels, target_size)
+        if residual_size is not None:
+            big_model = _make_model(target_size, data_file)
+            if residual_size == target_size:
+                coarseners["residual"] = coarsen.NoOpCoarsener(big_model=big_model, small_nx=residual_size).uncoarsen
+            else:
+                assert residual_size < target_size
+                coarseners["residual"] = coarse_cls(big_model=big_model, small_nx=residual_size).uncoarsen
     return coarseners
 
 
@@ -430,6 +497,8 @@ def main():
     # Determine what inputs we need
     input_channels = sorted(set(args.input_channels))
     output_size = args.output_size
+    channel_sizes = determine_channel_sizes(input_channels=input_channels)
+    processing_size = max(max(channel_sizes), output_size)
     required_fields = determine_required_fields(
         input_channels=input_channels,
         output_size=output_size,
@@ -442,6 +511,7 @@ def main():
         rng=rng,
         output_size=output_size,
         input_channels=input_channels,
+        processing_size=processing_size,
     )
     # Store network info
     with open(weights_dir / "network_info.json", "w", encoding="utf8") as net_info_file:
@@ -451,6 +521,7 @@ def main():
     scalers = make_scalers(
         source_data=train_path,
         target_size=output_size,
+        input_channels=input_channels,
     )
     coarseners = make_coarseners(
         source_data=train_path,
