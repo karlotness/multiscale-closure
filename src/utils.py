@@ -21,6 +21,20 @@ def rename_save_file_path(path):
     os.replace(target_path, final_path)
 
 
+@contextlib.contextmanager
+def rename_save_file(file, mode, *args, **kwargs):
+    final_path = pathlib.Path(file)
+    rand_suffix = random.choices(string.ascii_lowercase + string.digits, k=15)
+    target_path = final_path.with_name(f"{final_path.name}.PART{rand_suffix}")
+    # Open temporary file
+    if mode.lower() not in {"w", "wb", "bw"}:
+        raise ValueError("file must be opened for writing")
+    with open(target_path, mode.lower().replace("w", "x"), **kwargs) as target_file:
+        yield target_file
+    # Do the final rename
+    os.replace(target_path, final_path)
+
+
 def check_environment_variables(base_logger=None):
     if base_logger:
         logger = base_logger.getChild("jax_env_check")
