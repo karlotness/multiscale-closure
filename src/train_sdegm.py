@@ -426,14 +426,14 @@ def make_coarseners(source_data, target_size, input_channels):
 
     with h5py.File(source_data, "r") as data_file:
         q_size = json.loads(data_file["params"]["small_model"].asstr()[()])["nx"]
-        coarse_cls = coarsen.COARSEN_OPERATORS[data_file["params"]["coarsen_op"].asstr()[()]]
+        coarse_cls = coarsen.BasicSpectralCoarsener
         for size in set(itertools.chain(sizes, [q_size])):
             # All main input sizes must be scaled to processing_size
             big_model = _make_model(processing_size, data_file)
             if size == processing_size:
                 coarsen_fn = coarsen.NoOpCoarsener(big_model=big_model, small_nx=size).coarsen
             else:
-                coarsen_fn = coarse_cls(big_model=big_model, small_nx=size).coarsen
+                coarsen_fn = coarse_cls(big_model=big_model, small_nx=size).uncoarsen
             coarseners[size] = coarsen_fn
         # Next, set up coarsen functions for the output which must go from processing_size down to target_size
         big_model = _make_model(processing_size, data_file)

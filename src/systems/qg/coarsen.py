@@ -215,7 +215,13 @@ class Operator2(SpectralCoarsener):
         return jnp.exp(-self.small_model.wv**2 * (2*self.small_model.dx)**2 / 24)
 
 
+class BasicSpectralCoarsener(SpectralCoarsener):
+    def spectral_filter(self):
+        return 1
+
+
 COARSEN_OPERATORS = {
     "op1": Operator1,
     "op2": Operator2,
+    "basic_spectral": BasicSpectralCoarsener,
 }
