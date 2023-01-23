@@ -60,3 +60,57 @@ class GZFCNN(eqx.Module):
             ]
         )
         return self.conv_seq(x, key=key)
+
+
+class LargeGZFCNN(eqx.Module):
+    conv_seq: eqx.nn.Sequential
+    img_size: int = eqx.static_field()
+    n_layers_in: int = eqx.static_field()
+    n_layers_out: int = eqx.static_field()
+
+    def __init__(self, img_size: int, n_layers_in: int, n_layers_out: int, padding: str = "circular", *, key: Array):
+        self.img_size = img_size
+        self.n_layers_in = n_layers_in
+        self.n_layers_out = n_layers_out
+
+        features_kernels = [
+            (128, (11, 11)),
+            (64, (11, 11)),
+            (32, (7, 7)),
+            (32, (7, 7)),
+            (32, (7, 7)),
+            (32, (7, 7)),
+            (32, (7, 7)),
+            (self.n_layers_out, (7, 7)),
+        ]
+        ops = []
+        prev_chans = self.n_layers_in + 1
+        keys = jax.random.split(key, len(features_kernels))
+        for (feature, kern_size), conv_key in zip(features_kernels, keys, strict=True):
+            conv = EasyPadConv(
+                num_spatial_dims=2,
+                in_channels=prev_chans,
+                out_channels=feature,
+                kernel_size=kern_size,
+                padding=padding,
+                use_bias=True,
+                key=conv_key,
+            )
+            ops.extend([conv, eqx.nn.Lambda(jax.nn.relu)])
+            prev_chans = feature
+        # Remove final activation
+        ops.pop()
+        self.conv_seq = eqx.nn.Sequential(ops)
+
+    def __call__(self, x: Array, t: Float, *, key: Array|None = None):
+        assert x.ndim == 3
+        assert x.shape[-2:] == (self.img_size, self.img_size)
+        assert x.shape[-3] == self.n_layers_in
+        # Place time after x dimension
+        x = jnp.concatenate(
+            [
+                x,
+                jnp.expand_dims(jnp.full_like(x, t, shape=x.shape[1:]), 0),
+            ]
+        )
+        return self.conv_seq(x, key=key)
