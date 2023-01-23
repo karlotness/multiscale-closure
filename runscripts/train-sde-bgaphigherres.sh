@@ -1,9 +1,9 @@
 #!/bin/bash
 
-#SBATCH --job-name=train-sde-bootstrap
-#SBATCH --time=24:00:00
+#SBATCH --job-name=train-sde-bgaphigherres
+#SBATCH --time=36:00:00
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=18GB
+#SBATCH --mem=20GB
 #SBATCH --gres=gpu:1
 #SBATCH --exclude=gv0[13-18]
 
@@ -16,7 +16,7 @@ shopt -s failglob
 set -euo pipefail
 
 # Constants
-readonly BASE_NAME="train-sde-bootstrap"
+readonly BASE_NAME="train-sde-bgaphigherres"
 readonly SINGULARITY_CONTAINER="${SCRATCH}/closure/closure.sif"
 readonly ORIGIN_REPO_DIR="${HOME}/repos/closure.git"
 readonly OUT_BASE_DIR="${SCRATCH}/closure/run_outputs/"
@@ -38,13 +38,13 @@ export JAX_DEFAULT_DTYPE_BITS=32
 singularity run --nv "$SINGULARITY_CONTAINER" \
             python "${CHECKOUT_DIR}/src/train_sdegm.py" "$OUT_DIR" "$TRAIN_DATA_DIR" "$VAL_DATA_DIR" \
             --batch_size=256 \
-            --num_epochs=100 \
+            --num_epochs=125 \
             --batches_per_epoch=1000 \
             --num_val_samples=10 \
             --val_mean_samples=25 \
-            --val_interval=2 \
+            --val_interval=6 \
             --save_interval=1 \
             --lr=3e-4 \
             --dt=0.01 \
             --output_size=64 \
-            --input_channels q_96
+            --input_channels q_128
