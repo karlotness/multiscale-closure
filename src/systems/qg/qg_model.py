@@ -154,7 +154,7 @@ class QGModel(model.Model):
         attributes = ["beta", "rd", "delta", "H1", "U1", "U2"]
         children = [getattr(self, attr) for attr in attributes]
         super_children, super_aux = super().tree_flatten()
-        for key, val in zip(super_aux, super_children):
+        for key, val in zip(super_aux, super_children, strict=True):
             if key == "nz":
                 # Need to remove parameter nz since QGModel sets it internally
                 continue

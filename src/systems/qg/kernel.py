@@ -25,7 +25,7 @@ def register_dataclass_pytree(cls):
         return [getattr(obj, name) for name in fields], None
 
     def unflatten(aux_data, flat_contents):
-        args = {name: value for name, value in zip(fields, flat_contents)}
+        args = {name: value for name, value in zip(fields, flat_contents, strict=True)}
         return cls(**args)
 
     jax.tree_util.register_pytree_node(cls, flatten, unflatten)
@@ -267,7 +267,7 @@ class PseudoSpectralKernel:
 
     def param_json(self):
         children, attributes = self.tree_flatten()
-        return json.dumps(dict(zip(attributes, children)))
+        return json.dumps(dict(zip(attributes, children, strict=True)))
 
     @classmethod
     def from_param_json(cls, param_str):
