@@ -46,5 +46,6 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --save_interval=1 \
             --lr=3e-4 \
             --dt=0.01 \
+            --architecture=gz-fcnn-v1 \
             --output_size=96 \
             --input_channels q_96 q_total_forcing_64
