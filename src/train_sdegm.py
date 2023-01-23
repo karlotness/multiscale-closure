@@ -108,14 +108,13 @@ def build_fixed_input_from_batch(batch, input_channels, scalers, coarseners):
             )
         elif chan.startswith("q_"):
             # Stack the q channel
+            # The q component is a special case since it gets downscaled
+            # We rescale values *after* coarsening
             size = batch.q.shape[-1]
-            input_stack.append(
-                jax.vmap(coarseners[size])(
-                    jax.vmap(scalers.q_scalers[size].scale_to_standard)(
-                        batch.q
-                    )
-                )
-            )
+            q_val = jax.vmap(coarseners[size])(batch.q)
+            processing_size = q_val.shape[-1]
+            q_val = jax.vmap(scalers.q_scalers[processing_size].scale_to_standard)(q_val)
+            input_stack.append(q_val)
         else:
             raise ValueError(f"Unsupported input field {chan}")
     return jnp.concatenate(input_stack, axis=-3)
@@ -428,21 +427,29 @@ def make_coarseners(source_data, target_size, input_channels):
 
     with h5py.File(source_data, "r") as data_file:
         q_size = json.loads(data_file["params"]["small_model"].asstr()[()])["nx"]
-        coarse_cls = coarsen.BasicSpectralCoarsener
+        coarse_cls = coarsen.COARSEN_OPERATORS[data_file["params"]["coarsen_op"].asstr()[()]]
         for size in set(itertools.chain(sizes, [q_size])):
             # All main input sizes must be scaled to processing_size
-            big_model = _make_model(processing_size, data_file)
+            big_model_size = max(processing_size, size)
+            small_model_size = min(processing_size, size)
+            big_model = _make_model(big_model_size, data_file)
             if size == processing_size:
-                coarsen_fn = coarsen.NoOpCoarsener(big_model=big_model, small_nx=size).coarsen
+                # Maintain size with a no-op
+                coarsen_fn = coarsen.NoOpCoarsener(big_model=big_model, small_nx=small_model_size).coarsen
+            elif size < processing_size:
+                # Upscale with a basic coarsener
+                coarsen_fn = coarsen.BasicSpectralCoarsener(big_model=big_model, small_nx=small_model_size).uncoarsen
             else:
-                coarsen_fn = coarse_cls(big_model=big_model, small_nx=size).uncoarsen
+                # Here size > processing_size. This can only be a q component
+                # Use a real coarsener for this as a special case
+                coarsen_fn = coarse_cls(big_model=big_model, small_nx=small_model_size).coarsen
             coarseners[size] = coarsen_fn
         # Next, set up coarsen functions for the output which must go from processing_size down to target_size
         big_model = _make_model(processing_size, data_file)
         if target_size == processing_size:
             coarsener = coarsen.NoOpCoarsener(big_model=big_model, small_nx=target_size)
         else:
-            coarsener = coarse_cls(big_model=big_model, small_nx=target_size)
+            coarsener = coarsen.BasicSpectralCoarsener(big_model=big_model, small_nx=target_size)
         coarseners["output"] = coarsener.coarsen
         coarseners["output_rev"] = coarsener.uncoarsen
         # Finally, a coarsener to bring the residual up to output_size
@@ -452,7 +459,7 @@ def make_coarseners(source_data, target_size, input_channels):
             if residual_size == target_size:
                 coarseners["residual"] = coarsen.NoOpCoarsener(big_model=big_model, small_nx=residual_size).uncoarsen
             else:
-                coarseners["residual"] = coarse_cls(big_model=big_model, small_nx=residual_size).uncoarsen
+                coarseners["residual"] = coarsen.BasicSpectralCoarsener(big_model=big_model, small_nx=residual_size).uncoarsen
     return coarseners
 
 
