@@ -201,8 +201,6 @@ class SpectralCoarsener(Coarsener):
         else:
             return untrunc
 
-
-
     def spectral_filter(self):
         raise NotImplementedError("implement in a subclass")
 
