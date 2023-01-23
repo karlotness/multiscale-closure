@@ -92,15 +92,15 @@ def determine_residual_size(input_channels, output_size):
 
 
 def build_fixed_input_from_batch(batch, input_channels, scalers, coarseners):
-    # For each input: 1. uncoarsen it up to processing_size, then 2. apply distribution scaling
+    # For each input: 1. apply distribution scaling, then 2. (un)coarsen to processing_size
     input_stack = []
     for chan in sorted(set(input_channels)):
         if chan.startswith("q_total_forcing_"):
             # Stack a forcing channel
             size = int(chan[len("q_total_forcing_"):])
             input_stack.append(
-                jax.vmap(scalers.q_total_forcing_scaler.scale_to_standard)(
-                    jax.vmap(coarseners[size])(
+                jax.vmap(coarseners[size])(
+                    jax.vmap(scalers.q_total_forcing_scalers[size].scale_to_standard)(
                         batch.q_total_forcings[size]
                     )
                 )
@@ -109,8 +109,8 @@ def build_fixed_input_from_batch(batch, input_channels, scalers, coarseners):
             # Stack the q channel
             size = batch.q.shape[-1]
             input_stack.append(
-                jax.vmap(scalers.q_scaler.scale_to_standard)(
-                    jax.vmap(coarseners[size])(
+                jax.vmap(coarseners[size])(
+                    jax.vmap(scalers.q_scalers[size].scale_to_standard)(
                         batch.q
                     )
                 )
@@ -162,10 +162,12 @@ def make_batch_computer(scalers, coarseners, input_channels, output_size):
             coarseners=coarseners,
         )
         # If necessary, make sure we target the residual from the closest-sized input forcing channel
-        targets = jax.vmap(scalers.q_total_forcing_output_scaler.scale_to_standard)(batch.q_total_forcings[output_size])
+        targets = jax.vmap(scalers.q_total_forcing_scalers[output_size].scale_to_standard)(
+            batch.q_total_forcings[output_size]
+        )
         if residual_size is not None:
-            existing_target = jax.vmap(scalers.q_total_forcing_output_scaler.scale_to_standard)(
-                jax.vmap(coarseners["residual"])(
+            existing_target = jax.vmap(coarseners["residual"])(
+                jax.vmap(scalers.q_total_forcing_scalers[residual_size].scale_to_standard)(
                     batch.q_total_forcings[residual_size]
                 )
             )
@@ -262,13 +264,13 @@ def make_sampler(scalers, coarseners, output_size, input_channels, dt=0.01):
         raw_samples, rng_ctr = raw_sampler(fixed_input, net, rng)
         if residual_size is not None:
             # Handle adding the residual
-            existing_target = jax.vmap(scalers.q_total_forcing_output_scaler.scale_to_standard)(
-                jax.vmap(coarseners["residual"])(
+            existing_target = jax.vmap(coarseners["residual"])(
+                jax.vmap(scalers.q_total_forcing_scalers[residual_size].scale_to_standard)(
                     batch.q_total_forcings[residual_size]
                 )
             )
             raw_samples = (jnp.sqrt(2).astype(jnp.float32) * raw_samples) + existing_target
-        samples = jax.vmap(scalers.q_total_forcing_scaler.scale_from_standard)(raw_samples)
+        samples = jax.vmap(scalers.q_total_forcing_scalers[output_size].scale_from_standard)(raw_samples)
         return samples, rng_ctr
 
     return draw_samples
@@ -385,30 +387,30 @@ def init_network(lr, rng, output_size, input_channels, processing_size):
 @jax_utils.register_pytree_dataclass
 @dataclasses.dataclass
 class Scalers:
-    q_scaler: jax_utils.Scaler
-    q_total_forcing_scaler: jax_utils.Scaler
-    q_total_forcing_output_scaler: jax_utils.Scaler
+    q_scalers: dict[int, jax_utils.Scaler]
+    q_total_forcing_scalers: dict[int, jax_utils.Scaler]
 
 
 def make_scalers(source_data, target_size, input_channels):
     sizes = determine_channel_sizes(input_channels=input_channels)
     processing_size = max(max(sizes), target_size)
+    q_scalers = {}
+    q_total_forcing_scalers = {}
     with h5py.File(source_data, "r") as data_file:
-        return Scalers(
-            q_scaler=Scaler(
-                mean=data_file["stats"]["q"][str(processing_size)]["mean"][:],
-                var=data_file["stats"]["q"][str(processing_size)]["var"][:],
-            ),
-            q_total_forcing_scaler=Scaler(
-                mean=data_file["stats"]["q_total_forcing"][str(processing_size)]["mean"][:],
-                var=data_file["stats"]["q_total_forcing"][str(processing_size)]["var"][:],
-            ),
-            # TODO: handle case where output is a residual (i.e. recompute mean/var of the difference?)
-            q_total_forcing_output_scaler=Scaler(
-                mean=data_file["stats"]["q_total_forcing"][str(target_size)]["mean"][:],
-                var=data_file["stats"]["q_total_forcing"][str(target_size)]["var"][:],
-            ),
-        )
+        for q_size_str in data_file["stats"]["q"].keys():
+            q_scalers[int(q_size_str)] = Scaler(
+                mean=data_file["stats"]["q"][q_size_str]["mean"][:],
+                var=data_file["stats"]["q"][q_size_str]["var"][:],
+            )
+        for forcing_size_str in data_file["stats"]["q_total_forcing"].keys():
+            q_total_forcing_scalers[int(forcing_size_str)] = Scaler(
+                mean=data_file["stats"]["q_total_forcing"][forcing_size_str]["mean"][:],
+                var=data_file["stats"]["q_total_forcing"][forcing_size_str]["var"][:],
+            )
+    return Scalers(
+        q_scalers=q_scalers,
+        q_total_forcing_scalers=q_total_forcing_scalers,
+    )
 
 
 def make_coarseners(source_data, target_size, input_channels):
@@ -419,44 +421,35 @@ def make_coarseners(source_data, target_size, input_channels):
 
     def _make_model(size, data_file):
         if size not in models:
-            models[size] = QGModel.from_param_json(data_file["params"][f"small_model_{big_model_size}"].asstr()[()])
+            models[size] = QGModel.from_param_json(data_file["params"][f"small_model_{size}"].asstr()[()])
         return models[size]
 
     with h5py.File(source_data, "r") as data_file:
         q_size = json.loads(data_file["params"]["small_model"].asstr()[()])["nx"]
         coarse_cls = coarsen.COARSEN_OPERATORS[data_file["params"]["coarsen_op"].asstr()[()]]
         for size in set(itertools.chain(sizes, [q_size])):
-            big_model_size = max(processing_size, size)
-            small_size = min(processing_size, size)
-            big_model = _make_model(big_model_size, data_file)
+            # All main input sizes must be scaled to processing_size
+            big_model = _make_model(processing_size, data_file)
             if size == processing_size:
-                coarsener = coarsen.NoOpCoarsener(big_model=big_model, small_nx=small_size)
+                coarsen_fn = coarsen.NoOpCoarsener(big_model=big_model, small_nx=size).coarsen
             else:
-                coarsener = coarse_cls(big_model=big_model, small_nx=small_size)
-            if size > small_size:
-                coarsen_fn = coarsener.coarsen
-            else:
-                coarsen_fn = coarsener.uncoarsen
+                coarsen_fn = coarse_cls(big_model=big_model, small_nx=size).coarsen
             coarseners[size] = coarsen_fn
-        # Add coarsener for output processing
+        # Next, set up coarsen functions for the output which must go from processing_size down to target_size
         big_model = _make_model(processing_size, data_file)
-        if processing_size == target_size:
-            out_coarse = coarsen.NoOpCoarsener(big_model=big_model, small_nx=target_size)
-            coarseners["output"] = out_coarse.coarsen
-            coarseners["output_rev"] = out_coarse.uncoarsen
+        if target_size == processing_size:
+            coarsener = coarsen.NoOpCoarsener(big_model=big_model, small_nx=target_size)
         else:
-            assert target_size < processing_size
-            out_coarse = coarse_cls(big_model=big_model, small_nx=target_size)
-            coarseners["output"] = out_coarse.coarsen
-            coarseners["output_rev"] = out_coarse.uncoarsen
-        # Add coarsener for residual
+            coarsener = coarse_cls(big_model=big_model, small_nx=target_size)
+        coarseners["output"] = coarsener.coarsen
+        coarseners["output_rev"] = coarsener.uncoarsen
+        # Finally, a coarsener to bring the residual up to output_size
         residual_size = determine_residual_size(input_channels, target_size)
         if residual_size is not None:
-            big_model = _make_model(target_size, data_file)
+            big_model = _make_model(output_size, data_file)
             if residual_size == target_size:
                 coarseners["residual"] = coarsen.NoOpCoarsener(big_model=big_model, small_nx=residual_size).uncoarsen
             else:
-                assert residual_size < target_size
                 coarseners["residual"] = coarse_cls(big_model=big_model, small_nx=residual_size).uncoarsen
     return coarseners
 
