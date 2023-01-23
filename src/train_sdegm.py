@@ -21,7 +21,7 @@ import functools
 from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader
 from systems.qg import coarsen, diagnostics as qg_spec_diag
 from systems.qg.qg_model import QGModel
-from methods.gz_fcnn import GZFCNN
+from methods import ARCHITECTURES
 import jax_utils
 from jax_utils import Scaler
 import diffrax_utils
@@ -45,6 +45,7 @@ parser.add_argument("--val_mean_samples", type=int, default=25, help="Number of 
 parser.add_argument("--val_interval", type=int, default=1, help="Number of epochs between validation periods")
 parser.add_argument("--output_size", type=int, default=64, help="Scale of output forcing to generate")
 parser.add_argument("--input_channels", type=str, nargs="+", default=["q_64"], help="Channels to show the network as input")
+parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", help="Network architecture to train")
 
 
 def save_network(output_name, output_dir, state, base_logger=None):
@@ -348,7 +349,7 @@ def do_validation(train_state, val_rng, np_rng, loader, sample_stat_fn, num_samp
     return stats_report, rng_ctr
 
 
-def init_network(lr, rng, output_size, input_channels, processing_size):
+def init_network(architecture, lr, rng, output_size, input_channels, processing_size):
 
     def leaf_map(leaf):
         if isinstance(leaf, jnp.ndarray):
@@ -364,7 +365,8 @@ def init_network(lr, rng, output_size, input_channels, processing_size):
         "n_layers_in": 2 + (num_inputs * 2),
         "n_layers_out": 2,
     }
-    net = GZFCNN(
+    net_cls = ARCHITECTURES[architecture]
+    net = net_cls(
         **args,
         key=rng,
     )
@@ -376,7 +378,7 @@ def init_network(lr, rng, output_size, input_channels, processing_size):
         optim=optim,
     )
     network_info = {
-        "arch": "gz-fcnn-v1",
+        "arch": architecture,
         "args": args,
         "input_channels": input_channels,
         "output_size": output_size,
@@ -499,8 +501,9 @@ def main():
     )
     # Construct neural net
     rng, rng_ctr = jax.random.split(rng_ctr, 2)
-    logger.info("Training network: gzfcnn")
+    logger.info("Training network: %s", args.architecture)
     state, network_info = init_network(
+        architecture=args.architecture,
         lr=args.lr,
         rng=rng,
         output_size=output_size,
