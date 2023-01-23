@@ -46,8 +46,7 @@ def register_pytree_dataclass(cls):
         return [getattr(obj, name) for name in fields], None
 
     def unflatten(aux_data, flat_contents):
-        args = {name: value for name, value in zip(fields, flat_contents, strict=True)}
-        return cls(**args)
+        return cls(**dict(zip(fields, flat_contents, strict=True)))
 
     jax.tree_util.register_pytree_node(cls, flatten, unflatten)
     return cls
