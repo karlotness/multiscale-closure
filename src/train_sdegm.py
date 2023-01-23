@@ -199,7 +199,7 @@ def do_epoch(train_state, train_rng, batch_iter, batch_fn, logger=None):
     logger.info("Finished epoch in %f sec", epoch_end - epoch_start)
     logger.info("Epoch mean loss %f", mean_loss)
     logger.info("Epoch final loss %f", final_loss)
-    return train_state, train_rng, {"mean_loss": mean_loss, "final_loss": final_loss}
+    return train_state, train_rng, {"mean_loss": mean_loss.item(), "final_loss": final_loss.item(), "duration_sec": epoch_end - epoch_start}
 
 
 def make_raw_sampler(coarseners, output_size, dt=0.01):
@@ -337,6 +337,7 @@ def do_validation(train_state, val_rng, np_rng, loader, sample_stat_fn, num_samp
         "l2_total": stats.l2_total.item(),
         "l2_residual": stats.l2_residual.item(),
         "var_ratio": stats.var_ratio.tolist(),
+        "duration_sec": val_end - val_start,
     }
     logger.info("l2_mean: %f", stats.l2_mean.item())
     logger.info("l2_total: %f", stats.l2_total.item())
@@ -573,6 +574,7 @@ def main():
         min_mean_loss = None
 
         # Training loop
+        epoch_reports = []
         for epoch in range(1, args.num_epochs + 1):
             logger.info("Starting epoch %d of %d", epoch, args.num_epochs)
             # Training step
@@ -587,13 +589,17 @@ def main():
             mean_loss = epoch_stats["mean_loss"]
 
             # Save snapshots
+            saved_names = []
             if min_mean_loss is None or (math.isfinite(mean_loss) and mean_loss <= min_mean_loss):
                 min_mean_loss = mean_loss
                 save_network("best_loss", output_dir=weights_dir, state=state, base_logger=logger)
+                saved_names.append("best_loss")
             if epoch % args.save_interval == 0:
                 save_network("interval", output_dir=weights_dir, state=state, base_logger=logger)
+                saved_names.append("interval")
 
             # Validation step
+            val_stat_report = None
             if epoch % args.val_interval == 0:
                 logger.info("Starting validation for epoch %d", epoch)
                 val_stat_report, rng_ctr = do_validation(
@@ -605,6 +611,18 @@ def main():
                     logger=logger.getChild(f"{epoch:05d}_val"),
                     num_samples=args.num_val_samples,
                 )
+                logger.info("Finished validation for epoch %d", epoch)
+
+            epoch_reports.append(
+                {
+                    "epoch": epoch,
+                    "train_stats": epoch_stats,
+                    "val_stats": val_stat_report,
+                    "saved_names": saved_names,
+                }
+            )
+            with utils.rename_save_file(out_dir / "train_report.json", "w", encoding="utf8") as train_report_file:
+                json.dump(epoch_reports, train_report_file)
 
             logger.info("Finished epoch %d", epoch)
 
