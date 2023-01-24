@@ -18,6 +18,7 @@ import logging
 import time
 import json
 import functools
+import operator
 from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader
 from systems.qg import coarsen, diagnostics as qg_spec_diag
 from systems.qg.qg_model import QGModel
@@ -45,6 +46,7 @@ parser.add_argument("--val_mean_samples", type=int, default=25, help="Number of 
 parser.add_argument("--val_interval", type=int, default=1, help="Number of epochs between validation periods")
 parser.add_argument("--output_size", type=int, default=64, help="Scale of output forcing to generate")
 parser.add_argument("--input_channels", type=str, nargs="+", default=["q_64"], help="Channels to show the network as input")
+parser.add_argument("--processing_size", type=int, default=None, help="Size to user for internal network evaluation")
 parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", help="Network architecture to train")
 
 
@@ -90,6 +92,18 @@ def determine_residual_size(input_channels, output_size):
         if chan.startswith("q_total_forcing_"):
             sizes.add(int(chan[len("q_total_forcing_"):]))
     return max((s for s in sizes if s <= output_size), default=None)
+
+
+def determine_processing_size(input_channels, target_size, user_processing_size=None):
+    sizes = determine_channel_sizes(input_channels=input_channels)
+    auto_processing_size = max(max(sizes), target_size)
+    if user_processing_size is not None:
+        user_processing_size = operator.index(user_processing_size)
+        if user_processing_size < auto_processing_size:
+            raise ValueError(f"invalid override processing size: must be at least {auto_processing_size}")
+        return user_processing_size
+    return auto_processing_size
+
 
 
 def build_fixed_input_from_batch(batch, input_channels, scalers, coarseners):
@@ -381,6 +395,7 @@ def init_network(architecture, lr, rng, output_size, input_channels, processing_
         "args": args,
         "input_channels": input_channels,
         "output_size": output_size,
+        "processing_size": processing_size,
     }
     return state, network_info
 
@@ -394,7 +409,6 @@ class Scalers:
 
 def make_scalers(source_data, target_size, input_channels):
     sizes = determine_channel_sizes(input_channels=input_channels)
-    processing_size = max(max(sizes), target_size)
     q_scalers = {}
     q_total_forcing_scalers = {}
     with h5py.File(source_data, "r") as data_file:
@@ -414,9 +428,8 @@ def make_scalers(source_data, target_size, input_channels):
     )
 
 
-def make_coarseners(source_data, target_size, input_channels):
+def make_coarseners(source_data, target_size, input_channels, processing_size):
     sizes = determine_channel_sizes(input_channels=input_channels)
-    processing_size = max(max(sizes), target_size)
     models = {}
     coarseners = {}
 
@@ -501,7 +514,11 @@ def main():
     input_channels = sorted(set(args.input_channels))
     output_size = args.output_size
     channel_sizes = determine_channel_sizes(input_channels=input_channels)
-    processing_size = max(max(channel_sizes), output_size)
+    processing_size = determine_processing_size(
+        input_channels=input_channels,
+        target_size=output_size,
+        user_processing_size=args.processing_size,
+    )
     required_fields = determine_required_fields(
         input_channels=input_channels,
         output_size=output_size,
@@ -531,6 +548,7 @@ def main():
         source_data=train_path,
         target_size=output_size,
         input_channels=input_channels,
+        processing_size=processing_size,
     )
 
     # Open data files
