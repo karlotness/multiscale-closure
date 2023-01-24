@@ -537,7 +537,7 @@ def main():
         processing_size=processing_size,
     )
     # Store network info
-    with open(weights_dir / "network_info.json", "w", encoding="utf8") as net_info_file:
+    with utils.rename_save_file(weights_dir / "network_info.json", "w", encoding="utf8") as net_info_file:
         json.dump(network_info, net_info_file)
 
     # Create data normalizer and its inverse
