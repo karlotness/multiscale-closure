@@ -519,10 +519,12 @@ def main():
         target_size=output_size,
         user_processing_size=args.processing_size,
     )
+    logger.info("Internal processing size: %d", processing_size)
     required_fields = determine_required_fields(
         input_channels=input_channels,
         output_size=output_size,
     )
+    logger.info("Required fields: %s", required_fields)
     # Construct neural net
     rng, rng_ctr = jax.random.split(rng_ctr, 2)
     logger.info("Training network: %s", args.architecture)
