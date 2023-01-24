@@ -115,7 +115,7 @@ def build_fixed_input_from_batch(batch, input_channels, scalers, coarseners):
             # Stack a forcing channel
             size = determine_channel_size(chan)
             input_stack.append(
-                jax.vmap(coarseners[size])(
+                jax.vmap(coarseners[chan])(
                     jax.vmap(scalers.q_total_forcing_scalers[size].scale_to_standard)(
                         batch.q_total_forcings[size]
                     )
@@ -123,12 +123,14 @@ def build_fixed_input_from_batch(batch, input_channels, scalers, coarseners):
             )
         elif chan.startswith("q_"):
             # Stack the q channel
-            # The q component is a special case since it gets downscaled
-            # We rescale values *after* coarsening
-            size = batch.q.shape[-1]
-            q_val = jax.vmap(coarseners[size])(batch.q)
-            processing_size = q_val.shape[-1]
-            q_val = jax.vmap(scalers.q_scalers[processing_size].scale_to_standard)(q_val)
+            # The q component is a special case since it gets downscaled first
+            # Then we scale distribution
+            # Finally we (un)coarsen to processing_size
+            coarse_first, coarse_second = coarseners[chan]
+            q_val = jax.vmap(coarse_first)(batch.q)
+            nominal_size = q_val.shape[-1]
+            q_val = jax.vmap(scalers.q_scalers[nominal_size].scale_to_standard)(q_val)
+            q_val = jax.vmap(coarse_second)(q_val)
             input_stack.append(q_val)
         else:
             raise ValueError(f"Unsupported input field {chan}")
@@ -439,25 +441,41 @@ def make_coarseners(source_data, target_size, input_channels, processing_size):
             models[size] = QGModel.from_param_json(data_file["params"][f"small_model_{size}"].asstr()[()])
         return models[size]
 
+    def get_coarsener_between(start_size, end_size, data_file, coarse_cls):
+        big_model_size = max(start_size, end_size)
+        small_model_size = min(start_size, end_size)
+        big_model = _make_model(big_model_size, data_file)
+        if start_size == end_size:
+            # No op between these two
+            return coarsen.NoOpCoarsener(big_model=big_model, small_nx=small_model_size).coarsen
+        elif start_size < end_size:
+            # Upscale with a basic coarsener
+            return coarsen.BasicSpectralCoarsener(big_model=big_model, small_nx=small_model_size).uncoarsen
+        else:
+            # Use a real coarsener for the downscaling
+            return coarse_cls(big_model=big_model, small_nx=small_model_size).coarsen
+
     with h5py.File(source_data, "r") as data_file:
-        q_size = json.loads(data_file["params"]["small_model"].asstr()[()])["nx"]
         coarse_cls = coarsen.COARSEN_OPERATORS[data_file["params"]["coarsen_op"].asstr()[()]]
-        for size in set(itertools.chain(sizes, [q_size])):
-            # All main input sizes must be scaled to processing_size
-            big_model_size = max(processing_size, size)
-            small_model_size = min(processing_size, size)
-            big_model = _make_model(big_model_size, data_file)
-            if size == processing_size:
-                # Maintain size with a no-op
-                coarsen_fn = coarsen.NoOpCoarsener(big_model=big_model, small_nx=small_model_size).coarsen
-            elif size < processing_size:
-                # Upscale with a basic coarsener
-                coarsen_fn = coarsen.BasicSpectralCoarsener(big_model=big_model, small_nx=small_model_size).uncoarsen
+
+        for chan in input_channels:
+            # Handle special processing
+            if chan.startswith("q_total_forcing_"):
+                # Forcing channels get scaled directly to processing size
+                size = determine_channel_size(chan)
+                coarseners[chan] = get_coarsener_between(size, processing_size, data_file, coarse_cls)
+            elif chan.startswith("q_"):
+                # Q channels may need two coarsening operations: one to bring it down to nominal size, and one to bring it up to processing size
+                q_size = json.loads(data_file["params"]["small_model"].asstr()[()])["nx"]
+                nominal_size = determine_channel_size(chan)
+                if q_size < nominal_size:
+                    raise ValueError(f"no q input large enough for {nominal_size}")
+                coarseners[chan] = (
+                        get_coarsener_between(q_size, nominal_size, data_file, coarse_cls),
+                        get_coarsener_between(nominal_size, processing_size, data_file, coarse_cls),
+                )
             else:
-                # Here size > processing_size. This can only be a q component
-                # Use a real coarsener for this as a special case
-                coarsen_fn = coarse_cls(big_model=big_model, small_nx=small_model_size).coarsen
-            coarseners[size] = coarsen_fn
+                raise ValueError(f"Unsupported input field {chan}")
         # Next, set up coarsen functions for the output which must go from processing_size down to target_size
         big_model = _make_model(processing_size, data_file)
         if target_size == processing_size:
