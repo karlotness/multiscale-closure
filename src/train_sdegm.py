@@ -61,6 +61,15 @@ def save_network(output_name, output_dir, state, base_logger=None):
     logger.info("Saved network parameters to %s in %s", output_name, output_dir)
 
 
+def determine_channel_size(input_channel):
+    if input_channel.startswith("q_total_forcing_"):
+        return int(input_channel[len("q_total_forcing_"):])
+    elif input_channel.startswith("q_"):
+        return int(input_channel[len("q_"):])
+    else:
+        raise ValueError(f"Unsupported input field {chan}")
+
+
 def determine_required_fields(input_channels, output_size):
     fields = {f"q_total_forcing_{output_size}"}
     for chan in input_channels:
@@ -74,15 +83,7 @@ def determine_required_fields(input_channels, output_size):
 
 
 def determine_channel_sizes(input_channels):
-    sizes = set()
-    for chan in input_channels:
-        if chan.startswith("q_total_forcing_"):
-            sizes.add(int(chan[len("q_total_forcing_"):]))
-        elif chan.startswith("q_"):
-            sizes.add(int(chan[len("q_"):]))
-        else:
-            raise ValueError(f"Unsupported input field {chan}")
-    return sizes
+    return {determine_channel_size(chan) for chan in input_channels}
 
 
 def determine_residual_size(input_channels, output_size):
@@ -90,7 +91,7 @@ def determine_residual_size(input_channels, output_size):
     sizes = set()
     for chan in input_channels:
         if chan.startswith("q_total_forcing_"):
-            sizes.add(int(chan[len("q_total_forcing_"):]))
+            sizes.add(determine_channel_size(chan))
     return max((s for s in sizes if s <= output_size), default=None)
 
 
@@ -112,7 +113,7 @@ def build_fixed_input_from_batch(batch, input_channels, scalers, coarseners):
     for chan in sorted(set(input_channels)):
         if chan.startswith("q_total_forcing_"):
             # Stack a forcing channel
-            size = int(chan[len("q_total_forcing_"):])
+            size = determine_channel_size(chan)
             input_stack.append(
                 jax.vmap(coarseners[size])(
                     jax.vmap(scalers.q_total_forcing_scalers[size].scale_to_standard)(
