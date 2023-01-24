@@ -452,10 +452,10 @@ def make_coarseners(source_data, target_size, input_channels):
             coarsener = coarsen.BasicSpectralCoarsener(big_model=big_model, small_nx=target_size)
         coarseners["output"] = coarsener.coarsen
         coarseners["output_rev"] = coarsener.uncoarsen
-        # Finally, a coarsener to bring the residual up to output_size
+        # Finally, a coarsener to bring the residual up to target_size
         residual_size = determine_residual_size(input_channels, target_size)
         if residual_size is not None:
-            big_model = _make_model(output_size, data_file)
+            big_model = _make_model(target_size, data_file)
             if residual_size == target_size:
                 coarseners["residual"] = coarsen.NoOpCoarsener(big_model=big_model, small_nx=residual_size).uncoarsen
             else:
