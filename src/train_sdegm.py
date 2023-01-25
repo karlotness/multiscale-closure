@@ -527,8 +527,6 @@ def main():
     val_path = pathlib.Path(args.val_set) / "data.hdf5"
     weights_dir = out_dir / "weights"
     weights_dir.mkdir(exist_ok=True)
-    samples_dir = out_dir / "samples"
-    samples_dir.mkdir(exist_ok=True)
     # Determine what inputs we need
     input_channels = sorted(set(args.input_channels))
     output_size = args.output_size
