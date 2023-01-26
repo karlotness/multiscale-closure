@@ -67,7 +67,7 @@ def determine_channel_size(input_channel):
     elif input_channel.startswith("q_"):
         return int(input_channel[len("q_"):])
     else:
-        raise ValueError(f"Unsupported input field {chan}")
+        raise ValueError(f"Unsupported input field {input_channel}")
 
 
 def determine_required_fields(input_channels, output_size):
