@@ -12,13 +12,13 @@ apt -y install software-properties-common
 add-apt-repository ppa:deadsnakes/ppa
 apt -y update
 apt -y upgrade
-apt -y install python3.10 python3.10-venv python3.10-dev git bash
+apt -y install python3.11 python3.11-venv python3.11-dev git bash
 apt -y autoremove
 apt -y clean
 
 # Configure virtualenv
 mkdir -p /opt/closure_venv/
-python3.10 -m venv --prompt=closure /opt/closure_venv/
+python3.11 -m venv --prompt=closure /opt/closure_venv/
 cat /opt/closure_venv/bin/activate >> $SINGULARITY_ENVIRONMENT
 /opt/closure_venv/bin/python -m pip install --compile --upgrade pip
 /opt/closure_venv/bin/python -m pip install --compile --requirement /opt/requirements.txt
