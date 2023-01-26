@@ -24,3 +24,4 @@ ml-collections
 Pillow
 einops
 jaxtyping
+gcm_filters
