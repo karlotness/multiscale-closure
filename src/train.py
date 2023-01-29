@@ -46,8 +46,10 @@ parser.add_argument("--val_mean_samples", type=int, default=25, help="Number of 
 parser.add_argument("--val_interval", type=int, default=1, help="Number of epochs between validation periods")
 parser.add_argument("--output_size", type=int, default=64, help="Scale of output forcing to generate")
 parser.add_argument("--input_channels", type=str, nargs="+", default=["q_64"], help="Channels to show the network as input")
-parser.add_argument("--processing_size", type=int, default=None, help="Size to user for internal network evaluation")
-parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", help="Network architecture to train")
+parser.add_argument("--processing_size", type=int, default=None, help="Size to user for internal network evaluation (default: select automatically)")
+parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", choices=sorted(ARCHITECTURES.keys()), help="Network architecture to train")
+parser.add_argument("--task_type", type=str, default="sdegm", choices=["sdegm", "basic-cnn"], help="What type of task to target")
+parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam"], help="Which optimizer to use")
 
 
 def save_network(output_name, output_dir, state, base_logger=None):
@@ -137,7 +139,55 @@ def build_fixed_input_from_batch(batch, input_channels, scalers, coarseners):
     return jnp.concatenate(input_stack, axis=-3)
 
 
-def make_batch_computer(scalers, coarseners, input_channels, output_size):
+def make_batch_computer_basic_cnn(scalers, coarseners, input_channels, output_size):
+
+    residual_size = determine_residual_size(input_channels, output_size)
+
+    def sample_loss(fixed_input, targets, net):
+        y = net(fixed_input)
+        mse = jnp.mean((y - targets)**2)
+        return mse
+
+    def batch_loss(net, fixed_input, targets):
+        losses = jax.vmap(
+            functools.partial(
+                sample_loss,
+                net=net
+            )
+        )(fixed_input, targets)
+        return jnp.mean(losses)
+
+    def do_batch(batch, state, rng):
+        # Extract batch components
+        fixed_input = build_fixed_input_from_batch(
+            batch=batch,
+            input_channels=input_channels,
+            scalers=scalers,
+            coarseners=coarseners,
+        )
+        # If necessary, make sure we target the residual from the closest-sized input forcing channel
+        targets = jax.vmap(scalers.q_total_forcing_scalers[output_size].scale_to_standard)(
+            batch.q_total_forcings[output_size]
+        )
+        if residual_size is not None:
+            existing_target = jax.vmap(coarseners["residual"])(
+                jax.vmap(scalers.q_total_forcing_scalers[residual_size].scale_to_standard)(
+                    batch.q_total_forcings[residual_size]
+                )
+            )
+            targets = (targets - existing_target) / jnp.sqrt(2).astype(jnp.float32)
+        # Compute losses
+        loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, fixed_input, targets)
+        # Update parameters (if loss is finite)
+        out_state = state.apply_updates(grads)
+        # We don't use the rng, pass it through unchanged
+        rng_ctr = rng
+        return out_state, rng_ctr, loss
+
+    return do_batch
+
+
+def make_batch_computer_sdegm(scalers, coarseners, input_channels, output_size):
     # OU: dY = -0.5 * g(t)
     # beta(t) = 18 * t^2
     # int(beta)(t) = 6 * t^3
@@ -159,7 +209,7 @@ def make_batch_computer(scalers, coarseners, input_channels, output_size):
         noise = jax.random.normal(rng, shape=targets.shape, dtype=jnp.float32)
         y = mean + std * noise
         big_y = coarseners["output_rev"](y)
-        time_input = jnp.expand_dims(jnp.full_like(big_y, t, shape=x.shape[-2:]), 0)
+        time_input = jnp.expand_dims(jnp.full_like(big_y, t, shape=big_y.shape[-2:]), 0)
         net_input = jnp.concatenate([big_y, fixed_input, time_input], axis=0)
         pred = net(net_input)
         small_pred = coarseners["output"](pred)
@@ -205,6 +255,26 @@ def make_batch_computer(scalers, coarseners, input_channels, output_size):
     return do_batch
 
 
+def make_batch_computer(task_type, scalers, coarseners, input_channels, output_size):
+    match task_type:
+        case "sdegm":
+            return make_batch_computer_sdegm(
+                scalers=scalers,
+                coarseners=coarseners,
+                input_channels=input_channels,
+                output_size=output_size,
+            )
+        case "basic-cnn":
+            return make_batch_computer_basic_cnn(
+                scalers=scalers,
+                coarseners=coarseners,
+                input_channels=input_channels,
+                output_size=output_size,
+            )
+        case _:
+            raise ValueError(f"unsupported task type {task_type}")
+
+
 def do_epoch(train_state, train_rng, batch_iter, batch_fn, logger=None):
     if logger is None:
         logger = logging.getLogger("train_epoch")
@@ -244,7 +314,7 @@ def make_raw_sampler(coarseners, output_size, dt=0.01):
         net, fixed_input = args
         beta = beta_func(t)
         big_y = coarseners["output_rev"](y)
-        time_input = jnp.expand_dims(jnp.full_like(big_y, t, shape=x.shape[-2:]), 0)
+        time_input = jnp.expand_dims(jnp.full_like(big_y, t, shape=big_y.shape[-2:]), 0)
         net_input = jnp.concatenate([big_y, fixed_input, time_input], axis=0)
         pred = net(net_input)
         small_pred = coarseners["output"](pred)
@@ -295,7 +365,7 @@ def make_sampler(scalers, coarseners, output_size, input_channels, dt=0.01):
     return draw_samples
 
 
-def make_validation_stats_function(num_mean_samples, scalers, coarseners, dt, input_channels, output_size):
+def make_validation_stats_function_sdegm(num_mean_samples, scalers, coarseners, dt, input_channels, output_size):
 
     def multi_sampler(net, batch, rng):
         rng_ctr, *batch_rngs = jax.random.split(rng, num_mean_samples + 1)
@@ -329,9 +399,86 @@ def make_validation_stats_function(num_mean_samples, scalers, coarseners, dt, in
             mean=jnp.expand_dims(means, 1),
             gen=jnp.expand_dims(single_samples, 1),
         )
-        return stats, rng_ctr
+        stats_report = {
+            "l2_mean": stats.l2_mean,
+            "l2_total": stats.l2_total,
+            "l2_residual": stats.l2_residual,
+            "var_ratio": stats.var_ratio,
+        }
+        return stats_report, rng_ctr
 
     return compute_stats
+
+
+def make_validation_stats_function_basic_cnn(scalers, coarseners, input_channels, output_size):
+
+    residual_size = determine_residual_size(input_channels, output_size)
+
+    def single_sample_and_loss(fixed_input, targets, net):
+        y = net(fixed_input)
+        mse = jnp.mean((y - targets)**2)
+        return y, mse
+
+    def do_batch(batch, net, rng):
+        # Extract batch components
+        fixed_input = build_fixed_input_from_batch(
+            batch=batch,
+            input_channels=input_channels,
+            scalers=scalers,
+            coarseners=coarseners,
+        )
+        # If necessary, make sure we target the residual from the closest-sized input forcing channel
+        targets = jax.vmap(scalers.q_total_forcing_scalers[output_size].scale_to_standard)(
+            batch.q_total_forcings[output_size]
+        )
+        if residual_size is not None:
+            existing_target = jax.vmap(coarseners["residual"])(
+                jax.vmap(scalers.q_total_forcing_scalers[residual_size].scale_to_standard)(
+                    batch.q_total_forcings[residual_size]
+                )
+            )
+            targets = (targets - existing_target) / jnp.sqrt(2).astype(jnp.float32)
+        # Compute samples and losses
+        samples, losses = jax.vmap(
+            functools.partial(
+                single_sample_and_loss,
+                net=net,
+            )
+        )(fixed_input, targets)
+        # Scale samples back to original distribution
+        samples = jax.vmap(scalers.q_total_forcing_scalers[output_size].scale_from_standard)(
+            samples
+        )
+        # Return values
+        stats_report = {
+            "mean_mse": jnp.mean(losses),
+        }
+        rng_ctr = rng
+        return stats_report, rng_ctr
+
+    return do_batch
+
+
+def make_validation_stats_function(task_type, num_mean_samples, scalers, coarseners, dt, input_channels, output_size):
+    match task_type:
+        case "sdegm":
+            return make_validation_stats_function_sdegm(
+                num_mean_samples=num_mean_samples,
+                scalers=scalers,
+                coarseners=coarseners,
+                dt=dt,
+                input_channels=input_channels,
+                output_size=output_size
+            )
+        case "basic-cnn":
+            return make_validation_stats_function_basic_cnn(
+                scalers=scalers,
+                coarseners=coarseners,
+                input_channels=input_channels,
+                output_size=output_size,
+            )
+        case _:
+            raise ValueError(f"unsupported task type {task_type}")
 
 
 def do_validation(train_state, val_rng, np_rng, loader, sample_stat_fn, num_samples, logger=None):
@@ -348,26 +495,20 @@ def do_validation(train_state, val_rng, np_rng, loader, sample_stat_fn, num_samp
     )
     logger.info("Starting validation")
     val_start = time.perf_counter()
-    stats, rng_ctr = sample_stat_fn(batch, train_state.net, val_rng)
-    stats = jax.device_get(stats)
+    stats_report, rng_ctr = sample_stat_fn(batch, train_state.net, val_rng)
     val_end = time.perf_counter()
     logger.info("Finished validation in %f sec", val_end - val_start)
     # Report statistics in JSON-serializable format
-    stats_report = {
-        "l2_mean": stats.l2_mean.item(),
-        "l2_total": stats.l2_total.item(),
-        "l2_residual": stats.l2_residual.item(),
-        "var_ratio": stats.var_ratio.tolist(),
-        "duration_sec": val_end - val_start,
-    }
-    logger.info("l2_mean: %f", stats.l2_mean.item())
-    logger.info("l2_total: %f", stats.l2_total.item())
-    logger.info("l2_residual: %f", stats.l2_residual.item())
-    logger.info("var_ratio: [%f, %f]", stats.var_ratio[0].item(), stats.var_ratio[1].item())
+    stats_report = jax_utils.make_json_serializable(stats_report)
+    # Log stats
+    for stat_name, stat_value in stats_report.items():
+        logger.info("%s: %s", stat_name, stat_value)
+    # Add validation time to stats
+    stats_report["duration_sec"] = val_end - val_start
     return stats_report, rng_ctr
 
 
-def init_network(architecture, lr, rng, output_size, input_channels, processing_size):
+def init_network(architecture, lr, rng, output_size, input_channels, processing_size, coarse_op_name, task_type, optim_type):
 
     def leaf_map(leaf):
         if isinstance(leaf, jnp.ndarray):
@@ -378,9 +519,18 @@ def init_network(architecture, lr, rng, output_size, input_channels, processing_
         return leaf
 
     num_inputs = len(input_channels)
+
+    match task_type:
+        case "sdegm":
+            n_layers_in = 2 + (num_inputs * 2) + 1
+        case "basic-cnn":
+            n_layers_in = num_inputs * 2
+        case _:
+            raise ValueError(f"invalid task type {task_type}")
+
     args = {
         "img_size": processing_size,
-        "n_layers_in": 2 + (num_inputs * 2),
+        "n_layers_in": n_layers_in,
         "n_layers_out": 2,
     }
     net_cls = ARCHITECTURES[architecture]
@@ -388,7 +538,16 @@ def init_network(architecture, lr, rng, output_size, input_channels, processing_
         **args,
         key=rng,
     )
-    optim = optax.adabelief(learning_rate=lr)
+
+    match optim_type:
+        case "adabelief":
+            optim = optax.adabelief(learning_rate=lr)
+        case "adam":
+            optim = optax.adam(learning_rate=lr)
+        case _:
+            raise ValueError(f"unsupported optimizer {optim_type}")
+
+
     net = jax.tree_util.tree_map(leaf_map, net)
     optim = jax.tree_util.tree_map(leaf_map, optim)
     state = jax_utils.EquinoxTrainState(
@@ -401,6 +560,8 @@ def init_network(architecture, lr, rng, output_size, input_channels, processing_
         "input_channels": input_channels,
         "output_size": output_size,
         "processing_size": processing_size,
+        "task_type": task_type,
+        "coarse_op_name": coarse_op_name,
     }
     return state, network_info
 
@@ -458,7 +619,8 @@ def make_coarseners(source_data, target_size, input_channels, processing_size):
             return coarse_cls(big_model=big_model, small_nx=small_model_size).coarsen
 
     with h5py.File(source_data, "r") as data_file:
-        coarse_cls = coarsen.COARSEN_OPERATORS[data_file["params"]["coarsen_op"].asstr()[()]]
+        coarse_op_name = data_file["params"]["coarsen_op"].asstr()[()]
+        coarse_cls = coarsen.COARSEN_OPERATORS[coarse_op_name]
 
         for chan in input_channels:
             # Handle special processing
@@ -494,7 +656,7 @@ def make_coarseners(source_data, target_size, input_channels, processing_size):
                 coarseners["residual"] = coarsen.NoOpCoarsener(big_model=big_model, small_nx=residual_size).uncoarsen
             else:
                 coarseners["residual"] = coarsen.BasicSpectralCoarsener(big_model=big_model, small_nx=residual_size).uncoarsen
-    return coarseners
+    return coarseners, coarse_op_name
 
 
 def main():
@@ -544,6 +706,19 @@ def main():
         output_size=output_size,
     )
     logger.info("Required fields: %s", required_fields)
+
+    # Create data normalizer and its inverse
+    scalers = make_scalers(
+        source_data=train_path,
+        target_size=output_size,
+        input_channels=input_channels,
+    )
+    coarseners, coarse_op_name = make_coarseners(
+        source_data=train_path,
+        target_size=output_size,
+        input_channels=input_channels,
+        processing_size=processing_size,
+    )
     # Construct neural net
     rng, rng_ctr = jax.random.split(rng_ctr, 2)
     logger.info("Training network: %s", args.architecture)
@@ -554,23 +729,13 @@ def main():
         output_size=output_size,
         input_channels=input_channels,
         processing_size=processing_size,
+        coarse_op_name=coarse_op_name,
+        task_type=args.task_type,
+        optim_type=args.optimizer,
     )
     # Store network info
     with utils.rename_save_file(weights_dir / "network_info.json", "w", encoding="utf8") as net_info_file:
         json.dump(network_info, net_info_file)
-
-    # Create data normalizer and its inverse
-    scalers = make_scalers(
-        source_data=train_path,
-        target_size=output_size,
-        input_channels=input_channels,
-    )
-    coarseners = make_coarseners(
-        source_data=train_path,
-        target_size=output_size,
-        input_channels=input_channels,
-        processing_size=processing_size,
-    )
 
     # Open data files
     with contextlib.ExitStack() as train_context:
@@ -595,6 +760,7 @@ def main():
         # Training functions
         train_batch_fn = eqx.filter_jit(
             make_batch_computer(
+                task_type=args.task_type,
                 scalers=scalers,
                 coarseners=coarseners,
                 input_channels=input_channels,
@@ -603,6 +769,7 @@ def main():
         )
         val_sample_fn = eqx.filter_jit(
             make_validation_stats_function(
+                task_type=args.task_type,
                 num_mean_samples=args.val_mean_samples,
                 scalers=scalers,
                 coarseners=coarseners,
