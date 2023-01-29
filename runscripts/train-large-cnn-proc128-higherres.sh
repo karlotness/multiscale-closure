@@ -41,12 +41,12 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --optimizer=adam \
             --task_type=basic-cnn \
             --batch_size=256 \
-            --num_epochs=125 \
+            --num_epochs=42 \
             --batches_per_epoch=1000 \
             --num_val_samples=100 \
             --val_interval=6 \
             --save_interval=1 \
-            --lr=3e-4 \
+            --lr=0.0001 \
             --architecture=gz-fcnn-v1-large \
             --output_size=64 \
             --processing_size=128 \
