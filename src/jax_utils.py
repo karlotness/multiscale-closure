@@ -195,6 +195,18 @@ class EquinoxTrainState:
         return obj
 
 
+def _leaf_serializable(leaf):
+    if leaf.size == 1:
+        return leaf.item()
+    else:
+        return leaf.tolist()
+
+
+def make_json_serializable(pytree):
+    return jax.tree_util.tree_map(_leaf_serializable, pytree)
+
+
+
 def hvp(f, x, v):
     # Return hess(f)(x) * v
     primals, tangents = jax.jvp(jax.grad(f), x, v)
