@@ -447,6 +447,8 @@ def make_validation_stats_function_basic_cnn(scalers, coarseners, input_channels
                 net=net,
             )
         )(fixed_input, targets)
+        if residual_size is not None:
+            samples = (jnp.sqrt(2).astype(jnp.float32) * samples) + existing_target
         # Scale samples back to original distribution
         samples = jax.vmap(scalers.q_total_forcing_scalers[output_size].scale_from_standard)(
             samples
