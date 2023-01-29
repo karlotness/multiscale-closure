@@ -102,7 +102,7 @@ def make_generative_stat_computer(net, num_mean_samples, sample_dt, input_channe
             output_size=output_size,
         )
         sample, mean = sampler_fn(
-            batch=jax.tree_map(lambda arr: jnp.expand_dims(arr, 0), batch_elem),
+            batch=jax.tree_util.tree_map(lambda arr: jnp.expand_dims(arr, 0), batch_elem),
             rng=rng,
         )
         sample = jnp.squeeze(sample, 0)

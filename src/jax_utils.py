@@ -328,8 +328,8 @@ def easy_nested_scan(f, init, xs, length, *, nested_lengths, continue_scan_fn=ja
         return jax.lax.scan(f, init, xs, length=length)
     pre_length = math.prod(nested_lengths)
     remainder = target_length - pre_length
-    pre_xs = jax.tree_map(operator.itemgetter(slice(None, pre_length)), xs)
-    post_xs = jax.tree_map(operator.itemgetter(slice(pre_length, None)), xs)
+    pre_xs = jax.tree_util.tree_map(operator.itemgetter(slice(None, pre_length)), xs)
+    post_xs = jax.tree_util.tree_map(operator.itemgetter(slice(pre_length, None)), xs)
     pre_carry, pre_out = nested_checkpoint_scan(
         f,
         init,
@@ -346,7 +346,7 @@ def easy_nested_scan(f, init, xs, length, *, nested_lengths, continue_scan_fn=ja
             post_xs,
             length=remainder,
         )
-        result = jax.tree_map(lambda a, b: jnp.concatenate([a, b]), pre_out, post_out)
+        result = jax.tree_util.tree_map(lambda a, b: jnp.concatenate([a, b]), pre_out, post_out)
     else:
         post_carry = pre_carry
         result = pre_out
@@ -392,7 +392,7 @@ def nested_checkpoint_scan(f, init, xs, length, *, nested_lengths, scan_fn=jax.l
     new_shape = tuple(nested_lengths) + x.shape[1:]
     return x.reshape(new_shape)
 
-  sub_xs = jax.tree_map(nested_reshape, xs)
+  sub_xs = jax.tree_util.tree_map(nested_reshape, xs)
   return _inner_nested_scan(f, init, sub_xs, nested_lengths, scan_fn,
                             checkpoint_fn)
 
@@ -410,7 +410,7 @@ def _inner_nested_scan(f, init, xs, lengths, scan_fn, checkpoint_fn):
     return _inner_nested_scan(f, carry, xs, lengths[1:], scan_fn, checkpoint_fn)
 
   carry, out = scan_fn(sub_scans, init, xs, lengths[0])
-  stacked_out = jax.tree_map(jnp.concatenate, out)
+  stacked_out = jax.tree_util.tree_map(jnp.concatenate, out)
   return carry, stacked_out
 
 
