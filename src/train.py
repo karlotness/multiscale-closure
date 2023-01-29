@@ -145,7 +145,8 @@ def make_batch_computer_basic_cnn(scalers, coarseners, input_channels, output_si
 
     def sample_loss(fixed_input, targets, net):
         y = net(fixed_input)
-        mse = jnp.mean((y - targets)**2)
+        small_y = coarseners["output"](y)
+        mse = jnp.mean((small_y - targets)**2)
         return mse
 
     def batch_loss(net, fixed_input, targets):
@@ -416,8 +417,9 @@ def make_validation_stats_function_basic_cnn(scalers, coarseners, input_channels
 
     def single_sample_and_loss(fixed_input, targets, net):
         y = net(fixed_input)
-        mse = jnp.mean((y - targets)**2)
-        return y, mse
+        small_y = coarseners["output"](y)
+        mse = jnp.mean((small_y - targets)**2)
+        return small_y, mse
 
     def do_batch(batch, net, rng):
         # Extract batch components
