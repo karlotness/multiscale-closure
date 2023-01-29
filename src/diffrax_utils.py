@@ -1,7 +1,7 @@
 import numpy as np
 import jax
 import jax.numpy as jnp
-from diffrax.misc.omega import ω
+from equinox.internal import ω
 from diffrax.solver.runge_kutta import AbstractERK, ButcherTableau, CalculateJacobian, _scan
 from diffrax.misc import linear_rescale
 from diffrax.local_interpolation import AbstractLocalInterpolation
