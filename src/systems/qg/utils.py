@@ -18,15 +18,35 @@ def make_basic_rollout(model, num_steps):
     return gen_traj
 
 
-def make_gen_traj(model, num_steps):
+def make_basic_final_step(model, num_steps):
 
-    rollout_func = make_basic_rollout(model, num_steps)
+    def do_steps(carry_state, _y):
+        next_state = model.step_forward(carry_state)
+        return next_state, None
+
+    def gen_final_step(first_step):
+        last_step, _carries = jax.lax.scan(do_steps, first_step, None, length=num_steps)
+        return last_step
+
+    return gen_final_step
+
+
+def make_gen_traj(model, num_steps):
 
     def gen_traj(rng):
         init = model.create_initial_state(rng)
-        return rollout_func(init)
+        return make_basic_rollout(model, num_steps)(init)
 
     return gen_traj
+
+
+def make_gen_final_step(model, num_steps):
+
+    def gen_final_step(rng):
+        init = model.create_initial_state(rng)
+        return make_basic_final_step(model, num_steps)(init)
+
+    return gen_final_step
 
 
 def slice_kernel_state(state, slicer):
