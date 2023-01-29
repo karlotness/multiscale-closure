@@ -159,8 +159,9 @@ def make_batch_computer(scalers, coarseners, input_channels, output_size):
         noise = jax.random.normal(rng, shape=targets.shape, dtype=jnp.float32)
         y = mean + std * noise
         big_y = coarseners["output_rev"](y)
-        net_input = jnp.concatenate([big_y, fixed_input], axis=0)
-        pred = net(net_input, t)
+        time_input = jnp.expand_dims(jnp.full_like(big_y, t, shape=x.shape[-2:]), 0)
+        net_input = jnp.concatenate([big_y, fixed_input, time_input], axis=0)
+        pred = net(net_input)
         small_pred = coarseners["output"](pred)
         return loss_weight_func(t) * jnp.mean((small_pred + noise / std) ** 2)
 
@@ -243,8 +244,9 @@ def make_raw_sampler(coarseners, output_size, dt=0.01):
         net, fixed_input = args
         beta = beta_func(t)
         big_y = coarseners["output_rev"](y)
-        net_input = jnp.concatenate([big_y, fixed_input], axis=0)
-        pred = net(net_input, t)
+        time_input = jnp.expand_dims(jnp.full_like(big_y, t, shape=x.shape[-2:]), 0)
+        net_input = jnp.concatenate([big_y, fixed_input, time_input], axis=0)
+        pred = net(net_input)
         small_pred = coarseners["output"](pred)
         return -0.5 * beta * (y + small_pred)
 
