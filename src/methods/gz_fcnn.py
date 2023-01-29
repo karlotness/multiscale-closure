@@ -30,7 +30,7 @@ class GZFCNN(eqx.Module):
             (self.n_layers_out, (3, 3)),
         ]
         ops = []
-        prev_chans = self.n_layers_in + 1
+        prev_chans = self.n_layers_in
         keys = jax.random.split(key, len(features_kernels))
         for (feature, kern_size), conv_key in zip(features_kernels, keys, strict=True):
             conv = EasyPadConv(
@@ -48,17 +48,10 @@ class GZFCNN(eqx.Module):
         ops.pop()
         self.conv_seq = eqx.nn.Sequential(ops)
 
-    def __call__(self, x: Array, t: Float, *, key: Array|None = None):
+    def __call__(self, x: Array, *, key: Array|None = None):
         assert x.ndim == 3
         assert x.shape[-2:] == (self.img_size, self.img_size)
         assert x.shape[-3] == self.n_layers_in
-        # Place time after x dimension
-        x = jnp.concatenate(
-            [
-                x,
-                jnp.expand_dims(jnp.full_like(x, t, shape=x.shape[1:]), 0),
-            ]
-        )
         return self.conv_seq(x, key=key)
 
 
@@ -84,7 +77,7 @@ class LargeGZFCNN(eqx.Module):
             (self.n_layers_out, (7, 7)),
         ]
         ops = []
-        prev_chans = self.n_layers_in + 1
+        prev_chans = self.n_layers_in
         keys = jax.random.split(key, len(features_kernels))
         for (feature, kern_size), conv_key in zip(features_kernels, keys, strict=True):
             conv = EasyPadConv(
@@ -102,15 +95,8 @@ class LargeGZFCNN(eqx.Module):
         ops.pop()
         self.conv_seq = eqx.nn.Sequential(ops)
 
-    def __call__(self, x: Array, t: Float, *, key: Array|None = None):
+    def __call__(self, x: Array, *, key: Array|None = None):
         assert x.ndim == 3
         assert x.shape[-2:] == (self.img_size, self.img_size)
         assert x.shape[-3] == self.n_layers_in
-        # Place time after x dimension
-        x = jnp.concatenate(
-            [
-                x,
-                jnp.expand_dims(jnp.full_like(x, t, shape=x.shape[1:]), 0),
-            ]
-        )
         return self.conv_seq(x, key=key)
