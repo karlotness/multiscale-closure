@@ -14,6 +14,7 @@ import equinox as eqx
 import numpy as np
 from systems.qg.loader import SimpleQGLoader, qg_model_from_hdf5
 from systems.qg import utils as qg_utils, diagnostics as qg_spec_diag
+import h5py
 import utils
 import math
 import dataclasses
@@ -55,6 +56,13 @@ def load_network(weight_file):
     net = jax.tree_util.tree_map(leaf_map, net)
     net = eqx.tree_deserialise_leaves(weight_file, net)
     return net, net_info
+
+
+def check_coarse_op(eval_file, coarse_op_name):
+    if coarse_op_name is None:
+        return True
+    with h5py.File(source_data, "r") as data_file:
+        return data_file["params"]["coarsen_op"].asstr()[()] == coarse_op_name
 
 
 def make_generative_sampler(net, num_mean_samples, sample_dt, input_channels, coarseners, scalers, output_size):
@@ -231,6 +239,14 @@ def main():
     net, net_info = load_network(weight_file=weight_file)
     input_channels = net_info["input_channels"]
     output_size = net_info["output_size"]
+    task_type = net_info.get("task_type", "sdegm")
+    coarse_op_name = net_info.get("coarse_op_name", None)
+    if not check_coarse_op(eval_file, coarse_op_name):
+        logger.error("Invalid eval file for operator %s", coarse_op_name)
+        sys.exit(2)
+    if not check_coarse_op(pathlib.Path(args.train_set) / "shuffled.hdf5", coarse_op_name):
+        logger.error("Invalid train file for operator %s", coarse_op_name)
+        sys.exit(2)
     processing_size = determine_processing_size(
         input_channels=input_channels,
         target_size=output_size,
