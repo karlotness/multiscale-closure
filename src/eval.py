@@ -202,6 +202,10 @@ def run_cnn_offline_stats(net, eval_file, num_samples, sample_seed, base_logger,
         mse = jnp.mean(err**2)
         return small_y, mse
 
+    def mse_loss(est, true):
+        err = jnp.abs(est - true)
+        return jnp.mean(err**2)
+
     def compute_stats(batch, targets):
         # Extract batch components
         fixed_input = build_fixed_input_from_batch(
@@ -214,6 +218,7 @@ def run_cnn_offline_stats(net, eval_file, num_samples, sample_seed, base_logger,
         standard_targets = jax.vmap(scalers.q_total_forcing_scalers[output_size].scale_to_standard)(
             targets
         )
+        standard_targets_no_residual = standard_targets
         # If necessary, make sure we target the residual from the closest-sized input forcing channel
         if residual_size is not None:
             existing_target = jax.vmap(coarseners["residual"])(
@@ -228,6 +233,7 @@ def run_cnn_offline_stats(net, eval_file, num_samples, sample_seed, base_logger,
         # If we had a residual, add it back to the samples
         if residual_size is not None:
             standard_samples = (jnp.sqrt(2).astype(jnp.float32) * standard_samples) + existing_target
+        standard_mse = jnp.mean(jax.vmap(mse_loss)(standard_samples, standard_targets_no_residual))
         samples = jax.vmap(scalers.q_total_forcing_scalers[output_size].scale_from_standard)(standard_samples)
         stats = qg_spec_diag.subgrid_scores(
             true=jnp.expand_dims(targets, 1),
@@ -237,6 +243,7 @@ def run_cnn_offline_stats(net, eval_file, num_samples, sample_seed, base_logger,
         # Package relevant stats
         return {
             "val_mse": mse,
+            "standard_mse": standard_mse,
             "l2_mean": stats.l2_mean,
             "l2_total": stats.l2_total,
         }
@@ -263,16 +270,19 @@ def run_cnn_offline_stats(net, eval_file, num_samples, sample_seed, base_logger,
     stats_report = jax.device_get(jax.jit(compute_stats)(batch, target))
     logger.info("Finished statistics computation")
     logger.info(f"Stat mse: {stats_report['val_mse']:<15.5g}")
+    logger.info(f"Stat standard_mse: {stats_report['standard_mse']:<15.5g}")
     logger.info(f"Stat l2_mean: {stats_report['l2_mean']:<15.5g}")
     logger.info(f"Stat l2_total: {stats_report['l2_total']:<15.5g}")
     # Package stats
     json_results = {
         "val_mse": stats_report["val_mse"].item(),
+        "standard_mse": stats_report["standard_mse"].item(),
         "l2_mean": stats_report["l2_mean"].item(),
         "l2_total": stats_report["l2_total"].item(),
     }
     bulk_results = {
         "val_mse": stats_report["val_mse"],
+        "standard_mse": stats_report["standard_mse"],
         "l2_mean": stats_report["l2_mean"],
         "l2_total": stats_report["l2_total"],
         "trajs": sample_trajs,
