@@ -1,12 +1,12 @@
 #!/bin/bash
 
 #SBATCH --job-name=cnn-net-eval
-#SBATCH --time=8:00:00
+#SBATCH --time=0:30:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16GB
 #SBATCH --gres=gpu:1
 #SBATCH --partition=rtx8000,v100
-#SBATCH --exclude=gv0[13-18]
+#SBATCH --exclude=gv0[13-18],gv002
 
 if [[ $# -lt 2 ]]; then
     echo "ERROR: Insufficient parameters for evaluation"
