@@ -803,6 +803,9 @@ def main():
 
             # Save snapshots
             saved_names = []
+            # Save the network after each epoch
+            save_network(f"epoch{epoch:04d}", output_dir=weights_dir, state=state, base_logger=logger)
+            saved_names.append(f"epoch{epoch:04d}")
             if min_mean_loss is None or (math.isfinite(mean_loss) and mean_loss <= min_mean_loss):
                 min_mean_loss = mean_loss
                 save_network("best_loss", output_dir=weights_dir, state=state, base_logger=logger)
