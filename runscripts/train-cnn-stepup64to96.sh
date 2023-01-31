@@ -6,7 +6,7 @@
 #SBATCH --mem=20GB
 #SBATCH --gres=gpu:1
 #SBATCH --partition=rtx8000,v100
-#SBATCH --exclude=gv0[13-18]
+#SBATCH --exclude=gv0[13-18],gv002
 
 # Begin execution
 module purge
