@@ -147,6 +147,8 @@ def make_batch_computer_basic_cnn(scalers, coarseners, input_channels, output_si
         y = net(fixed_input)
         small_y = coarseners["output"](y)
         mse = jnp.mean((small_y - targets)**2)
+        if residual_size is not None:
+            mse = 2 * mse
         return mse
 
     def batch_loss(net, fixed_input, targets):
