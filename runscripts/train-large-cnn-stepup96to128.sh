@@ -1,12 +1,12 @@
 #!/bin/bash
 
 #SBATCH --job-name=train-large-cnn-stepup96to128
-#SBATCH --time=36:00:00
+#SBATCH --time=47:59:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=20GB
 #SBATCH --gres=gpu:1
 #SBATCH --partition=rtx8000,v100
-#SBATCH --exclude=gv0[13-18]
+#SBATCH --exclude=gv0[13-18],gv002
 
 # Begin execution
 module purge
@@ -41,12 +41,12 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --optimizer=adam \
             --task_type=basic-cnn \
             --batch_size=256 \
-            --num_epochs=42 \
+            --num_epochs=94 \
             --batches_per_epoch=1000 \
             --num_val_samples=100 \
             --val_interval=6 \
             --save_interval=1 \
-            --lr=0.0001 \
+            --lr=0.00005 \
             --architecture=gz-fcnn-v1-large \
             --output_size=128 \
             --processing_size=128 \
