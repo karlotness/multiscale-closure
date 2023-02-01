@@ -41,6 +41,7 @@ parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
 parser.add_argument("--num_epochs", type=int, default=100, help="Number of training epochs")
 parser.add_argument("--batches_per_epoch", type=int, default=100, help="Training batches per epoch")
 parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for optimizer")
+parser.add_argument("--end_lr", type=float, default=None, help="Learning rate at end of schedule")
 parser.add_argument("--dt", type=float, default=0.01, help="Time step size when running diffusion")
 parser.add_argument("--num_val_samples", type=int, default=10, help="Number of samples to draw in each validation period")
 parser.add_argument("--val_mean_samples", type=int, default=25, help="Number of samples used to compute empirical means")
@@ -50,7 +51,8 @@ parser.add_argument("--input_channels", type=str, nargs="+", default=["q_64"], h
 parser.add_argument("--processing_size", type=int, default=None, help="Size to user for internal network evaluation (default: select automatically)")
 parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", choices=sorted(ARCHITECTURES.keys()), help="Network architecture to train")
 parser.add_argument("--task_type", type=str, default="sdegm", choices=["sdegm", "basic-cnn"], help="What type of task to target")
-parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam"], help="Which optimizer to use")
+parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam", "adamw"], help="Which optimizer to use")
+parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine"], help="What learning rate schedule")
 
 
 def save_network(output_name, output_dir, state, base_logger=None):
@@ -515,7 +517,7 @@ def do_validation(train_state, val_rng, np_rng, loader, sample_stat_fn, num_samp
     return stats_report, rng_ctr
 
 
-def init_network(architecture, lr, rng, output_size, input_channels, processing_size, coarse_op_name, task_type, optim_type):
+def init_network(architecture, lr, rng, output_size, input_channels, processing_size, coarse_op_name, task_type, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type):
 
     def leaf_map(leaf):
         if isinstance(leaf, jnp.ndarray):
@@ -546,14 +548,50 @@ def init_network(architecture, lr, rng, output_size, input_channels, processing_
         key=rng,
     )
 
+    # Configure learning rate schedule
+    steps_per_epoch = batches_per_epoch
+    total_steps = steps_per_epoch * num_epochs
+    match schedule_type:
+        case "constant":
+            sched_args = {
+                "type": "constant",
+                "args": {
+                    "value": lr,
+                },
+            }
+            schedule = optax.constant_schedule(**sched_args["args"])
+        case "warmup1-cosine":
+            sched_args = {
+                "type": "warmup1-cosine",
+                "args": {
+                    "init_value": 0.0,
+                    "peak_value": lr,
+                    "warmup_steps": steps_per_epoch,
+                    "decay_steps": total_steps,
+                    "end_value": (0.0 if end_lr is None else end_lr),
+                },
+            }
+            schedule = optax.warmup_cosine_decay_schedule(**sched_args["args"])
+        case _:
+            raise ValueError(f"unsupported schedule {schedule_type}")
+
     match optim_type:
         case "adabelief":
-            optim = optax.adabelief(learning_rate=lr)
+            optim = optax.adabelief(learning_rate=schedule)
         case "adam":
-            optim = optax.adam(learning_rate=lr)
+            optim = optax.adam(learning_rate=schedule)
+        case "adamw":
+            optim = optax.adamw(learning_rate=schedule)
         case _:
             raise ValueError(f"unsupported optimizer {optim_type}")
 
+    optim = optax.apply_if_finite(
+        optax.chain(
+            optax.clip(1.0),
+            optim,
+        ),
+        100,
+    )
 
     net = jax.tree_util.tree_map(leaf_map, net)
     optim = jax.tree_util.tree_map(leaf_map, optim)
@@ -739,6 +777,10 @@ def main():
         coarse_op_name=coarse_op_name,
         task_type=args.task_type,
         optim_type=args.optimizer,
+        num_epochs=args.num_epochs,
+        batches_per_epoch=args.batches_per_epoch,
+        end_lr=args.end_lr,
+        schedule_type=args.lr_schedule,
     )
     # Store network info
     with utils.rename_save_file(weights_dir / "network_info.json", "w", encoding="utf8") as net_info_file:
