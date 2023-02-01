@@ -93,6 +93,7 @@ def determine_channel_sizes(input_channels):
 
 def determine_residual_size(input_channels, output_size):
     # The residual is the largest total_forcing channel with size <= output_size
+    return None
     sizes = set()
     for chan in input_channels:
         if chan.startswith("q_total_forcing_"):
