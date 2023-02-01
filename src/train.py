@@ -4,6 +4,7 @@ import pathlib
 import math
 import os
 import sys
+import platform
 import random
 import contextlib
 import itertools
@@ -742,6 +743,22 @@ def main():
     # Store network info
     with utils.rename_save_file(weights_dir / "network_info.json", "w", encoding="utf8") as net_info_file:
         json.dump(network_info, net_info_file)
+    # Store run details
+    with utils.rename_save_file(out_dir / "cli_info.json", "w", encoding="utf8") as cli_info_file:
+        cli_info = {
+                "argv": sys.argv,
+                "parsed_args": dict(vars(args)),
+                "environ": dict(os.environ),
+                "node": platform.node(),
+        }
+        if git_info is not None:
+            cli_info["git_info"] = {
+                "commit": git_info.hash,
+                "clean_worktree": git_info.clean_worktree
+            }
+        else:
+            cli_info["git_info"] = None
+        json.dump(cli_info, cli_info_file)
 
     # Open data files
     with contextlib.ExitStack() as train_context:
