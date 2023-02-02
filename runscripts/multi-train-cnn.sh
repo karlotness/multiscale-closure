@@ -18,9 +18,9 @@ fi
 
 readonly RUN_KEY="$1"
 readonly ARCHITECTURE="$2"
-readonly OUTPUT_SIZE="$3"
+readonly INPUT_CHANNELS="$3"
 readonly PROC_SIZE="$4"
-readonly INPUT_CHANNELS="$5"
+readonly OUTPUT_CHANNELS="$5"
 
 # Begin execution
 module purge
@@ -64,7 +64,6 @@ export JAX_DEFAULT_DTYPE_BITS=32
 singularity run --nv "$SINGULARITY_CONTAINER" \
             python "${CHECKOUT_DIR}/src/train.py" "$OUT_DIR" "$TRAIN_DATA_DIR" "$VAL_DATA_DIR" \
             --optimizer=adabelief \
-            --task_type=basic-cnn \
             --batch_size=256 \
             --num_epochs="$NUM_EPOCHS" \
             --batches_per_epoch=333 \
@@ -75,6 +74,6 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --end_lr=0.0 \
             --lr_schedule=warmup1-cosine \
             --architecture="$ARCHITECTURE" \
-            --output_size="$OUTPUT_SIZE" \
             --processing_size="$PROC_SIZE" \
-            --input_channels $INPUT_CHANNELS
+            --input_channels $INPUT_CHANNELS \
+            --output_channels $OUTPUT_CHANNELS

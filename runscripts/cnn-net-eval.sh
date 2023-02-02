@@ -30,7 +30,6 @@ readonly SINGULARITY_CONTAINER="${SCRATCH}/closure/closure.sif"
 readonly ORIGIN_REPO_DIR="${HOME}/repos/closure.git"
 readonly CHECKOUT_DIR="${SLURM_JOBTMP}/Closure/"
 readonly EVAL_DATA_DIR="${SCRATCH}/closure/data/test/op1/"
-readonly TRAIN_DATA_DIR="${SCRATCH}/closure/data/train/op1/"
 
 # Clone Repository
 mkdir -p "$CHECKOUT_DIR"
@@ -40,7 +39,7 @@ git clone "$ORIGIN_REPO_DIR" "$CHECKOUT_DIR"
 export JAX_ENABLE_X64=True
 export JAX_DEFAULT_DTYPE_BITS=32
 singularity run --nv "$SINGULARITY_CONTAINER" \
-            python "${CHECKOUT_DIR}/src/eval.py" "$NET_DIR" "$EVAL_DATA_DIR" "$EVAL_TYPE" "$TRAIN_DATA_DIR" \
+            python "${CHECKOUT_DIR}/src/eval.py" "$NET_DIR" "$EVAL_DATA_DIR" "$EVAL_TYPE" \
             --seed=0 \
-            --spectrum_seed=0 \
-            --num_spectrum_samples=1024
+            --sample_seed=0 \
+            --num_samples=1024
