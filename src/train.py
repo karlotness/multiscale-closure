@@ -110,6 +110,13 @@ def determine_processing_size(input_channels, output_channels, user_processing_s
     return auto_processing_size
 
 
+def determine_output_size(output_channels):
+    sizes = {determine_channel_size(chan) for chan in output_channels}
+    if len(sizes) != 1:
+        raise ValueError("output channel sizes must be unique")
+    return next(iter(sizes))
+
+
 @jax_utils.register_pytree_dataclass
 @dataclasses.dataclass
 class Scalers:
@@ -279,9 +286,11 @@ def remove_residual_from_output_chunk(output_channels, output_chunk, batch, mode
 
 
 def make_batch_computer(input_channels, output_channels, model_params, processing_size):
+    output_size = determine_output_size(output_channels)
 
     def sample_loss(input_elem, target_elem, net):
         y = net(input_elem)
+        y = make_basic_coarsener(processing_size, output_size, model_params)(y)
         mse = jnp.mean((y - target_elem)**2)
         return mse
 
@@ -305,7 +314,7 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
             channels=output_channels,
             batch=batch,
             model_params=model_params,
-            processing_size=processing_size,
+            processing_size=output_size,
         )
         # Compute losses
         loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, input_chunk, target_chunk)
@@ -334,6 +343,11 @@ def do_epoch(train_state, batch_iter, batch_fn, logger=None):
 
 
 def make_validation_stats_function(input_channels, output_channels, model_params, processing_size):
+    output_size = determine_output_size(output_channels)
+
+    def make_samples(input_chunk, net):
+        ys = jax.vmap(net)(input_chunk)
+        return jax.vmap(make_basic_coarsener(processing_size, output_size, model_params))(ys)
 
     def compute_stats(batch, net):
         input_chunk = make_chunk_from_batch(
@@ -346,14 +360,14 @@ def make_validation_stats_function(input_channels, output_channels, model_params
             channels=output_channels,
             batch=batch,
             model_params=model_params,
-            processing_size=processing_size,
+            processing_size=output_size,
         )
         samples = remove_residual_from_output_chunk(
             output_channels=output_channels,
-            output_chunk=jax.vmap(net)(input_chunk),
+            output_chunk=make_samples(input_chunk, net),
             batch=batch,
             model_params=model_params,
-            processing_size=processing_size,
+            processing_size=output_size,
         )
         err = jnp.abs(targets - samples)
         mse = jnp.mean(err**2)
