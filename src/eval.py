@@ -1,4 +1,5 @@
 import pathlib
+import itertools
 import argparse
 import functools
 import utils
@@ -20,7 +21,7 @@ import math
 import dataclasses
 from methods.gz_fcnn import GZFCNN
 from methods import ARCHITECTURES
-from train import determine_required_fields, determine_processing_size, make_scalers, make_coarseners, make_sampler, build_fixed_input_from_batch, determine_residual_size
+from train import load_model_params, determine_required_fields, make_validation_stats_function
 import jax_utils
 
 
@@ -28,15 +29,12 @@ parser = argparse.ArgumentParser(description="Evaluate neural networks for closu
 parser.add_argument("net_dir", type=str, help="Directory with saved network weights")
 parser.add_argument("eval_set", type=str, help="Directory with evaluation examples")
 parser.add_argument("net_type", type=str, help="Which saved network weights to load")
-parser.add_argument("train_set", type=str, help="Directory with training data (used for scalers)")
 parser.add_argument("--log_level", type=str, help="Level for logger", default="info", choices=["debug", "info", "warning", "error", "critical"])
-parser.add_argument("--sampling_dt", type=float, default=0.01, help="Time step size for the SDE generating samples")
 parser.add_argument("--seed", type=int, default=None, help="Seed to use with RNG (if None, select automatically)")
 # Settings for generative spectrum tests
-parser.add_argument("--num_spectrum_samples", type=int, default=100, help="Number of random steps to test for generative statistics")
-parser.add_argument("--spectrum_seed", type=int, default=0, help="Seed used to draw samples for generative statistics")
-parser.add_argument("--num_mean_samples", type=int, default=10, help="Number of samples to compute mean of generated forcing")
-parser.add_argument("--spectrum_min_sample_step", type=int, default=0, help="Starting step index for sampling (can be set to exclude warmup)")
+parser.add_argument("--num_samples", type=int, default=100, help="Number of random steps to test for generative statistics")
+parser.add_argument("--sample_seed", type=int, default=0, help="Seed used to draw samples for generative statistics")
+parser.add_argument("--min_sample_step", type=int, default=0, help="Starting step index for sampling (can be set to exclude warmup)")
 
 
 def load_network(weight_file):
@@ -65,193 +63,24 @@ def check_coarse_op(eval_file, coarse_op_name):
         return data_file["params"]["coarsen_op"].asstr()[()] == coarse_op_name
 
 
-def make_generative_sampler(net, num_mean_samples, sample_dt, input_channels, coarseners, scalers, output_size):
+def run_cnn_offline_stats(net, eval_file, num_samples, sample_seed, base_logger, model_params, input_channels, output_channels, processing_size, required_fields, min_sample_step):
 
-    def do_sample(rng, batch):
-        # Function of batch, net, rng
-        sample_fn = functools.partial(
-            make_sampler(
-                scalers=scalers,
-                coarseners=coarseners,
-                output_size=output_size,
+    sample_stats_fn = jax.jit(
+        functools.partial(
+            make_validation_stats_function(
                 input_channels=input_channels,
-                dt=sample_dt,
+                output_channels=output_channels,
+                model_params=model_params,
+                processing_size=processing_size
             ),
-            batch=batch,
             net=net,
-        )
-        sample, _rng = sample_fn(rng=rng)
-        return sample
-
-    def compute_samples_mean(batch, rng):
-        rngs = jax.random.split(rng, num_mean_samples)
-        # Scan instead of vmap to save memory at the cost of parallelism
-        mean_samples = jax_utils.chunked_vmap(
-            functools.partial(do_sample, batch=batch),
-            chunk_size=100,
-        )(rng=rngs)
-        sample = mean_samples[0]
-        mean = jnp.mean(mean_samples, axis=0)
-        return sample, mean
-
-    return compute_samples_mean
-
-
-def make_generative_stat_computer(net, num_mean_samples, sample_dt, input_channels, coarseners, scalers, output_size):
-
-    def map_gen_sampler(batch_elem, rng):
-        sampler_fn = make_generative_sampler(
-            net=net,
-            num_mean_samples=num_mean_samples,
-            sample_dt=sample_dt,
-            coarseners=coarseners,
-            input_channels=input_channels,
-            scalers=scalers,
-            output_size=output_size,
-        )
-        sample, mean = sampler_fn(
-            batch=jax.tree_util.tree_map(lambda arr: jnp.expand_dims(arr, 0), batch_elem),
-            rng=rng,
-        )
-        sample = jnp.squeeze(sample, 0)
-        mean = jnp.squeeze(mean, 0)
-        return sample, mean
-
-    def compute_stats(batch, target, rng):
-        batch_size = target.shape[0]
-        rng_ctr, *rngs = jax.random.split(rng, batch_size + 1)
-        rngs = jnp.stack(rngs)
-        samples, means = jax_utils.chunked_vmap(
-            map_gen_sampler,
-            chunk_size=1,
-        )(batch, rngs)
-        # Add time dimensions and compute stats
-        true_forcings = target
-        stats = qg_spec_diag.subgrid_scores(
-            true=jnp.expand_dims(true_forcings, 1),
-            mean=jnp.expand_dims(means, 1),
-            gen=jnp.expand_dims(samples, 1),
-        )
-        return stats, rng_ctr
-
-    return compute_stats
-
-
-def run_generative_offline_stats(net, eval_file, num_step_samples, spectrum_seed, num_mean_samples, base_logger, rng_ctr, sample_dt, scalers, coarseners, input_channels, output_size, min_sample_step=0):
-    logger = base_logger.getChild("spec_offline")
-    np_rng = np.random.default_rng(seed=spectrum_seed)
-    logger.info("Starting to load evaluation data")
-    with SimpleQGLoader(eval_file, fields=determine_required_fields(input_channels=input_channels, output_size=output_size)) as eval_loader:
-        # First, sample the (traj, index) pairs used for "offline" statistics
-        valid_step_count = eval_loader.num_steps - min_sample_step
-        total_steps = eval_loader.num_trajs * valid_step_count
-        sample_idxs = np_rng.integers(0, total_steps, size=num_step_samples, dtype=np.uint64)
-        sample_trajs, sample_steps = np.divmod(sample_idxs, valid_step_count)
-        sample_steps = sample_steps + min_sample_step
-        # For each of these, load the relevant data and stack
-        batch = jax.tree_util.tree_map(
-            lambda *args: jnp.concatenate(args, axis=0),
-            *(eval_loader.get_trajectory(traj=operator.index(t), start=operator.index(s), end=operator.index(s)+1) for t, s in zip(sample_trajs, sample_steps, strict=True))
-        )
-        target = batch.q_total_forcings[output_size]
-    logger.info("Finished loading evaluation data")
-    # With loaded data on device, compute statistics
-    logger.info("Starting statistics computation")
-    stats_fn = jax.jit(
-        make_generative_stat_computer(
-            net=net,
-            num_mean_samples=num_mean_samples,
-            sample_dt=sample_dt,
-            input_channels=input_channels,
-            coarseners=coarseners,
-            scalers=scalers,
-            output_size=output_size,
         )
     )
-    stats, rng_ctr = stats_fn(batch, target, rng_ctr)
-    stats = jax.device_get(stats)
-    logger.info("Finished statistics computation")
-    logger.info(f"Stat l2_mean: {stats.l2_mean:<15.5g}")
-    logger.info(f"Stat l2_total: {stats.l2_total:<15.5g}")
-    logger.info(f"Stat l2_residual: {stats.l2_residual:<15.5g}")
-    logger.info(f"Stat var_ratio: {stats.var_ratio}")
-    # Split results into json values and bulk values
-    json_results = {
-        "l2_mean": stats.l2_mean.item(),
-        "l2_total": stats.l2_total.item(),
-        "l2_residual": stats.l2_residual.item(),
-        "var_ratio": stats.var_ratio.tolist(),
-    }
-    bulk_results = {
-        "l2_mean": stats.l2_mean,
-        "l2_total": stats.l2_total,
-        "l2_residual": stats.l2_residual,
-        "var_ratio": stats.var_ratio,
-        "trajs": sample_trajs,
-        "steps": sample_steps,
-    }
-    return json_results, bulk_results, rng_ctr
-
-
-def run_cnn_offline_stats(net, eval_file, num_samples, sample_seed, base_logger, scalers, coarseners, input_channels, output_size, min_sample_step):
-
-    def single_sample_and_loss(fixed_input, targets):
-        y = net(fixed_input)
-        small_y = coarseners["output"](y)
-        err = small_y - targets
-        mse = jnp.mean(err**2)
-        return small_y, mse
-
-    def mse_loss(est, true):
-        err = jnp.abs(est - true)
-        return jnp.mean(err**2)
-
-    def compute_stats(batch, targets):
-        # Extract batch components
-        fixed_input = build_fixed_input_from_batch(
-            batch=batch,
-            input_channels=input_channels,
-            scalers=scalers,
-            coarseners=coarseners,
-        )
-        residual_size = determine_residual_size(input_channels, output_size)
-        standard_targets = jax.vmap(scalers.q_total_forcing_scalers[output_size].scale_to_standard)(
-            targets
-        )
-        standard_targets_no_residual = standard_targets
-        # If necessary, make sure we target the residual from the closest-sized input forcing channel
-        if residual_size is not None:
-            existing_target = jax.vmap(coarseners["residual"])(
-                jax.vmap(scalers.q_total_forcing_scalers[residual_size].scale_to_standard)(
-                    batch.q_total_forcings[residual_size]
-                )
-            )
-            standard_targets = (standard_targets - existing_target) / jnp.sqrt(2).astype(jnp.float32)
-        # Draw network samples
-        standard_samples, mse = jax.vmap(single_sample_and_loss)(fixed_input, standard_targets)
-        mse = jnp.mean(mse)
-        # If we had a residual, add it back to the samples
-        if residual_size is not None:
-            standard_samples = (jnp.sqrt(2).astype(jnp.float32) * standard_samples) + existing_target
-        standard_mse = jnp.mean(jax.vmap(mse_loss)(standard_samples, standard_targets_no_residual))
-        samples = jax.vmap(scalers.q_total_forcing_scalers[output_size].scale_from_standard)(standard_samples)
-        stats = qg_spec_diag.subgrid_scores(
-            true=jnp.expand_dims(targets, 1),
-            mean=jnp.expand_dims(samples, 1),
-            gen=jnp.expand_dims(samples, 1),
-        )
-        # Package relevant stats
-        return {
-            "val_mse": mse,
-            "standard_mse": standard_mse,
-            "l2_mean": stats.l2_mean,
-            "l2_total": stats.l2_total,
-        }
 
     logger = base_logger.getChild("cnn_offline")
     np_rng = np.random.default_rng(seed=sample_seed)
     logger.info("Starting to load evaluation data")
-    with SimpleQGLoader(eval_file, fields=determine_required_fields(input_channels=input_channels, output_size=output_size)) as eval_loader:
+    with SimpleQGLoader(eval_file, fields=required_fields) as eval_loader:
         # First, sample the (traj, index) pairs used for "offline" statistics
         valid_step_count = eval_loader.num_steps - min_sample_step
         total_steps = eval_loader.num_trajs * valid_step_count
@@ -263,25 +92,21 @@ def run_cnn_offline_stats(net, eval_file, num_samples, sample_seed, base_logger,
             lambda *args: jnp.concatenate(args, axis=0),
             *(eval_loader.get_trajectory(traj=operator.index(t), start=operator.index(s), end=operator.index(s)+1) for t, s in zip(sample_trajs, sample_steps, strict=True))
         )
-        target = batch.q_total_forcings[output_size]
     logger.info("Finished loading evaluation data")
     # With loaded data on device, compute statistics
     logger.info("Starting statistics computation")
-    stats_report = jax.device_get(jax.jit(compute_stats)(batch, target))
+    stats_report = jax.device_get(sample_stats_fn(batch))
     logger.info("Finished statistics computation")
-    logger.info(f"Stat mse: {stats_report['val_mse']:<15.5g}")
     logger.info(f"Stat standard_mse: {stats_report['standard_mse']:<15.5g}")
     logger.info(f"Stat l2_mean: {stats_report['l2_mean']:<15.5g}")
     logger.info(f"Stat l2_total: {stats_report['l2_total']:<15.5g}")
     # Package stats
     json_results = {
-        "val_mse": stats_report["val_mse"].item(),
         "standard_mse": stats_report["standard_mse"].item(),
         "l2_mean": stats_report["l2_mean"].item(),
         "l2_total": stats_report["l2_total"].item(),
     }
     bulk_results = {
-        "val_mse": stats_report["val_mse"],
         "standard_mse": stats_report["standard_mse"],
         "l2_mean": stats_report["l2_mean"],
         "l2_total": stats_report["l2_total"],
@@ -336,89 +161,53 @@ def main():
     # Load the network
     net, net_info = load_network(weight_file=weight_file)
     input_channels = net_info["input_channels"]
-    output_size = net_info["output_size"]
-    task_type = net_info.get("task_type", "sdegm")
-    logger.info("Task type: %s", task_type)
+    output_channels = net_info["output_channels"]
+    processing_size = net_info["processing_size"]
     coarse_op_name = net_info.get("coarse_op_name", None)
+    train_set = pathlib.Path(net_info["train_path"])
+    logger.info("Parameters from training set %s", train_set)
     if coarse_op_name is not None:
         logger.info("Coarsening operator: %s", coarse_op_name)
     if not check_coarse_op(eval_file, coarse_op_name):
         logger.error("Invalid eval file for operator %s", coarse_op_name)
         sys.exit(2)
-    if not check_coarse_op(pathlib.Path(args.train_set) / "shuffled.hdf5", coarse_op_name):
+    if not check_coarse_op(train_set, coarse_op_name):
         logger.error("Invalid train file for operator %s", coarse_op_name)
         sys.exit(2)
-    processing_size = determine_processing_size(
-        input_channels=input_channels,
-        target_size=output_size,
-        user_processing_size=net_info.get("processing_size", None),
+    model_params = load_model_params(train_set)
+    required_fields = sorted(
+        determine_required_fields(
+            itertools.chain(
+                input_channels,
+                output_channels,
+            )
+        )
     )
-    required_fields = determine_required_fields(
-        input_channels=input_channels,
-        output_size=output_size,
-    )
-    # Make scalers and coarseners
-    scalers = make_scalers(
-        source_data=pathlib.Path(args.train_set) / "shuffled.hdf5",
-        target_size=output_size,
-        input_channels=input_channels,
-    )
-    coarseners, coarsener_op_name = make_coarseners(
-        source_data=pathlib.Path(args.train_set) / "shuffled.hdf5",
-        target_size=output_size,
-        input_channels=input_channels,
-        processing_size=processing_size,
-    )
-    if coarse_op_name is not None and coarsener_op_name != coarse_op_name:
-        logger.error("Mismatch on coarsener operation %s vs %s", coarse_op_name, coarsener_op_name)
-        sys.exit(2)
+    logger.info("Required fields: %s", required_fields)
+    logger.info("Input channels: %s", input_channels)
+    logger.info("Output channels: %s", output_channels)
+    logger.info("Processing size: %d", processing_size)
 
     # Set up results files
     json_results = {}
     bulk_results = {}
 
-    match task_type:
-        case "sdegm":
-            # GENERATIVE OFFLINE STATISTICS
-            # Sample a few snapshots from the file, sample forcings and compute statistics vs the true forcing
-            gen_json_res, gen_bulk_res, rng_ctr = run_generative_offline_stats(
-                net=net,
-                eval_file=eval_file,
-                num_step_samples=args.num_spectrum_samples,
-                spectrum_seed=args.spectrum_seed,
-                num_mean_samples=args.num_mean_samples,
-                base_logger=logger,
-                rng_ctr=rng_ctr,
-                sample_dt=args.sampling_dt,
-                scalers=scalers,
-                coarseners=coarseners,
-                input_channels=input_channels,
-                output_size=output_size,
-                min_sample_step=args.spectrum_min_sample_step,
-            )
-            # Add results to pending data
-            json_results["gen_offline_stats"] = gen_json_res
-            bulk_results.update({f"gen_offline_stats_{k}": v for k, v in gen_bulk_res.items()})
-        case "basic-cnn":
-            # Handle validation for basic CNN mode
-            cnn_json_res, cnn_bulk_res = run_cnn_offline_stats(
-                net=net,
-                eval_file=eval_file,
-                num_samples=args.num_spectrum_samples,
-                sample_seed=args.spectrum_seed,
-                base_logger=logger,
-                scalers=scalers,
-                coarseners=coarseners,
-                input_channels=input_channels,
-                output_size=output_size,
-                min_sample_step=args.spectrum_min_sample_step,
-            )
-            json_results["cnn_offline_stats"] = cnn_json_res
-            bulk_results.update({f"cnn_offline_stats_{k}": v for k, v in cnn_bulk_res.items()})
-        case _:
-            logger.error("Unsupported task type: %s", task_type)
-            sys.exit(3)
-
+    # Handle validation for basic CNN mode
+    cnn_json_res, cnn_bulk_res = run_cnn_offline_stats(
+        net=net,
+        eval_file=eval_file,
+        num_samples=args.num_samples,
+        sample_seed=args.sample_seed,
+        base_logger=logger,
+        model_params=model_params,
+        input_channels=input_channels,
+        output_channels=output_channels,
+        processing_size=processing_size,
+        required_fields=required_fields,
+        min_sample_step=args.min_sample_step,
+    )
+    json_results["cnn_offline_stats"] = cnn_json_res
+    bulk_results.update({f"cnn_offline_stats_{k}": v for k, v in cnn_bulk_res.items()})
     # Save results
     np.savez(out_dir / "results.npz", **bulk_results)
     with open(out_dir / "results.json", "w", encoding="utf8") as json_file:
