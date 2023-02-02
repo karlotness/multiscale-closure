@@ -53,6 +53,7 @@ parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", choices=so
 parser.add_argument("--task_type", type=str, default="sdegm", choices=["sdegm", "basic-cnn"], help="What type of task to target")
 parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam", "adamw"], help="Which optimizer to use")
 parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine"], help="What learning rate schedule")
+parser.add_argument("--no_target_residuals", action="store_false", dest="allow_residuals", help="Don't target high-resolution details when training")
 
 
 def save_network(output_name, output_dir, state, base_logger=None):
@@ -91,9 +92,10 @@ def determine_channel_sizes(input_channels):
     return {determine_channel_size(chan) for chan in input_channels}
 
 
-def determine_residual_size(input_channels, output_size):
+def determine_residual_size(input_channels, output_size, allow_residuals):
     # The residual is the largest total_forcing channel with size <= output_size
-    return None
+    if not allow_residuals:
+        return None
     sizes = set()
     for chan in input_channels:
         if chan.startswith("q_total_forcing_"):
@@ -143,9 +145,9 @@ def build_fixed_input_from_batch(batch, input_channels, scalers, coarseners):
     return jnp.concatenate(input_stack, axis=-3)
 
 
-def make_batch_computer_basic_cnn(scalers, coarseners, input_channels, output_size):
+def make_batch_computer_basic_cnn(scalers, coarseners, input_channels, output_size, allow_residuals):
 
-    residual_size = determine_residual_size(input_channels, output_size)
+    residual_size = determine_residual_size(input_channels, output_size, allow_residuals)
 
     def sample_loss(fixed_input, targets, net):
         y = net(fixed_input)
@@ -182,7 +184,7 @@ def make_batch_computer_basic_cnn(scalers, coarseners, input_channels, output_si
                     batch.q_total_forcings[residual_size]
                 )
             )
-            targets = (targets - existing_target) / jnp.sqrt(2).astype(jnp.float32)
+            targets = (targets - existing_target)
         # Compute losses
         loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, fixed_input, targets)
         # Update parameters (if loss is finite)
@@ -194,7 +196,7 @@ def make_batch_computer_basic_cnn(scalers, coarseners, input_channels, output_si
     return do_batch
 
 
-def make_batch_computer_sdegm(scalers, coarseners, input_channels, output_size):
+def make_batch_computer_sdegm(scalers, coarseners, input_channels, output_size, allow_residuals):
     # OU: dY = -0.5 * g(t)
     # beta(t) = 18 * t^2
     # int(beta)(t) = 6 * t^3
@@ -207,7 +209,7 @@ def make_batch_computer_sdegm(scalers, coarseners, input_channels, output_size):
     min_variance = 1e-6
     loss_weight_func = lambda t: 1 - jnp.exp(-int_beta_func(t))
 
-    residual_size = determine_residual_size(input_channels, output_size)
+    residual_size = determine_residual_size(input_channels, output_size, allow_residuals)
 
     def sample_loss(fixed_input, targets, t, rng, net):
         mean = targets * jnp.exp(-0.5 * int_beta_func(t))
@@ -246,7 +248,7 @@ def make_batch_computer_sdegm(scalers, coarseners, input_channels, output_size):
                     batch.q_total_forcings[residual_size]
                 )
             )
-            targets = (targets - existing_target) / jnp.sqrt(2).astype(jnp.float32)
+            targets = (targets - existing_target)
         batch_size = targets.shape[0]
         # Produce RNGs
         rng_times, rng_loss, rng_ctr = jax.random.split(rng, 3)
@@ -262,7 +264,7 @@ def make_batch_computer_sdegm(scalers, coarseners, input_channels, output_size):
     return do_batch
 
 
-def make_batch_computer(task_type, scalers, coarseners, input_channels, output_size):
+def make_batch_computer(task_type, scalers, coarseners, input_channels, output_size, allow_residuals):
     match task_type:
         case "sdegm":
             return make_batch_computer_sdegm(
@@ -270,6 +272,7 @@ def make_batch_computer(task_type, scalers, coarseners, input_channels, output_s
                 coarseners=coarseners,
                 input_channels=input_channels,
                 output_size=output_size,
+                allow_residuals=allow_residuals,
             )
         case "basic-cnn":
             return make_batch_computer_basic_cnn(
@@ -277,6 +280,7 @@ def make_batch_computer(task_type, scalers, coarseners, input_channels, output_s
                 coarseners=coarseners,
                 input_channels=input_channels,
                 output_size=output_size,
+                allow_residuals=allow_residuals,
             )
         case _:
             raise ValueError(f"unsupported task type {task_type}")
@@ -344,9 +348,9 @@ def make_raw_sampler(coarseners, output_size, dt=0.01):
     return draw_raw_samples
 
 
-def make_sampler(scalers, coarseners, output_size, input_channels, dt=0.01):
+def make_sampler(scalers, coarseners, output_size, input_channels, allow_residuals, dt=0.01):
 
-    residual_size = determine_residual_size(input_channels, output_size)
+    residual_size = determine_residual_size(input_channels, output_size, allow_residuals)
 
     def draw_samples(batch, net, rng):
         raw_sampler = make_raw_sampler(coarseners=coarseners, output_size=output_size, dt=dt)
@@ -365,14 +369,14 @@ def make_sampler(scalers, coarseners, output_size, input_channels, dt=0.01):
                     batch.q_total_forcings[residual_size]
                 )
             )
-            raw_samples = (jnp.sqrt(2).astype(jnp.float32) * raw_samples) + existing_target
+            raw_samples = raw_samples + existing_target
         samples = jax.vmap(scalers.q_total_forcing_scalers[output_size].scale_from_standard)(raw_samples)
         return samples, rng_ctr
 
     return draw_samples
 
 
-def make_validation_stats_function_sdegm(num_mean_samples, scalers, coarseners, dt, input_channels, output_size):
+def make_validation_stats_function_sdegm(num_mean_samples, scalers, coarseners, dt, input_channels, output_size, allow_residuals):
 
     def multi_sampler(net, batch, rng):
         rng_ctr, *batch_rngs = jax.random.split(rng, num_mean_samples + 1)
@@ -385,6 +389,7 @@ def make_validation_stats_function_sdegm(num_mean_samples, scalers, coarseners, 
                     output_size=output_size,
                     input_channels=input_channels,
                     dt=dt,
+                    allow_residuals=allow_residuals,
                 ),
                 net=net,
                 batch=batch,
@@ -417,9 +422,9 @@ def make_validation_stats_function_sdegm(num_mean_samples, scalers, coarseners, 
     return compute_stats
 
 
-def make_validation_stats_function_basic_cnn(scalers, coarseners, input_channels, output_size):
+def make_validation_stats_function_basic_cnn(scalers, coarseners, input_channels, output_size, allow_residuals):
 
-    residual_size = determine_residual_size(input_channels, output_size)
+    residual_size = determine_residual_size(input_channels, output_size, allow_residuals)
 
     def single_sample_and_loss(fixed_input, targets, net):
         y = net(fixed_input)
@@ -445,7 +450,7 @@ def make_validation_stats_function_basic_cnn(scalers, coarseners, input_channels
                     batch.q_total_forcings[residual_size]
                 )
             )
-            targets = (targets - existing_target) / jnp.sqrt(2).astype(jnp.float32)
+            targets = (targets - existing_target)
         # Compute samples and losses
         samples, losses = jax.vmap(
             functools.partial(
@@ -454,7 +459,7 @@ def make_validation_stats_function_basic_cnn(scalers, coarseners, input_channels
             )
         )(fixed_input, targets)
         if residual_size is not None:
-            samples = (jnp.sqrt(2).astype(jnp.float32) * samples) + existing_target
+            samples = samples + existing_target
         # Scale samples back to original distribution
         samples = jax.vmap(scalers.q_total_forcing_scalers[output_size].scale_from_standard)(
             samples
@@ -469,7 +474,7 @@ def make_validation_stats_function_basic_cnn(scalers, coarseners, input_channels
     return do_batch
 
 
-def make_validation_stats_function(task_type, num_mean_samples, scalers, coarseners, dt, input_channels, output_size):
+def make_validation_stats_function(task_type, num_mean_samples, scalers, coarseners, dt, input_channels, output_size, allow_residuals):
     match task_type:
         case "sdegm":
             return make_validation_stats_function_sdegm(
@@ -478,7 +483,8 @@ def make_validation_stats_function(task_type, num_mean_samples, scalers, coarsen
                 coarseners=coarseners,
                 dt=dt,
                 input_channels=input_channels,
-                output_size=output_size
+                output_size=output_size,
+                allow_residuals=allow_residuals,
             )
         case "basic-cnn":
             return make_validation_stats_function_basic_cnn(
@@ -486,6 +492,7 @@ def make_validation_stats_function(task_type, num_mean_samples, scalers, coarsen
                 coarseners=coarseners,
                 input_channels=input_channels,
                 output_size=output_size,
+                allow_residuals=allow_residuals,
             )
         case _:
             raise ValueError(f"unsupported task type {task_type}")
@@ -518,7 +525,7 @@ def do_validation(train_state, val_rng, np_rng, loader, sample_stat_fn, num_samp
     return stats_report, rng_ctr
 
 
-def init_network(architecture, lr, rng, output_size, input_channels, processing_size, coarse_op_name, task_type, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type):
+def init_network(architecture, lr, rng, output_size, input_channels, processing_size, coarse_op_name, task_type, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, allow_residuals):
 
     def leaf_map(leaf):
         if isinstance(leaf, jnp.ndarray):
@@ -608,6 +615,7 @@ def init_network(architecture, lr, rng, output_size, input_channels, processing_
         "processing_size": processing_size,
         "task_type": task_type,
         "coarse_op_name": coarse_op_name,
+        "allow_residuals": allow_residuals,
     }
     return state, network_info
 
@@ -640,7 +648,7 @@ def make_scalers(source_data, target_size, input_channels):
     )
 
 
-def make_coarseners(source_data, target_size, input_channels, processing_size):
+def make_coarseners(source_data, target_size, input_channels, processing_size, allow_residuals):
     sizes = determine_channel_sizes(input_channels=input_channels)
     models = {}
     coarseners = {}
@@ -695,7 +703,7 @@ def make_coarseners(source_data, target_size, input_channels, processing_size):
         coarseners["output"] = coarsener.coarsen
         coarseners["output_rev"] = coarsener.uncoarsen
         # Finally, a coarsener to bring the residual up to target_size
-        residual_size = determine_residual_size(input_channels, target_size)
+        residual_size = determine_residual_size(input_channels, target_size, allow_residuals)
         if residual_size is not None:
             big_model = _make_model(target_size, data_file)
             if residual_size == target_size:
@@ -764,6 +772,7 @@ def main():
         target_size=output_size,
         input_channels=input_channels,
         processing_size=processing_size,
+        allow_residuals=args.allow_residuals,
     )
     # Construct neural net
     rng, rng_ctr = jax.random.split(rng_ctr, 2)
@@ -782,6 +791,7 @@ def main():
         batches_per_epoch=args.batches_per_epoch,
         end_lr=args.end_lr,
         schedule_type=args.lr_schedule,
+        allow_residuals=args.allow_residuals,
     )
     # Store network info
     with utils.rename_save_file(weights_dir / "network_info.json", "w", encoding="utf8") as net_info_file:
@@ -831,6 +841,7 @@ def main():
                 coarseners=coarseners,
                 input_channels=input_channels,
                 output_size=output_size,
+                allow_residuals=args.allow_residuals,
             )
         )
         val_sample_fn = eqx.filter_jit(
@@ -842,6 +853,7 @@ def main():
                 dt=args.dt,
                 input_channels=input_channels,
                 output_size=output_size,
+                allow_residuals=args.allow_residuals,
             )
         )
 
