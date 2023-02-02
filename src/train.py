@@ -551,8 +551,10 @@ def main():
     )
     logger.info("Required fields: %s", required_fields)
     logger.info("Input channels: %s", input_channels)
-    logger.info("Output channels: %s", output_channels)
     logger.info("Processing size: %d", processing_size)
+    logger.info("Output channels: %s", output_channels)
+    logger.info("Output size: %d", determine_output_size(output_channels))
+
 
     # Create data normalizer and its inverse
     model_params = load_model_params(train_path)
