@@ -39,9 +39,9 @@ for arch in 'gz-fcnn-v1' 'gz-fcnn-v1-medium'; do
         launch_job_and_eval "${LAUNCH_TIME}-downscale128to96-${arch_size}-${i}" "$arch" 'q_128' '128' 'q_scaled_forcing_128to96'
         launch_job_and_eval "${LAUNCH_TIME}-downscale128to64-${arch_size}-${i}" "$arch" 'q_128' '128' 'q_scaled_forcing_128to64'
         launch_job_and_eval "${LAUNCH_TIME}-downscale96to64-${arch_size}-${i}" "$arch" 'q_96' '96' 'q_scaled_forcing_96to64'
-        launch_job_and_eval "${LAUNCH_TIME}-across128to96-${arch_size}-${i}" "$arch" 'q_96' '128' 'q_scaled_forcing_128to96'
-        launch_job_and_eval "${LAUNCH_TIME}-across128to64-${arch_size}-${i}" "$arch" 'q_64' '128' 'q_scaled_forcing_128to64'
-        launch_job_and_eval "${LAUNCH_TIME}-across96to64-${arch_size}-${i}" "$arch" 'q_64' '96' 'q_scaled_forcing_96to64'
+        launch_job_and_eval "${LAUNCH_TIME}-across128to96-${arch_size}-${i}" "$arch" 'q_scaled_128to96' '128' 'q_scaled_forcing_128to96'
+        launch_job_and_eval "${LAUNCH_TIME}-across128to64-${arch_size}-${i}" "$arch" 'q_scaled_128to64' '128' 'q_scaled_forcing_128to64'
+        launch_job_and_eval "${LAUNCH_TIME}-across96to64-${arch_size}-${i}" "$arch" 'q_scaled_96to64' '96' 'q_scaled_forcing_96to64'
 
         # Buildup and direct
         launch_job_and_eval "${LAUNCH_TIME}-buildup96to128-${arch_size}-${i}" "$arch" 'q_128 q_scaled_forcing_128to96' '128' 'residual:q_total_forcing_128-q_scaled_forcing_128to96'
