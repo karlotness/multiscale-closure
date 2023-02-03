@@ -74,9 +74,10 @@ def determine_required_fields(channels):
             loader_chans.add("q")
         elif m := re.match(r"^q_scaled_forcing_(?P<orig_size>\d+)to\d+$", chan):
             orig_size = m.group("orig_size")
-            loader_chans.update(determine_required_fields(f"q_total_forcing_{orig_size}"))
-        elif m := re.match(r"^q_scaled_\d+to\d+$", chan):
-            loader_chans.update(determine_required_fields(f"q_{orig_size}"))
+            loader_chans.update(determine_required_fields([f"q_total_forcing_{orig_size}"]))
+        elif m := re.match(r"^q_scaled_(?P<orig_size>\d+)to\d+$", chan):
+            orig_size = m.group("orig_size")
+            loader_chans.update(determine_required_fields([f"q_{orig_size}"]))
         elif m := re.match(r"^residual:(?P<chan1>[^-]+)-(?P<chan2>[^-]+)$", chan):
             loader_chans.update(determine_required_fields([m.group("chan1"), m.group("chan2")]))
         else:
@@ -211,7 +212,7 @@ def make_channel_from_batch(channel, batch, model_params):
         return jax.vmap(make_basic_coarsener(orig_size, end_size, model_params))(
             make_channel_from_batch(f"q_total_forcing_{orig_size}", batch, model_params)
         )
-    elif m := re.match(r"^q_scaled_(?P<orig_size>\d+)to\d+$", chan):
+    elif m := re.match(r"^q_scaled_(?P<orig_size>\d+)to\d+$", channel):
         orig_size = int(m.group("orig_size"))
         return jax.vmap(make_basic_coarsener(orig_size, end_size, model_params))(
             make_channel_from_batch(f"q_{orig_size}", batch, model_params)
