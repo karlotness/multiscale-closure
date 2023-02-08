@@ -146,6 +146,7 @@ def make_scalers(source_data):
     )
 
 
+@jax_utils.register_pytree_dataclass
 @dataclasses.dataclass
 class ModelParams:
     scalers: Scalers
