@@ -228,27 +228,6 @@ def trace_jac_hutch(f, x, rng, num_samples=10):
     return jnp.mean(hutch_est)
 
 
-def ilog2(n):
-    n = operator.index(n)
-    if n < 0:
-        raise ValueError(f"invalid integer log2 for negative value {n}")
-    elif n == 0:
-        raise ValueError(f"invalid integer log2 for zero value")
-    return n.bit_length() - 1
-
-
-def icbrt(n):
-    n = operator.index(n)
-    if n == 0:
-        return 0
-    if n < 0:
-        return icbrt(-n)
-    r = 1
-    while r**3 < n:
-        r += 1
-    return r - (1 if r**3 > n else 0)
-
-
 def _get_target_length(xs, length):
     if xs is not None:
         leaf_lengths = set(operator.index(x.shape[0]) for x in jax.tree_util.tree_leaves(xs))
@@ -286,51 +265,6 @@ def checkpoint_chunked_scan(f, init, xs, length=None, chunk_size=5):
         length=length,
         nested_lengths=[num_chunks, chunk_size],
         continue_scan_fn=jax.lax.scan,
-    )
-
-
-def checkpoint_log2_scan(f, init, xs, length=None):
-    target_length = _get_target_length(xs, length)
-    log_depth = ilog2(target_length)
-    if log_depth < 2:
-        return jax.lax.scan(f, init, xs, length=length)
-    return easy_nested_scan(
-        f,
-        init,
-        xs,
-        length=length,
-        nested_lengths=[2] * log_depth,
-        continue_scan_fn=checkpoint_log2_scan,
-    )
-
-
-def checkpoint_sqrt_scan(f, init, xs, length=None):
-    target_length = _get_target_length(xs, length)
-    sqrt_length = math.isqrt(target_length)
-    if sqrt_length < 2:
-        return jax.lax.scan(f, init, xs, length=length)
-    return easy_nested_scan(
-        f,
-        init,
-        xs,
-        length=length,
-        nested_lengths=[sqrt_length] * 2,
-        continue_scan_fn=jax.lax.scan,
-    )
-
-
-def checkpoint_cbrt_scan(f, init, xs, length=None):
-    target_length = _get_target_length(xs, length)
-    cbrt_length = icbrt(target_length)
-    if cbrt_length < 2:
-        return checkpoint_sqrt_scan(f, init, xs, length=length)
-    return easy_nested_scan(
-        f,
-        init,
-        xs,
-        length=length,
-        nested_lengths=[cbrt_length] * 3,
-        continue_scan_fn=checkpoint_sqrt_scan,
     )
 
 
@@ -424,11 +358,3 @@ def _inner_nested_scan(f, init, xs, lengths, scan_fn, checkpoint_fn):
   carry, out = scan_fn(sub_scans, init, xs, lengths[0])
   stacked_out = jax.tree_util.tree_map(jnp.concatenate, out)
   return carry, stacked_out
-
-
-CHECKPOINT_SCANNERS = {
-    "scan": jax.lax.scan,
-    "log2": checkpoint_log2_scan,
-    "sqrt": checkpoint_sqrt_scan,
-    "cbrt": checkpoint_cbrt_scan,
-}
