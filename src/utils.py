@@ -29,7 +29,7 @@ def rename_save_file(file, mode, *args, **kwargs):
     # Open temporary file
     if mode.lower() not in {"w", "wb", "bw"}:
         raise ValueError("file must be opened for writing")
-    with open(target_path, mode.lower().replace("w", "x"), **kwargs) as target_file:
+    with open(target_path, mode.lower().replace("w", "x"), *args, **kwargs) as target_file:
         yield target_file
     # Do the final rename
     os.replace(target_path, final_path)
