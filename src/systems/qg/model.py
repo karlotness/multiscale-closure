@@ -187,6 +187,26 @@ class Model(kernel.PseudoSpectralKernel):
         return self.wv2 * jnp.abs(state.ph)**2 / self.M**2
 
     def tree_flatten(self):
-        attributes = ("nz", "nx", "ny", "L", "W", "dt", "tmax", "tavestart", "taveint", "rek", "filterfac", "f", "g")
-        children = [getattr(self, attr) for attr in attributes]
-        return children, attributes
+        super_children, super_attributes = super().tree_flatten()
+        new_attrs = ("L", "W", "tmax", "tavestart", "taveint", "filterfac", "taveints", "g", "f")
+        children = [getattr(self, attr) for attr in new_attrs]
+        return [*super_children, *children], (*super_attributes, *new_attrs)
+
+    def param_json(self):
+        return json.dumps(
+            {
+                "nz": self.nz,
+                "nx": self.nx,
+                "ny": self.ny,
+                "L": self.L,
+                "W": self.W,
+                "dt": self.dt,
+                "tmax": self.tmax,
+                "tavestart": self.tavestart,
+                "taveint": self.taveint,
+                "rek": self.rek,
+                "filterfac": self.filterfac,
+                "f": self.f,
+                "g": self.g,
+            }
+        )

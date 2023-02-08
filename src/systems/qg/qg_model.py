@@ -161,3 +161,34 @@ class QGModel(model.Model):
             attributes.append(key)
             children.append(val)
         return children, tuple(attributes)
+
+
+    def tree_flatten(self):
+        super_children, super_attributes = super().tree_flatten()
+        new_attrs = ("beta", "rd", "delta", "U1", "U2", "H1")
+        children = [getattr(self, attr) for attr in new_attrs]
+        return [*super_children, *children], (*super_attributes, *new_attrs)
+
+    def param_json(self):
+        return json.dumps(
+            {
+                "nx": self.nx,
+                "ny": self.ny,
+                "L": self.L,
+                "W": self.W,
+                "dt": self.dt,
+                "tmax": self.tmax,
+                "tavestart": self.tavestart,
+                "taveint": self.taveint,
+                "rek": self.rek,
+                "filterfac": self.filterfac,
+                "f": self.f,
+                "g": self.g,
+                "beta": self.beta,
+                "rd": self.rd,
+                "delta": self.delta,
+                "H1": self.H1,
+                "U1": self.U1,
+                "U2": self.U2,
+            }
+        )

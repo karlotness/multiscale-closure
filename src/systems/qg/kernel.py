@@ -265,8 +265,15 @@ class PseudoSpectralKernel:
         return ph
 
     def param_json(self):
-        children, attributes = self.tree_flatten()
-        return json.dumps(dict(zip(attributes, children, strict=True)))
+        return json.dumps(
+            {
+                "nz": self.nz,
+                "ny": self.ny,
+                "nx": self.nx,
+                "dt": self.dt,
+                "rek": self.rek,
+            }
+        )
 
     @classmethod
     def from_param_json(cls, param_str):
@@ -280,5 +287,7 @@ class PseudoSpectralKernel:
 
     @classmethod
     def tree_unflatten(cls, aux_data, children):
-        # Merge together into dictionary of arguments to construct new object
-        return cls(**dict(zip(aux_data, children, strict=True)))
+        obj = cls.__new__(cls)
+        for name, val in zip(aux_data, children, strict=True):
+            setattr(obj, name, val)
+        return obj
