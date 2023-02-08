@@ -2,9 +2,7 @@ import pathlib
 import itertools
 import argparse
 import functools
-import utils
 import logging
-import types
 import json
 import sys
 import random
@@ -13,16 +11,11 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 import numpy as np
-from systems.qg.loader import SimpleQGLoader, qg_model_from_hdf5
-from systems.qg import utils as qg_utils, diagnostics as qg_spec_diag
+from systems.qg.loader import SimpleQGLoader
 import h5py
 import utils
-import math
-import dataclasses
-from methods.gz_fcnn import GZFCNN
 from methods import ARCHITECTURES
 from train import load_model_params, determine_required_fields, make_validation_stats_function
-import jax_utils
 
 
 parser = argparse.ArgumentParser(description="Evaluate neural networks for closure")

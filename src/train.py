@@ -11,7 +11,6 @@ import contextlib
 import itertools
 import jax
 import jax.numpy as jnp
-import diffrax
 import equinox as eqx
 import optax
 import h5py
@@ -26,8 +25,6 @@ from systems.qg import coarsen, diagnostics as qg_spec_diag
 from systems.qg.qg_model import QGModel
 from methods import ARCHITECTURES
 import jax_utils
-from jax_utils import Scaler
-import diffrax_utils
 import utils
 
 
@@ -134,12 +131,12 @@ def make_scalers(source_data):
     q_total_forcing_scalers = {}
     with h5py.File(source_data, "r") as data_file:
         for q_size_str in data_file["stats"]["q"].keys():
-            q_scalers[int(q_size_str)] = Scaler(
+            q_scalers[int(q_size_str)] = jax_utils.Scaler(
                 mean=data_file["stats"]["q"][q_size_str]["mean"][:],
                 var=data_file["stats"]["q"][q_size_str]["var"][:],
             )
         for forcing_size_str in data_file["stats"]["q_total_forcing"].keys():
-            q_total_forcing_scalers[int(forcing_size_str)] = Scaler(
+            q_total_forcing_scalers[int(forcing_size_str)] = jax_utils.Scaler(
                 mean=data_file["stats"]["q_total_forcing"][forcing_size_str]["mean"][:],
                 var=data_file["stats"]["q_total_forcing"][forcing_size_str]["var"][:],
             )
