@@ -182,7 +182,9 @@ def make_basic_coarsener(from_size, to_size, model_params):
         return direct_op.coarsen
 
 
-def make_channel_from_batch(channel, batch, model_params):
+def make_channel_from_batch(channel, batch, model_params, alt_source=None):
+    if alt_source is not None and channel in alt_source:
+        return alt_source[channel]
     end_size = determine_channel_size(channel)
     if re.match(r"^q_total_forcing_\d+$", channel):
         return jax.vmap(model_params.scalers.q_total_forcing_scalers[end_size].scale_to_standard)(
@@ -207,12 +209,12 @@ def make_channel_from_batch(channel, batch, model_params):
     elif m := re.match(r"^q_scaled_forcing_(?P<orig_size>\d+)to\d+$", channel):
         orig_size = int(m.group("orig_size"))
         return jax.vmap(make_basic_coarsener(orig_size, end_size, model_params))(
-            make_channel_from_batch(f"q_total_forcing_{orig_size}", batch, model_params)
+            make_channel_from_batch(f"q_total_forcing_{orig_size}", batch, model_params, alt_source=alt_source)
         )
     elif m := re.match(r"^q_scaled_(?P<orig_size>\d+)to\d+$", channel):
         orig_size = int(m.group("orig_size"))
         return jax.vmap(make_basic_coarsener(orig_size, end_size, model_params))(
-            make_channel_from_batch(f"q_{orig_size}", batch, model_params)
+            make_channel_from_batch(f"q_{orig_size}", batch, model_params, alt_source=alt_source)
         )
     elif m := re.match(r"^residual:(?P<chan1>[^-]+)-(?P<chan2>[^-]+)$", channel):
         chan1 = jax.vmap(
@@ -221,38 +223,38 @@ def make_channel_from_batch(channel, batch, model_params):
                 end_size,
                 model_params,
             )
-        )(make_channel_from_batch(m.group("chan1"), batch, model_params))
+        )(make_channel_from_batch(m.group("chan1"), batch, model_params, alt_source=alt_source))
         chan2 = jax.vmap(
             make_basic_coarsener(
                 determine_channel_size(m.group("chan2")),
                 end_size,
                 model_params,
             )
-        )(make_channel_from_batch(m.group("chan2"), batch, model_params))
+        )(make_channel_from_batch(m.group("chan2"), batch, model_params, alt_source=alt_source))
         return chan1 - chan2
     else:
         raise ValueError(f"unsupported channel {channel}")
 
 
-def make_chunk_from_batch(channels, batch, model_params, processing_size):
+def make_chunk_from_batch(channels, batch, model_params, processing_size, alt_source=None):
     standard_channels = sorted(set(channels))
     stacked_channels = []
     for channel in standard_channels:
-        data = make_channel_from_batch(channel, batch, model_params)
+        data = make_channel_from_batch(channel, batch, model_params, alt_source=alt_source)
         stacked_channels.append(
             jax.vmap(make_basic_coarsener(data.shape[-1], processing_size, model_params))(data)
         )
     return jnp.concatenate(stacked_channels, axis=-3)
 
 
-def make_non_residual_chunk_from_batch(channels, batch, model_params, processing_size):
+def make_non_residual_chunk_from_batch(channels, batch, model_params, processing_size, alt_source=None):
     standard_channels = sorted(set(channels))
     stacked_channels = []
     for channel in standard_channels:
         if m := re.match(r"^residual:(?P<chan1>[^-]+)-(?P<chan2>[^-]+)$", channel):
             # Special processing for residual channel
             # Load base channel
-            data = make_channel_from_batch(m.group("chan1"), batch, model_params)
+            data = make_channel_from_batch(m.group("chan1"), batch, model_params, alt_source=alt_source)
             # Scale to residual size (and skip the subtraction)
             data = jax.vmap(make_basic_coarsener(data.shape[-1], determine_channel_size(channel), model_params))(data)
             # Scale to final size
@@ -260,21 +262,21 @@ def make_non_residual_chunk_from_batch(channels, batch, model_params, processing
             stacked_channels.append(data)
         else:
             # Normal processing
-            data = make_channel_from_batch(channel, batch, model_params)
+            data = make_channel_from_batch(channel, batch, model_params, alt_source=alt_source)
             stacked_channels.append(
                 jax.vmap(make_basic_coarsener(data.shape[-1], processing_size, model_params))(data)
             )
     return jnp.concatenate(stacked_channels, axis=-3)
 
 
-def remove_residual_from_output_chunk(output_channels, output_chunk, batch, model_params, processing_size):
+def remove_residual_from_output_chunk(output_channels, output_chunk, batch, model_params, processing_size, alt_source=None):
     standard_channels = sorted(set(output_channels))
     stacked_channels = []
     for channel in standard_channels:
         if m := re.match(r"^residual:(?P<chan1>[^-]+)-(?P<chan2>[^-]+)$", channel):
             # Special processing for residual channel
             # Load base channel
-            data = make_channel_from_batch(m.group("chan2"), batch, model_params)
+            data = make_channel_from_batch(m.group("chan2"), batch, model_params, alt_source=alt_source)
             # Scale to residual size (and skip the subtraction)
             data = jax.vmap(make_basic_coarsener(data.shape[-1], determine_channel_size(channel), model_params))(data)
             # Scale to final size
@@ -282,7 +284,7 @@ def remove_residual_from_output_chunk(output_channels, output_chunk, batch, mode
             stacked_channels.append(data)
         else:
             # Normal processing (no offset needed)
-            data = make_channel_from_batch(channel, batch, model_params)
+            data = make_channel_from_batch(channel, batch, model_params, alt_source=alt_source)
             stacked_channels.append(
                 jnp.zeros_like(
                     jax.vmap(make_basic_coarsener(data.shape[-1], processing_size, model_params))(data)
