@@ -91,38 +91,3 @@ def get_git_info(base_logger=None):
     except Exception:
         logger.exception("Failed to get information on git status")
         return None
-
-
-@dataclasses.dataclass
-class ModuleInfo:
-    name: str
-    version: str
-    raw_name: str
-
-
-def get_loaded_modules(base_logger=None):
-    if base_logger:
-        logger = base_logger.getChild("moduleinfo")
-    else:
-        logger = logging.getLogger("moduleinfo")
-
-    module_list = os.environ.get("LOADEDMODULES", None)
-    if module_list is None:
-        logger.warning("Failed to get linux module info")
-        return []
-    modules = []
-    for raw_name in module_list.strip().split(":"):
-        # Split components of module name
-        if "/" in raw_name:
-            components = raw_name.split("/")
-        else:
-            components = raw_name.split("-")
-        # Extract components
-        name = components[0]
-        if len(components) > 1:
-            version = components[-1]
-        else:
-            version = ""
-        modules.append(ModuleInfo(name=name, version=version,
-                                  raw_name=raw_name))
-    return modules
