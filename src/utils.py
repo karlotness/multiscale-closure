@@ -10,18 +10,6 @@ import contextlib
 
 
 @contextlib.contextmanager
-def rename_save_file_path(path):
-    final_path = pathlib.Path(path).resolve()
-    rand_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=15))
-    target_path = final_path.with_name(f"{final_path.name}.PART{rand_suffix}").resolve()
-    with open(target_path, "x") as _target_file:
-        pass
-    yield str(target_path)
-    # Do the final rename
-    os.replace(target_path, final_path)
-
-
-@contextlib.contextmanager
 def rename_save_file(file, mode, *args, **kwargs):
     final_path = pathlib.Path(file)
     rand_suffix = random.choices(string.ascii_lowercase + string.digits, k=15)
