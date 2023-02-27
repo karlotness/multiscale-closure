@@ -138,7 +138,7 @@ class NoOpCoarsener(Coarsener):
         return var
 
     def uncoarsen(self, var):
-        return var
+        return self.coarsen(var)
 
 
 class SpectralCoarsener(Coarsener):
