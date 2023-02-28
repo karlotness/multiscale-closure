@@ -44,7 +44,7 @@ parser.add_argument("--num_val_samples", type=int, default=10, help="Number of s
 parser.add_argument("--val_interval", type=int, default=1, help="Number of epochs between validation periods")
 parser.add_argument("--output_channels", type=str, nargs="+", default=["q_total_forcing_64"], help="What output channels to produce")
 parser.add_argument("--input_channels", type=str, nargs="+", default=["q_64"], help="Channels to show the network as input")
-parser.add_argument("--noise_specs", type=str, nargs="+", default=[], help="Channels with noise variances (format 'channel=var')")
+parser.add_argument("--noise_specs", type=str, nargs="+", default=[], help="Channels with noise variances (format 'channel=var0,var1')")
 parser.add_argument("--processing_size", type=int, default=None, help="Size to user for internal network evaluation (default: select automatically)")
 parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", choices=sorted(ARCHITECTURES.keys()), help="Network architecture to train")
 parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam", "adamw"], help="Which optimizer to use")
@@ -239,17 +239,20 @@ def make_channel_from_batch(channel, batch, model_params, alt_source=None):
 
 
 def make_noisy_channel_from_batch(channel, batch, model_params, alt_source=None, noise_var=0, key=None):
-     chan = make_channel_from_batch(
-         channel=channel,
-         batch=batch,
-         model_params=model_params,
-         alt_source=alt_source
-     )
-     if noise_var != 0:
-         noise_mask = jnp.sqrt(noise_var) * jax.random.normal(key=key, shape=chan.shape, dtype=chan.dtype)
-         return chan + noise_mask
-     else:
-         return chan
+    chan = make_channel_from_batch(
+        channel=channel,
+        batch=batch,
+        model_params=model_params,
+        alt_source=alt_source
+    )
+    if np.any(noise_var != 0):
+        noise_var = jnp.sqrt(noise_var).astype(chan.dtype)
+        if noise_var.ndim > 0:
+            noise_var = jnp.expand_dims(noise_var, (-1, -2))
+        noise_mask = noise_var * jax.random.normal(key=key, shape=chan.shape, dtype=chan.dtype)
+        return chan + noise_mask
+    else:
+        return chan
 
 
 def standardize_noise_specs(channels, noise_spec):
@@ -263,7 +266,7 @@ def standardize_noise_specs(channels, noise_spec):
             noise_specs[channel] = noise_spec[channel]
         else:
             noise_specs[channel] = 0
-    count_noise = sum(1 for var in noise_specs.values() if var != 0)
+    count_noise = sum(1 for var in noise_specs.values() if np.any(var != 0))
     return noise_specs, count_noise
 
 
@@ -278,7 +281,7 @@ def make_chunk_from_batch(channels, batch, model_params, processing_size, alt_so
         keys = []
     for channel in standard_channels:
         noise_var = noise_spec[channel]
-        if noise_var != 0:
+        if np.any(noise_var != 0):
             key = keys.pop()
         else:
             key = None
@@ -655,7 +658,7 @@ def main():
     noise_spec = {}
     for spec in args.noise_specs:
         chan_name, var = spec.split("=")
-        noise_spec[chan_name.strip()] = float(var.strip())
+        noise_spec[chan_name.strip()] = np.array([float(v.strip()) for v in var.strip().split(",")])
 
     # Open data files
     with contextlib.ExitStack() as train_context:
