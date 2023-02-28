@@ -44,6 +44,7 @@ parser.add_argument("--num_val_samples", type=int, default=10, help="Number of s
 parser.add_argument("--val_interval", type=int, default=1, help="Number of epochs between validation periods")
 parser.add_argument("--output_channels", type=str, nargs="+", default=["q_total_forcing_64"], help="What output channels to produce")
 parser.add_argument("--input_channels", type=str, nargs="+", default=["q_64"], help="Channels to show the network as input")
+parser.add_argument("--noise_specs", type=str, nargs="+", default=[], help="Channels with noise variances (format 'channel=var')")
 parser.add_argument("--processing_size", type=int, default=None, help="Size to user for internal network evaluation (default: select automatically)")
 parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", choices=sorted(ARCHITECTURES.keys()), help="Network architecture to train")
 parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam", "adamw"], help="Which optimizer to use")
@@ -237,11 +238,51 @@ def make_channel_from_batch(channel, batch, model_params, alt_source=None):
         raise ValueError(f"unsupported channel {channel}")
 
 
-def make_chunk_from_batch(channels, batch, model_params, processing_size, alt_source=None):
+def make_noisy_channel_from_batch(channel, batch, model_params, alt_source=None, noise_var=0, key=None):
+     chan = make_channel_from_batch(
+         channel=channel,
+         batch=batch,
+         model_params=model_params,
+         alt_source=alt_source
+     )
+     if noise_var != 0:
+         noise_mask = jnp.sqrt(noise_var) * jax.random.normal(key=key, shape=chan.shape, dtype=chan.dtype)
+         return chan + noise_mask
+     else:
+         return chan
+
+
+def standardize_noise_specs(channels, noise_spec):
+    noise_specs = {}
+    if noise_spec is not None:
+        unmatched_keys = noise_spec.keys() - set(channels)
+        if unmatched_keys:
+            raise ValueError(f"unmatched noise specs: {unmatched_keys}")
+    for channel in channels:
+        if noise_spec is not None and channel in noise_spec:
+            noise_specs[channel] = noise_spec[channel]
+        else:
+            noise_specs[channel] = 0
+    count_noise = sum(1 for var in noise_specs.values() if var != 0)
+    return noise_specs, count_noise
+
+
+def make_chunk_from_batch(channels, batch, model_params, processing_size, alt_source=None, noise_spec=None, key=None):
     standard_channels = sorted(set(channels))
     stacked_channels = []
+    noise_spec, count_noise = standardize_noise_specs(channels, noise_spec)
+    if count_noise > 0:
+        assert key is not None
+        keys = list(jax.random.split(key, count_noise))
+    else:
+        keys = []
     for channel in standard_channels:
-        data = make_channel_from_batch(channel, batch, model_params, alt_source=alt_source)
+        noise_var = noise_spec[channel]
+        if noise_var != 0:
+            key = keys.pop()
+        else:
+            key = None
+        data = make_noisy_channel_from_batch(channel, batch, model_params, alt_source=alt_source, noise_var=noise_var, key=key)
         stacked_channels.append(
             jax.vmap(make_basic_coarsener(data.shape[-1], processing_size, model_params))(data)
         )
@@ -295,7 +336,7 @@ def remove_residual_from_output_chunk(output_channels, output_chunk, batch, mode
     return output_chunk + jnp.concatenate(stacked_channels, axis=-3)
 
 
-def make_batch_computer(input_channels, output_channels, model_params, processing_size):
+def make_batch_computer(input_channels, output_channels, model_params, processing_size, noise_spec):
     output_size = determine_output_size(output_channels)
 
     def sample_loss(input_elem, target_elem, net):
@@ -313,12 +354,15 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
         )(input_chunk, target_chunk)
         return jnp.mean(losses)
 
-    def do_batch(batch, state):
+    def do_batch(batch, state, rng_ctr):
+        rng, rng_ctr = jax.random.split(rng_ctr, 2)
         input_chunk = make_chunk_from_batch(
             channels=input_channels,
             batch=batch,
             model_params=model_params,
             processing_size=processing_size,
+            noise_spec=noise_spec,
+            key=rng,
         )
         target_chunk = make_chunk_from_batch(
             channels=output_channels,
@@ -330,18 +374,18 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
         loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, input_chunk, target_chunk)
         # Update parameters
         out_state = state.apply_updates(grads)
-        return out_state, loss
+        return out_state, loss, rng_ctr
 
     return do_batch
 
 
-def do_epoch(train_state, batch_iter, batch_fn, logger=None):
+def do_epoch(train_state, batch_iter, batch_fn, rng_ctr, logger=None):
     if logger is None:
         logger = logging.getLogger("train_epoch")
     epoch_start = time.perf_counter()
     losses = []
     for batch in batch_iter:
-        train_state, batch_loss = batch_fn(batch, train_state)
+        train_state, batch_loss, rng_ctr = batch_fn(batch, train_state, rng_ctr)
         losses.append(batch_loss)
     epoch_end = time.perf_counter()
     mean_loss = jax.device_get(jnp.mean(jnp.stack(losses)))
@@ -349,7 +393,7 @@ def do_epoch(train_state, batch_iter, batch_fn, logger=None):
     logger.info("Finished epoch in %f sec", epoch_end - epoch_start)
     logger.info("Epoch mean loss %f", mean_loss)
     logger.info("Epoch final loss %f", final_loss)
-    return train_state, {"mean_loss": mean_loss.item(), "final_loss": final_loss.item(), "duration_sec": epoch_end - epoch_start}
+    return train_state, {"mean_loss": mean_loss.item(), "final_loss": final_loss.item(), "duration_sec": epoch_end - epoch_start}, rng_ctr
 
 
 def make_validation_stats_function(input_channels, output_channels, model_params, processing_size):
@@ -607,6 +651,12 @@ def main():
             cli_info["git_info"] = None
         json.dump(cli_info, cli_info_file)
 
+    # Process noise_spec
+    noise_spec = {}
+    for spec in args.noise_specs:
+        chan_name, var = spec.split("=")
+        noise_spec[chan_name.strip()] = float(var.strip())
+
     # Open data files
     with contextlib.ExitStack() as train_context:
         # Open data files
@@ -634,6 +684,7 @@ def main():
                 output_channels=output_channels,
                 model_params=model_params,
                 processing_size=processing_size,
+                noise_spec=noise_spec,
             )
         )
         val_stats_fn = eqx.filter_jit(
@@ -654,11 +705,12 @@ def main():
             logger.info("Starting epoch %d of %d", epoch, args.num_epochs)
             # Training step
             with contextlib.closing(train_loader.iter_batches()) as train_batch_iter:
-                state, epoch_stats = do_epoch(
+                state, epoch_stats, rng_ctr = do_epoch(
                     train_state=state,
                     batch_iter=itertools.islice(train_batch_iter, args.batches_per_epoch),
                     batch_fn=train_batch_fn,
                     logger=logger.getChild(f"{epoch:05d}_train"),
+                    rng_ctr=rng_ctr,
                 )
             mean_loss = epoch_stats["mean_loss"]
 
