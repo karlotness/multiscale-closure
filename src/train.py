@@ -399,7 +399,7 @@ def do_epoch(train_state, batch_iter, batch_fn, rng_ctr, logger=None):
     return train_state, {"mean_loss": mean_loss.item(), "final_loss": final_loss.item(), "duration_sec": epoch_end - epoch_start}, rng_ctr
 
 
-def make_validation_stats_function(input_channels, output_channels, model_params, processing_size):
+def make_validation_stats_function(input_channels, output_channels, model_params, processing_size, include_raw_err=False):
     output_size = determine_output_size(output_channels)
 
     def make_samples(input_chunk, net):
@@ -426,18 +426,21 @@ def make_validation_stats_function(input_channels, output_channels, model_params
             model_params=model_params,
             processing_size=output_size,
         )
-        err = jnp.abs(targets - samples)
+        err = targets - samples
         mse = jnp.mean(err**2)
         stats = qg_spec_diag.subgrid_scores(
             true=jnp.expand_dims(targets, 1),
             mean=jnp.expand_dims(samples, 1),
             gen=jnp.expand_dims(samples, 1),
         )
-        return {
+        stat_report = {
             "standard_mse": mse,
             "l2_mean": stats.l2_mean,
             "l2_total": stats.l2_total,
         }
+        if include_raw_err:
+            stat_report["raw_err"] = err
+        return stat_report
 
     return compute_stats
 
