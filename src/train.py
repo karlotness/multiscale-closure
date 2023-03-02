@@ -660,6 +660,9 @@ def main():
     # Process noise_spec
     noise_spec = {}
     for spec in args.noise_specs:
+        spec = spec.strip()
+        if not spec:
+            continue
         chan_name, var = spec.split("=")
         noise_spec[chan_name.strip()] = np.array([float(v.strip()) for v in var.strip().split(",")])
 
