@@ -33,6 +33,17 @@ for arch in 'gz-fcnn-v1' 'gz-fcnn-v1-medium'; do
         arch_size='medium'
     fi
 
+    if [[ "$arch_size" == 'small' ]]; then
+        noise128to96='0.07747045,0.03359182'
+        noise128to64='0.00355569,0.00170394'
+        noise96to64='0.05255271,0.01690575'
+    else
+        noise128to96='0.07113694,0.02768604'
+        noise128to64='0.00406553,0.00142028'
+        noise96to64='0.04949836,0.01457414'
+    fi
+
+
     for i in {1..3}; do
         # RUN_KEY ARCH INPUT_CHANNELS(spaces) PROC_SIZE OUTPUT_CHANNELS(spaces)
         # Downscale and across
@@ -49,5 +60,10 @@ for arch in 'gz-fcnn-v1' 'gz-fcnn-v1-medium'; do
         launch_job_and_eval "${LAUNCH_TIME}-buildup64to96-${arch_size}-${i}" "$arch" 'q_96 q_scaled_forcing_96to64' '96' 'residual:q_total_forcing_96-q_scaled_forcing_96to64' ''
         launch_job_and_eval "${LAUNCH_TIME}-direct128-${arch_size}-${i}" "$arch" 'q_128' '128' 'q_total_forcing_128' ''
         launch_job_and_eval "${LAUNCH_TIME}-direct96-${arch_size}-${i}" "$arch" 'q_96' '96' 'q_total_forcing_96' ''
+
+        # Buildup with injected noise
+        launch_job_and_eval "${LAUNCH_TIME}-buildup96to128-noiseinject-${arch_size}-${i}" "$arch" 'q_128 q_scaled_forcing_128to96' '128' 'residual:q_total_forcing_128-q_scaled_forcing_128to96' "q_scaled_forcing_128to96=${noise128to96}"
+        launch_job_and_eval "${LAUNCH_TIME}-buildup64to128-noiseinject-${arch_size}-${i}" "$arch" 'q_128 q_scaled_forcing_128to64' '128' 'residual:q_total_forcing_128-q_scaled_forcing_128to64' "q_scaled_forcing_128to64=${noise128to64}"
+        launch_job_and_eval "${LAUNCH_TIME}-buildup64to96-noiseinject-${arch_size}-${i}" "$arch" 'q_96 q_scaled_forcing_96to64' '96' 'residual:q_total_forcing_96-q_scaled_forcing_96to64' "q_scaled_forcing_96to64=${noise96to64}"
     done
 done
