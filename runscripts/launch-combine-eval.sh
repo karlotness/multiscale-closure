@@ -57,7 +57,7 @@ for small_size in 64 96 128; do
             for downscale_arch in small medium; do
                 downscale_abbrev=$(abbrev_arch "$downscale_arch")
                 downscale_var="downscale${big_size}to${small_size}_${downscale_arch}"
-                sbatch combine-eval-cnn.sh "${small_size}to${big_size}-${downscale_abbrev}${buildup_abbrev}" "${!downscale_var}" "${!buildup_var}"
+                sbatch combine-eval-cnn.sh "${small_size}to${big_size}-noiseinject-${downscale_abbrev}${buildup_abbrev}" "${!downscale_var}" "${!buildup_var}"
             done
         done
     done
