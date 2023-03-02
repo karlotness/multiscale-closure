@@ -13,6 +13,12 @@ readonly buildup96to128_small='/scratch/kto236/closure/run_outputs/multi-train-c
 readonly buildup96to128_medium='/scratch/kto236/closure/run_outputs/multi-train-cnn-20230202-171821-buildup96to128-medium-1-29792623/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230202-171821-buildup96to128-medium-2-29792656/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230202-171821-buildup96to128-medium-3-29792689/weights/best_loss.eqx'
 readonly buildup64to96_small='/scratch/kto236/closure/run_outputs/multi-train-cnn-20230202-171821-buildup64to96-small-1-29792490/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230202-171821-buildup64to96-small-2-29792563/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230202-171821-buildup64to96-small-3-29792596/weights/best_loss.eqx'
 readonly buildup64to96_medium='/scratch/kto236/closure/run_outputs/multi-train-cnn-20230202-171821-buildup64to96-medium-1-29792629/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230202-171821-buildup64to96-medium-2-29792662/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230202-171821-buildup64to96-medium-3-29792695/weights/best_loss.eqx'
+readonly buildup64to128_noiseinject_small='/scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup64to128-noiseinject-small-1-30683888/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup64to128-noiseinject-small-2-30683897/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup64to128-noiseinject-small-3-30683906/weights/best_loss.eqx'
+readonly buildup64to128_noiseinject_medium='/scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup64to128-noiseinject-medium-1-30683915/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup64to128-noiseinject-medium-2-30683924/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup64to128-noiseinject-medium-3-30683933/weights/best_loss.eqx'
+readonly buildup96to128_noiseinject_small='/scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup96to128-noiseinject-small-1-30683885/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup96to128-noiseinject-small-2-30683894/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup96to128-noiseinject-small-3-30683903/weights/best_loss.eqx'
+readonly buildup96to128_noiseinject_medium='/scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup96to128-noiseinject-medium-1-30683912/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup96to128-noiseinject-medium-2-30683921/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup96to128-noiseinject-medium-3-30683930/weights/best_loss.eqx'
+readonly buildup64to96_noiseinject_small='/scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup64to96-noiseinject-small-1-30683891/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup64to96-noiseinject-small-2-30683900/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup64to96-noiseinject-small-3-30683909/weights/best_loss.eqx'
+readonly buildup64to96_noiseinject_medium='/scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup64to96-noiseinject-medium-1-30683918/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup64to96-noiseinject-medium-2-30683927/weights/best_loss.eqx /scratch/kto236/closure/run_outputs/multi-train-cnn-20230301-235127-buildup64to96-noiseinject-medium-3-30683936/weights/best_loss.eqx'
 
 function abbrev_arch() {
     local ARCH_NAME="$1"
@@ -34,9 +40,20 @@ for small_size in 64 96 128; do
         if (( small_size >= big_size )); then
             continue
         fi
+        # No training noise version
         for buildup_arch in small medium; do
             buildup_abbrev=$(abbrev_arch "$buildup_arch")
             buildup_var="buildup${small_size}to${big_size}_${buildup_arch}"
+            for downscale_arch in small medium; do
+                downscale_abbrev=$(abbrev_arch "$downscale_arch")
+                downscale_var="downscale${big_size}to${small_size}_${downscale_arch}"
+                sbatch combine-eval-cnn.sh "${small_size}to${big_size}-${downscale_abbrev}${buildup_abbrev}" "${!downscale_var}" "${!buildup_var}"
+            done
+        done
+        # With training noise version
+        for buildup_arch in small medium; do
+            buildup_abbrev=$(abbrev_arch "$buildup_arch")
+            buildup_var="buildup${small_size}to${big_size}_noiseinject_${buildup_arch}"
             for downscale_arch in small medium; do
                 downscale_abbrev=$(abbrev_arch "$downscale_arch")
                 downscale_var="downscale${big_size}to${small_size}_${downscale_arch}"
