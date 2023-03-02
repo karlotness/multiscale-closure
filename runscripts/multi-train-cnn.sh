@@ -10,9 +10,9 @@
 
 set -euo pipefail
 
-if [[ $# -lt 5 ]]; then
+if [[ $# -lt 6 ]]; then
     echo 'ERROR: Insufficient parameters for training'
-    echo 'Usage multi-train-cnn.sh RUN_KEY ARCH OUT_SIZE PROC_SIZE INPUT_CHANNELS(spaces)'
+    echo 'Usage multi-train-cnn.sh RUN_KEY ARCH INPUT_CHANNELS(spaces) PROC_SIZE OUTPUT_CHANNELS(spaces) NOISE_SPECS(spaces)'
     exit 1
 fi
 
@@ -21,6 +21,7 @@ readonly ARCHITECTURE="$2"
 readonly INPUT_CHANNELS="$3"
 readonly PROC_SIZE="$4"
 readonly OUTPUT_CHANNELS="$5"
+readonly NOISE_SPECS="$6"
 
 # Begin execution
 module purge
@@ -76,4 +77,5 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --architecture="$ARCHITECTURE" \
             --processing_size="$PROC_SIZE" \
             --input_channels $INPUT_CHANNELS \
+            --noise_specs $NOISE_SPECS \
             --output_channels $OUTPUT_CHANNELS
