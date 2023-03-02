@@ -6,7 +6,6 @@
 #SBATCH --mem=16GB
 #SBATCH --gres=gpu:1
 #SBATCH --partition=rtx8000,v100
-#SBATCH --exclude=gv0[13-18],gv002
 
 if [[ $# -lt 2 ]]; then
     echo "ERROR: Insufficient parameters for evaluation"
