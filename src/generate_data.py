@@ -122,7 +122,7 @@ def make_generate_coarse_traj(big_model, small_sizes, coarse_op_cls, num_steps, 
     size_main_states = max(map(operator.index, small_sizes))
 
     # Compute dummy initialization shapes
-    _jaxpr, dummy_init_treedef = jax.make_jaxpr(coarse_ops[size_main_states].small_model.create_initial_state, return_shape=True)(jax.random.PRNGKey(0))
+    dummy_init_treedef = jax.eval_shape(coarse_ops[size_main_states].small_model.create_initial_state, jax.random.PRNGKey(0))
     dummy_shape = dummy_init_treedef.dqhdt.shape
     dummy_dtype = dummy_init_treedef.dqhdt.dtype
 

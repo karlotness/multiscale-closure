@@ -79,7 +79,7 @@ def strided_scan(f, init, xs, length=None, reverse=False, unroll=1, stride=1):
         return jnp.zeros(shape=l.shape, dtype=l.dtype)
 
     # Compute dummy_y_init
-    _jaxpr, out_treedef = jax.make_jaxpr(f, return_shape=True)(init, dummy_in_tree)
+    out_treedef = jax.eval_shape(f, init, dummy_in_tree)
     dummy_y_init = jax.tree_util.tree_map(map_dummy_tree, out_treedef[1])
 
     # Do main chunked scan
