@@ -4,6 +4,28 @@ from jaxtyping import Array
 import jax.numpy as jnp
 import equinox as eqx
 
+
+class TrainableWeightBias(eqx.Module):
+    num_spatial_dims: int = eqx.static_field()
+    num_layers: int = eqx.static_field()
+    weight: Array
+    bias: Array
+
+    def __init__(self, num_spatial_dims, num_layers, weight=True, bias=True):
+        self.num_spatial_dims = num_spatial_dims
+        self.num_layers = num_layers
+        shape = (num_layers, ) + (1, ) * num_spatial_dims
+        self.weight = jnp.ones(shape) if weight else None
+        self.bias = jnp.zeros(shape) if bias else None
+
+    def __call__(self, x: Array, *, key: typing.Optional["jax.random.PRNGKey"] = None):
+        if self.weight is not None:
+            x = self.weight * x
+        if self.bias is not None:
+            x = x + self.bias
+        return x
+
+
 def _do_pad_input(x, pad_type, strides, filter_sizes, n_spatial_dims, dilations):
     if pad_type not in {"valid", "circular", "same"}:
         raise ValueError(f"invalid padding type {pad_type}")

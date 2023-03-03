@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 import equinox as eqx
-from .eqx_modules import EasyPadConv
+from .eqx_modules import EasyPadConv, TrainableWeightBias
 
 
 GZFCNN_FEATURES_KERNELS = {
@@ -88,7 +88,13 @@ class BaseGZFCNN(eqx.Module):
                     ops.append(
                         eqx.nn.LayerNorm(
                             shape=(feature, self.img_size, self.img_size),
-                            elementwise_affine=True,
+                            elementwise_affine=False,
+                        )
+                    )
+                    ops.append(
+                        TrainableWeightBias(
+                            num_spatial_dims=2,
+                            num_layers=feature,
                         )
                     )
                 case _:
