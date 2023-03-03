@@ -12,7 +12,7 @@ import contextlib
 @contextlib.contextmanager
 def rename_save_file(file, mode, *args, **kwargs):
     final_path = pathlib.Path(file)
-    rand_suffix = random.choices(string.ascii_lowercase + string.digits, k=15)
+    rand_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=15))
     target_path = final_path.with_name(f"{final_path.name}.PART{rand_suffix}")
     # Open temporary file
     if mode.lower() not in {"w", "wb", "bw"}:
