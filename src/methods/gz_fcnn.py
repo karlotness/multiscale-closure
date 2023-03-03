@@ -83,27 +83,30 @@ class BaseGZFCNN(eqx.Module):
             )
             match normalization:
                 case None | "none":
-                    pass
+                    ops.append(
+                        eqx.nn.Identity()
+                    )
                 case "layer":
                     ops.append(
-                        eqx.nn.LayerNorm(
-                            shape=(feature, self.img_size, self.img_size),
-                            elementwise_affine=False,
-                        )
-                    )
-                    ops.append(
-                        TrainableWeightBias(
-                            num_spatial_dims=2,
-                            num_layers=feature,
+                        eqx.nn.Sequential(
+                            [
+                                eqx.nn.LayerNorm(
+                                    shape=(feature, self.img_size, self.img_size),
+                                    elementwise_affine=False,
+                                ),
+                                TrainableWeightBias(
+                                    num_spatial_dims=2,
+                                    num_layers=feature,
+                                ),
+                            ]
                         )
                     )
                 case _:
                     raise ValueError(f"invalid normalization choise {self.normalization}")
             ops.append(eqx.nn.Lambda(jax.nn.relu))
             prev_chans = feature
-        # Remove final activation
-        ops.pop()
-        self.conv_seq = eqx.nn.Sequential(ops)
+        # Remove final activation and normalization
+        self.conv_seq = eqx.nn.Sequential(ops[:-2])
 
     def __call__(self, x: Array, *, key: Array|None = None):
         assert x.ndim == 3
