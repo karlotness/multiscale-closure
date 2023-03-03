@@ -99,8 +99,8 @@ def init_networks(architecture, lr, rng, train_path, optim_type, num_epochs, bat
     )
     net_data.append(
         NetData(
-            input_channels=in_channels,
-            output_channels=out_channels,
+            input_channels=set(in_channels),
+            output_channels=set(out_channels),
             processing_size=processing_size,
         )
     )
@@ -191,8 +191,8 @@ def init_networks(architecture, lr, rng, train_path, optim_type, num_epochs, bat
             {
                 "arch": architecture,
                 "args": arg,
-                "input_channels": data.input_channels,
-                "output_channels": data.output_channels,
+                "input_channels": list(data.input_channels),
+                "output_channels": list(data.output_channels),
                 "processing_size": data.processing_size,
             }
             for arg, data in zip(args, net_data)
