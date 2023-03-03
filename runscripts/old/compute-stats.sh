@@ -1,2 +1,0 @@
-sbatch --wrap='singularity exec ${SCRATCH}/closure/closure.sif python systems/qg/compute_stats.py stats_op1.npz ${SCRATCH}/closure/data/train/op1/data.hdf5' --job-name="stats-op1" --time="04:00:00" --cpus-per-task=1 --mem="500M"
-sbatch --wrap='singularity exec ${SCRATCH}/closure/closure.sif python systems/qg/compute_stats.py stats_op2.npz ${SCRATCH}/closure/data/train/op2/data.hdf5' --job-name="stats-op2" --time="04:00:00" --cpus-per-task=1 --mem="500M"
