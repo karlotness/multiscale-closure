@@ -13,7 +13,6 @@ tqdm
 zarr
 h5py
 diffrax
-distrax
 equinox
 jaxopt
 kymatio
