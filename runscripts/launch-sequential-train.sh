@@ -33,8 +33,8 @@ function launch_job_and_eval() {
     run_jobid="$(get_job_id "$run_out")"
     echo "Submitted job ${run_jobid}"
     # Launch remaining training jobs
-    for i in $(seq '1' "$(( num_scales - 1))"); do
-        run_out="$(sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes sequential-train-cnn.sh "$run_name" "$arch" "$i" "$scales")"
+    for job in $(seq '1' "$(( num_scales - 1))"); do
+        run_out="$(sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes sequential-train-cnn.sh "$run_name" "$arch" "$job" "$scales")"
         run_jobid="$(get_job_id "$run_out")"
         echo "Submitted job ${run_jobid}"
     done
@@ -50,18 +50,12 @@ function launch_job_and_eval() {
 readonly LAUNCH_TIME="$(date '+%Y%m%d-%H%M%S')"
 
 # LAUNCH NETWORKS
-for arch in 'gz-fcnn-v1' 'gz-fcnn-v1-medium'; do
-
-    if [[ "$arch" == 'gz-fcnn-v1' ]]; then
-        arch_size='small'
-    else
-        arch_size='medium'
-    fi
+for net_arch in 'gz-fcnn-v1' 'gz-fcnn-v1-medium'; do
 
     for i in {1..3}; do
-        launch_job_and_eval "${LAUNCH_TIME}" '128 64' "$arch" "$i"
-        launch_job_and_eval "${LAUNCH_TIME}" '128 96' "$arch" "$i"
-        launch_job_and_eval "${LAUNCH_TIME}" '96 64' "$arch" "$i"
-        launch_job_and_eval "${LAUNCH_TIME}" '128 96 64' "$arch" "$i"
+        launch_job_and_eval "${LAUNCH_TIME}" '128 64' "$net_arch" "$i"
+        launch_job_and_eval "${LAUNCH_TIME}" '128 96' "$net_arch" "$i"
+        launch_job_and_eval "${LAUNCH_TIME}" '96 64' "$net_arch" "$i"
+        launch_job_and_eval "${LAUNCH_TIME}" '128 96 64' "$net_arch" "$i"
     done
 done
