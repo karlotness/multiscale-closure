@@ -26,7 +26,7 @@ function launch_job_and_eval() {
     joined_scales="$(tr ' ' '_' <<< "$scales")"
     run_name="${name_prefix}-scale${joined_scales}-${arch_size}-${repeat}"
     num_scales="$(wc -w <<< "$scales")"
-    net_dir="sequential-train-cnn-${run_name}"
+    net_dir="/scratch/kto236/closure/run_outputs/sequential-train-cnn-${run_name}"
 
     # Launch first job
     run_out="$(sbatch sequential-train-cnn.sh "$run_name" "$arch" '0' "$scales")"
@@ -43,8 +43,8 @@ function launch_job_and_eval() {
     run_jobid="$(get_job_id "$run_out")"
     echo "Submitted job ${run_jobid}"
     # Launch evaluation
-    sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes cascade-net-eval.sh best_loss "/scratch/kto236/closure/run_outputs/${OUT_DIRECTORY}"
-    sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes cascade-net-eval.sh interval "/scratch/kto236/closure/run_outputs/${OUT_DIRECTORY}"
+    sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes cascade-net-eval.sh best_loss "$net_dir"
+    sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes cascade-net-eval.sh interval "$net_dir"
 }
 
 readonly LAUNCH_TIME="$(date '+%Y%m%d-%H%M%S')"
