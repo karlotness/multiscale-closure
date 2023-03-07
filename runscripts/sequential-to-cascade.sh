@@ -33,5 +33,5 @@ git clone "$ORIGIN_REPO_DIR" "$CHECKOUT_DIR"
 # Run
 export JAX_ENABLE_X64=True
 export JAX_DEFAULT_DTYPE_BITS=32
-singularity run --nv "$SINGULARITY_CONTAINER" \
+singularity run "$SINGULARITY_CONTAINER" \
             python "${CHECKOUT_DIR}/src/sequential_to_cascaded.py" "$NET_DIR"
