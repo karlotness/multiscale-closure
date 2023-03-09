@@ -171,13 +171,13 @@ def load_model_params(train_path):
     )
 
 
-def make_basic_coarsener(from_size, to_size, model_params):
+def make_basic_coarsener(from_size, to_size, model_params, coarse_cls=coarsen.BasicSpectralCoarsener):
     model_size = max(from_size, to_size)
     small_size = min(from_size, to_size)
     big_model = model_params.qg_models[model_size]
     if from_size == to_size:
         return coarsen.NoOpCoarsener(big_model=big_model, small_nx=small_size).coarsen
-    direct_op = coarsen.BasicSpectralCoarsener(big_model=big_model, small_nx=small_size)
+    direct_op = coarse_cls(big_model=big_model, small_nx=small_size)
     if from_size < to_size:
         return direct_op.uncoarsen
     else:
