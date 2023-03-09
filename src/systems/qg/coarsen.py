@@ -169,6 +169,8 @@ class SpectralCoarsener(Coarsener):
         # 1. compute target size
         # 2. compute needed zeros
         # 3. concatenate resulting signal
+        assert self._is_spectral(var) or var.shape[-2:] == (self.small_model.ny, self.small_model.nx)
+        assert var.ndim == 3
         dummy_big_varh = self._to_spec(
             jnp.zeros(
                 (self.big_model.nz, self.big_model.ny, self.big_model.nx),
