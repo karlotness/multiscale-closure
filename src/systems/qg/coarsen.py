@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 import pyqg_jax
 from . import utils
@@ -21,11 +22,48 @@ def coarsen_model(big_model, small_nx):
     return pyqg_jax.qg_model.QGModel(**model_args)
 
 
+def compute_q_total_forcing(big_state, coarsener):
+    small_state = coarsener.coarsen_state(big_state)
+    big_full_state = coarsener.big_model.get_full_state(big_state)
+    small_full_state = coarsener.small_model.get_full_state(small_state)
+    big_dqhdt = coarsener.coarsen(big_full_state.dqhdt)
+    small_dqhdt = small_full_state.dqhdt
+    return _generic_irfftn(big_dqhdt) - _generic_irfftn(small_dqhdt)
+
+
+def _divergence(fx, fy, model):
+    ddx = _generic_irfftn(_generic_rfftn(fx) * model.ik)
+    ddy = _generic_irfftn(_generic_rfftn(fy) * model.il)
+    return ddx + ddy
+
+
+def _advect(var, u, v, model):
+    return _divergence(var * u, var * v, model)
+
+
+def compute_q_subgrid_forcing(big_state, coarsener):
+    small_state = coarsener.coarsen_state(big_state)
+    big_full_state = coarsener.big_model.get_full_state(big_state)
+    small_full_state = coarsener.small_model.get_full_state(small_state)
+    term1 = _advect(small_full_state.q, small_full_state.u, small_full_state.v, coarsener.small_model)
+    term2 = _advect(big_full_state.q, big_full_state.u, big_full_state.v, coarsener.big_model)
+    term2 = coarsener.coarsen(term2)
+    return term1 - term2
+
+
 class Coarsener:
     def __init__(self, big_model, small_nx):
         self.big_model = big_model
         self.small_model = coarsen_model(self.big_model, small_nx)
         self.ratio = self.big_model.nx / self.small_model.nx
+
+    def coarsen_state(self, big_state):
+        small_qh = self.coarsen(big_state.qh)
+        return pyqg_jax.state.PseudoSpectralState(qh=small_qh)
+
+    def uncoarsen_state(self, small_state):
+        big_qh = self.uncoarsen(small_state.qh)
+        return pyqg_jax.state.PseudoSpectralState(qh=big_qh)
 
     def coarsen(self, var):
         raise NotImplementedError("implement in a subclass")
@@ -65,10 +103,11 @@ class SpectralCoarsener(Coarsener):
     def coarsen(self, var):
         assert self._is_spectral(var) or var.shape[-2:] == (self.big_model.ny, self.big_model.nx)
         assert var.ndim == 3
-        dummy_varh = self._to_spec(
+        dummy_varh = jax.eval_shape(
+            self._to_spec,
             jnp.zeros(
                 (self.small_model.nz, self.small_model.ny, self.small_model.nx),
-                dtype=jnp.float32
+                dtype=jnp.float32,
             )
         )
         nk = dummy_varh.shape[1] // 2
@@ -91,11 +130,12 @@ class SpectralCoarsener(Coarsener):
         # 3. concatenate resulting signal
         assert self._is_spectral(var) or var.shape[-2:] == (self.small_model.ny, self.small_model.nx)
         assert var.ndim == 3
-        dummy_big_varh = self._to_spec(
+        dummy_big_varh = jax.eval_shape(
+            self._to_spec,
             jnp.zeros(
                 (self.big_model.nz, self.big_model.ny, self.big_model.nx),
                 dtype=jnp.float32
-            )
+            ),
         )
         big_nk = dummy_big_varh.shape[1] // 2
         if not self._is_spectral(var):
