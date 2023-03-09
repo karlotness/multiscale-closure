@@ -16,6 +16,8 @@ def make_forcing_computer(nets, net_data, model_params):
 
     def compute_forcing(q):
         q = jnp.expand_dims(q, 0)
+        # Scale to standard
+        q = jax.vmap(model_params.scalers.q_scalers[q.shape[-1]].scale_to_standard)(q)
         dummy_batch = SnapshotStates(q=None, q_total_forcings={})
         # Pre-populate alt_sources with input q value
         alt_sources = {
