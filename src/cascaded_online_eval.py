@@ -12,43 +12,14 @@ from systems.qg import coarsen
 import jax_utils
 
 
-def determine_q_sizes(chan_iter):
-    for chan in chan_iter:
-        if re.match(r"^q_\d+$", chan):
-            yield determine_channel_size(chan)
-
-
-def coarsen_q(big_q, target_size, model_params):
-    q_size = big_q.shape[-1]
-    if q_size < target_size:
-        raise ValueError(f"input q with size {q_size} is too small to produce {target_size}")
-    if q_size == target_size:
-        coarse_op = coarsen.NoOpCoarsener(
-            big_model=model_params.qg_models[q_size],
-            small_nx=target_size,
-        )
-    else:
-        # Need to scale q down to proper size
-        coarse_op = coarsen.COARSEN_OPERATORS[model_params.scale_operator](
-            big_model=model_params.qg_models[q_size],
-            small_nx=target_size,
-        )
-    out_q = jax.vmap(coarse_op.coarsen)(big_q)
-    out_q = jax.vmap(model_params.scalers.q_scalers[target_size].scale_to_standard)(out_q)
-    return out_q
-
-
 def make_forcing_computer(nets, net_data, model_params):
 
     def compute_forcing(q):
         q = jnp.expand_dims(q, 0)
         dummy_batch = SnapshotStates(q=None, q_total_forcings={})
-        # Pre-populate alt_sources with scaled q values as needed
+        # Pre-populate alt_sources with input q value
         alt_sources = {
-            f"q_{size}": coarsen_q(q, size, model_params)
-            for size in determine_q_sizes(
-                itertools.chain.from_iterable(nd.input_channels for nd in net_data)
-            )
+            f"q_{q.shape[-1]}": q,
         }
         for net, data in zip(nets, net_data, strict=True):
             output_size = determine_output_size(data.output_channels)
