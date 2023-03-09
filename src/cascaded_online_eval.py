@@ -1,0 +1,135 @@
+import itertools
+import re
+import functools
+import jax
+import jax.numpy as jnp
+import pyqg_jax
+from train import make_chunk_from_batch, determine_channel_size, determine_output_size, make_basic_coarsener, remove_residual_from_output_chunk
+from cascaded_train import split_chunk_into_channels, name_remove_residual
+from cascaded_eval import load_networks
+from systems.qg.loader import SnapshotStates
+from systems.qg import coarsen
+import jax_utils
+
+
+def determine_q_sizes(chan_iter):
+    for chan in chan_iter:
+        if re.match(r"^q_\d+$", chan):
+            yield determine_channel_size(chan)
+
+
+def coarsen_q(big_q, target_size, model_params):
+    q_size = big_q.shape[-1]
+    if q_size < target_size:
+        raise ValueError(f"input q with size {q_size} is too small to produce {target_size}")
+    if q_size == target_size:
+        coarse_op = coarsen.NoOpCoarsener(
+            big_model=model_params.qg_models[q_size],
+            small_nx=target_size,
+        )
+    else:
+        # Need to scale q down to proper size
+        coarse_op = coarsen.COARSEN_OPERATORS[model_params.scale_operator](
+            big_model=model_params.qg_models[q_size],
+            small_nx=target_size,
+        )
+    out_q = jax.vmap(coarse_op.coarsen)(big_q)
+    out_q = jax.vmap(model_params.scalers.q_scalers[target_size].scale_to_standard)(out_q)
+    return out_q
+
+
+def make_forcing_computer(nets, net_data, model_params):
+
+    def compute_forcing(q):
+        q = jnp.expand_dims(q, 0)
+        dummy_batch = SnapshotStates(q=None, q_total_forcings={})
+        # Pre-populate alt_sources with scaled q values as needed
+        alt_sources = {
+            f"q_{size}": coarsen_q(q, size, model_params)
+            for size in determine_q_sizes(
+                itertools.chain.from_iterable(nd.input_channels for nd in net_data)
+            )
+        }
+        for net, data in zip(nets, net_data, strict=True):
+            output_size = determine_output_size(data.output_channels)
+            input_chunk = make_chunk_from_batch(
+                channels=data.input_channels,
+                batch=dummy_batch,
+                model_params=model_params,
+                processing_size=data.processing_size,
+                alt_source=alt_sources,
+            )
+            predictions = jax.vmap(net)(input_chunk)
+            predictions = jax.vmap(make_basic_coarsener(data.processing_size, output_size, model_params))(predictions)
+            # Process predictions and add to alt_sources
+            predictions = split_chunk_into_channels(
+                channels=data.output_channels,
+                chunk=remove_residual_from_output_chunk(
+                    output_channels=data.output_channels,
+                    output_chunk=predictions,
+                    batch=dummy_batch,
+                    model_params=model_params,
+                    processing_size=output_size,
+                    alt_source=alt_sources,
+                )
+            )
+            alt_sources.update({name_remove_residual(k): v for k, v in predictions.items()})
+        # Final step, extract the forcing from alt_sources
+        out_val = alt_sources[f"q_total_forcing_{q.shape[-1]}"]
+        out_val = jax.vmap(model_params.scalers.q_total_forcing_scalers[out_val.shape[-1]].scale_from_standard)(out_val)
+        return jnp.squeeze(out_val, 0)
+
+    return compute_forcing
+
+
+def make_net_param_func(nets, net_data, model_params):
+
+    @pyqg_jax.parameterizations.q_parameterization
+    def net_param_func(model_state, param_aux, model):
+        compute_forcing_fn = make_forcing_computer(nets, net_data, model_params)
+        return compute_forcing_fn(model_state.q), None
+
+    return net_param_func
+
+
+def make_parameterized_stepped_model(nets, net_data, model_params, qg_model_args, dt):
+    model = pyqg_jax.steppers.SteppedModel(
+        pyqg_jax.parameterizations.ParameterizedModel(
+            pyqg_jax.qg_model.QGModel(
+                **qg_model_args,
+                precision=pyqg_jax.state.Precision.SINGLE,
+            ),
+            param_func=make_net_param_func(
+                nets=nets,
+                net_data=net_data,
+                model_params=model_params,
+            ),
+        ),
+        pyqg_jax.steppers.AB3Stepper(dt=dt),
+    )
+
+    @functools.partial(jax.jit, static_argnums=(1, 2))
+    def model_stepper(initial_q, num_steps, subsampling=1):
+        # Wrap in model states
+        inner_state = model.model.model.create_initial_state(jax.random.PRNGKey(0))
+        inner_state = inner_state.update(q=initial_q)
+        state = model.initialize_stepper_state(
+            model.model.initialize_param_state(inner_state)
+        )
+        # Step through time
+        def step_state(carry, _x):
+            old_state = carry
+            new_state = model.step_model(old_state)
+            return new_state, old_state.state.model_state
+
+        _last_state, states = jax_utils.strided_scan(
+            step_state,
+            state,
+            None,
+            length=num_steps,
+            stride=subsampling,
+        )
+
+        return states
+
+    return model_stepper
