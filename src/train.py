@@ -51,6 +51,9 @@ parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adab
 parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine"], help="What learning rate schedule")
 
 
+QG_LEVELS = 2
+
+
 def save_network(output_name, output_dir, state, base_logger=None):
     if base_logger is None:
         logger = logging.getLogger("save")
@@ -329,12 +332,8 @@ def remove_residual_from_output_chunk(output_channels, output_chunk, batch, mode
             stacked_channels.append(data)
         else:
             # Normal processing (no offset needed)
-            data = make_channel_from_batch(channel, batch, model_params, alt_source=alt_source)
-            stacked_channels.append(
-                jnp.zeros_like(
-                    jax.vmap(make_basic_coarsener(data.shape[-1], processing_size, model_params))(data)
-                )
-            )
+            output_shape = (QG_LEVELS, processing_size, processing_size)
+            stacked_channels.append(jnp.zeros(output_shape, dtype=output_chunk.dtype))
 
     return output_chunk + jnp.concatenate(stacked_channels, axis=-3)
 
