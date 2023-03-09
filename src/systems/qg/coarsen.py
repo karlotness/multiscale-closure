@@ -222,6 +222,49 @@ class BasicSpectralCoarsener(SpectralCoarsener):
         return 1
 
 
+class LinearResizeCoarsener(Coarsener):
+    def __init__(self, big_model, small_nx):
+        super().__init__(big_model=big_model, small_nx=small_nx)
+
+    def coarsen(self, var):
+        if self._is_spectral(var):
+            var_spatial = self._to_real(var)
+        else:
+            var_spatial = var
+        assert var_spatial.ndim == 3
+        assert var_spatial.shape[-2:] == (self.big_model.ny, self.big_model.nx)
+        result_shape = (var_spatial.shape[-3],) + (self.small_model.ny, self.small_model.nx)
+        resized = jax.image.resize(
+            var_spatial,
+            shape=result_shape,
+            method="linear",
+            antialias=False,
+        )
+        if self._is_spectral(var):
+            return self._to_spec(resized)
+        else:
+            return resized
+
+    def uncoarsen(self, var):
+        if self._is_spectral(var):
+            var_spatial = self._to_real(var)
+        else:
+            var_spatial = var
+        assert var_spatial.ndim == 3
+        assert var_spatial.shape[-2:] == (self.small_model.ny, self.small_model.nx)
+        result_shape = (var_spatial.shape[-3],) + (self.big_model.ny, self.big_model.nx)
+        resized = jax.image.resize(
+            var_spatial,
+            shape=result_shape,
+            method="linear",
+            antialias=False,
+        )
+        if self._is_spectral(var):
+            return self._to_spec(resized)
+        else:
+            return resized
+
+
 COARSEN_OPERATORS = {
     "op1": Operator1,
     "op2": Operator2,
