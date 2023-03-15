@@ -106,3 +106,36 @@ def make_parameterized_stepped_model(nets, net_data, model_params, qg_model_args
         return states
 
     return model_stepper
+
+
+def make_null_model_stepper(qg_model_args, dt):
+    model = pyqg_jax.steppers.SteppedModel(
+        pyqg_jax.qg_model.QGModel(
+            **qg_model_args,
+        ),
+        pyqg_jax.steppers.AB3Stepper(dt=dt),
+    )
+
+    @functools.partial(jax.jit, static_argnums=(1, 2))
+    def model_stepper(initial_q, num_steps, subsampling=1):
+        # Wrap in model states
+        inner_state = model.model.create_initial_state(jax.random.PRNGKey(0))
+        inner_state = inner_state.update(q=initial_q)
+        state = model.initialize_stepper_state(inner_state)
+        # Step through time
+        def step_state(carry, _x):
+            old_state = carry
+            new_state = model.step_model(old_state)
+            return new_state, old_state.state
+
+        _last_state, states = jax_utils.strided_scan(
+            step_state,
+            state,
+            None,
+            length=num_steps,
+            stride=subsampling,
+        )
+
+        return states
+
+    return model_stepper
