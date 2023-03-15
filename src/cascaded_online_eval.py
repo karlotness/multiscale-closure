@@ -70,7 +70,6 @@ def make_parameterized_stepped_model(nets, net_data, model_params, qg_model_args
         pyqg_jax.parameterizations.ParameterizedModel(
             pyqg_jax.qg_model.QGModel(
                 **qg_model_args,
-                precision=pyqg_jax.state.Precision.SINGLE,
             ),
             param_func=make_net_param_func(
                 nets=nets,
