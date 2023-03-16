@@ -5,6 +5,28 @@ import jax.numpy as jnp
 from .kernel import PseudoSpectralKernelState
 
 
+def qg_model_to_args(model):
+    qg_args = {
+        "nx",
+        "ny",
+        "L",
+        "W",
+        "rek",
+        "filterfac",
+        "f",
+        "g",
+        "beta",
+        "rd",
+        "delta",
+        "H1",
+        "U1",
+        "U2",
+    }
+    return {
+        arg: getattr(model, arg) for arg in qg_args
+    }
+
+
 def make_basic_rollout(model, num_steps):
 
     def do_steps(carry_state, _y):
