@@ -12,9 +12,9 @@ from systems.qg import coarsen
 import jax_utils
 
 
-def make_forcing_computer(nets, net_data, model_params):
+def make_network_results_computer(nets, net_data, model_params):
 
-    def compute_forcing(q):
+    def compute_results(q):
         q = jnp.expand_dims(q, 0)
         # Scale to standard
         q = jax.vmap(model_params.scalers.q_scalers[q.shape[-1]].scale_to_standard)(q)
@@ -23,6 +23,7 @@ def make_forcing_computer(nets, net_data, model_params):
         alt_sources = {
             f"q_{q.shape[-1]}": q,
         }
+        results = {}
         for net, data in zip(nets, net_data, strict=True):
             output_size = determine_output_size(data.output_channels)
             input_chunk = make_chunk_from_batch(
@@ -46,9 +47,20 @@ def make_forcing_computer(nets, net_data, model_params):
                     alt_source=alt_sources,
                 )
             )
-            alt_sources.update({name_remove_residual(k): v for k, v in predictions.items()})
+            results.update({name_remove_residual(k): v for k, v in predictions.items()})
+            alt_sources.update(results)
+        # Remove batch dimension from each result and return
+        return {k: jnp.squeeze(v, 0) for k, v in results.items()}
+
+    return compute_results
+
+
+def make_forcing_computer(nets, net_data, model_params):
+
+    def compute_forcing(q):
+        results = make_network_results_computer(nets, net_data, model_params)(q)
         # Final step, extract the forcing from alt_sources
-        out_val = alt_sources[f"q_total_forcing_{q.shape[-1]}"]
+        out_val = jnp.expand_dims(results[f"q_total_forcing_{q.shape[-1]}"], 0)
         out_val = jax.vmap(model_params.scalers.q_total_forcing_scalers[out_val.shape[-1]].scale_from_standard)(out_val)
         return jnp.squeeze(out_val, 0)
 
