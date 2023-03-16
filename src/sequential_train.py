@@ -178,6 +178,7 @@ def make_batch_computer(net_data, alt_source_computer, model_params):
             batch=batch,
             model_params=model_params,
             processing_size=output_size,
+            alt_source=alt_sources,
         )
         # Compute losses
         loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, input_chunk, target_chunk)
