@@ -5,6 +5,11 @@ readonly LAUNCH_TIME="$(date '+%Y%m%d-%H%M%S')"
 readonly OUT_DIR="${SCRATCH}/closure/run_outputs/run-all-${LAUNCH_TIME}/"
 mkdir -p "$OUT_DIR"
 
+function echoing_sbatch() {
+    >&2 echo "sbatch" "$@"
+    sbatch "$@"
+}
+
 function get_job_id() {
     local SBATCH_OUTPUT="$1"
     if [[ "$SBATCH_OUTPUT" =~ Submitted\ batch\ job\ ([0-9]+) ]]; then
@@ -32,25 +37,25 @@ for net_arch in 'gz-fcnn-v1' 'gz-fcnn-v1-medium'; do
             net_dir="${OUT_DIR}/sequential-train-cnn-${run_name}"
 
             # Launch first job
-            run_out="$(sbatch sequential-train-cnn.sh "$net_dir" "$net_arch" '0' "$scales")"
+            run_out="$(echoing_sbatch sequential-train-cnn.sh "$net_dir" "$net_arch" '0' "$scales")"
             run_jobid="$(get_job_id "$run_out")"
             echo "Submitted job ${run_jobid}"
 
             # Launch remaining training jobs
             for job in $(seq '1' "$(( num_scales - 1))"); do
-                run_out="$(sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes sequential-train-cnn.sh "$net_dir" "$net_arch" "$job" "$scales")"
+                run_out="$(echoing_sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes sequential-train-cnn.sh "$net_dir" "$net_arch" "$job" "$scales")"
                 run_jobid="$(get_job_id "$run_out")"
                 echo "Submitted job ${run_jobid}"
             done
 
             # Join the networks
-            run_out="$(sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes sequential-to-cascade.sh "$net_dir")"
+            run_out="$(echoing_sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes sequential-to-cascade.sh "$net_dir")"
             run_jobid="$(get_job_id "$run_out")"
             echo "Submitted job ${run_jobid}"
 
             # Launch evaluation
-            sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes cascade-net-eval.sh best_loss "$net_dir"
-            sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes cascade-net-eval.sh interval "$net_dir"
+            echoing_sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes cascade-net-eval.sh best_loss "$net_dir"
+            echoing_sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes cascade-net-eval.sh interval "$net_dir"
         done
     done
 done
@@ -121,7 +126,7 @@ function launch_separate_job() {
 
     local run_sep_out="${OUT_DIR}/multi-train-cnn-${run_type}-${run_arch_size}-${run_trial}"
 
-    local run_out=$(sbatch multi-train-cnn.sh "$run_sep_out" "$run_arch" "$run_in_chans" "$run_proc_size" "$run_out_chans")
+    local run_out=$(echoing_sbatch multi-train-cnn.sh "$run_sep_out" "$run_arch" "$run_in_chans" "$run_proc_size" "$run_out_chans")
     local run_jobid="$(get_job_id "$run_out")"
     echo "Submitted job ${run_jobid}"
 
@@ -131,8 +136,8 @@ function launch_separate_job() {
     sep_train_ids[$run_arr_key]="${sep_train_ids[$run_arr_key]} ${run_jobid}"
 
     # Launch single net evaluation
-    sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes cnn-net-eval.sh best_loss "${run_sep_out}"
-    sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes cnn-net-eval.sh interval "${run_sep_out}"
+    echoing_sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes cnn-net-eval.sh best_loss "${run_sep_out}"
+    echoing_sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes cnn-net-eval.sh interval "${run_sep_out}"
 }
 
 # LAUNCH SEPARATE RUNS
@@ -192,7 +197,7 @@ for small_size in 64 96 128; do
                 # Network output directory
                 combine_out="${OUT_DIR}/combine-eval-cnn-${small_size}to${big_size}-${downscale_abbrev}${buildup_abbrev}"
                 combine_waitids="${buildup_waitids}:${downscale_waitids}"
-                sbatch --dependency="afterok:${combine_waitids}" --kill-on-invalid-dep=yes combine-eval-cnn.sh "$combine_out" "$downscale_dirs" "$buildup_dirs"
+                echoing_sbatch --dependency="afterok:${combine_waitids}" --kill-on-invalid-dep=yes combine-eval-cnn.sh "$combine_out" "$downscale_dirs" "$buildup_dirs"
             done
         done
     done
