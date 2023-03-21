@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=sequential-train-cnn
-#SBATCH --time=20:00:00
+#SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=25GB
 #SBATCH --gres=gpu:1
@@ -11,11 +11,11 @@ set -euo pipefail
 
 if [[ $# -lt 4 ]]; then
     echo 'ERROR: Insufficient parameters for training'
-    echo 'Usage sequential-train-cnn.sh RUN_KEY ARCH TRAIN_STEP PROCESSING_LEVELS(spaces)'
+    echo 'Usage sequential-train-cnn.sh OUT_DIR ARCH TRAIN_STEP PROCESSING_LEVELS(spaces)'
     exit 1
 fi
 
-readonly RUN_KEY="$1"
+readonly OUT_DIR="$1"
 readonly ARCHITECTURE="$2"
 readonly TRAIN_STEP="$3"
 readonly PROCESSING_LEVELS="$4"
@@ -29,21 +29,18 @@ shopt -s failglob
 set -euo pipefail
 
 # Constants
-readonly BASE_NAME="sequential-train-cnn-${RUN_KEY}"
 readonly SINGULARITY_CONTAINER="${SCRATCH}/closure/closure.sif"
 readonly ORIGIN_REPO_DIR="${HOME}/repos/closure.git"
-readonly OUT_BASE_DIR="${SCRATCH}/closure/run_outputs/"
 readonly CHECKOUT_DIR="${SLURM_JOBTMP}/Closure/"
 readonly TRAIN_DATA_DIR="${SCRATCH}/closure/data/train/op1/"
 readonly VAL_DATA_DIR="${SCRATCH}/closure/data/val/op1/"
-readonly OUT_DIR="${OUT_BASE_DIR}/${BASE_NAME}"
 
 if [[ "$ARCHITECTURE" == "gz-fcnn-v1" ]]; then
-    LR='0.001'
-    NUM_EPOCHS='66'
+    LR='0.0005'
+    NUM_EPOCHS='132'
 elif [[ "$ARCHITECTURE" == "gz-fcnn-v1-medium" ]]; then
-    LR='0.000222'
-    NUM_EPOCHS='48'
+    LR='0.0002'
+    NUM_EPOCHS='96'
 else
     echo "Unsupported architecture '${ARCHITECTURE}'"
     exit 1
@@ -64,7 +61,7 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             "$TRAIN_STEP" \
             $PROCESSING_LEVELS \
             --architecture="$ARCHITECTURE" \
-            --optimizer=adabelief \
+            --optimizer=adam \
             --batch_size=256 \
             --num_epochs="$NUM_EPOCHS" \
             --batches_per_epoch=333 \
@@ -73,4 +70,4 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --save_interval=1 \
             --lr="$LR" \
             --end_lr=0.0 \
-            --lr_schedule=warmup1-cosine
+            --lr_schedule=constant

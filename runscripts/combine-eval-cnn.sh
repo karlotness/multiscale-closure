@@ -14,11 +14,11 @@ module load git/2.31.0
 # Handle arguments
 if [[ $# -lt 3 ]]; then
     echo 'ERROR: Insufficient parameters for combined evaluation'
-    echo 'Usage multi-train-cnn.sh BASE_NAME DOWNSCALE_NETS(spaces) BUILDUP_NETS(spaces)'
+    echo 'Usage multi-train-cnn.sh OUT_DIR DOWNSCALE_NETS(spaces) BUILDUP_NETS(spaces)'
     exit 1
 fi
 
-readonly NAME_KEY="$1"
+readonly OUT_DIR="$1"
 readonly DOWNSCALE_NETS="$2"
 readonly BUILDUP_NETS="$3"
 
@@ -27,13 +27,10 @@ shopt -s failglob
 set -euo pipefail
 
 # Constants
-readonly BASE_NAME="combine-eval-cnn-${NAME_KEY}"
 readonly SINGULARITY_CONTAINER="${SCRATCH}/closure/closure.sif"
 readonly ORIGIN_REPO_DIR="${HOME}/repos/closure.git"
-readonly OUT_BASE_DIR="${SCRATCH}/closure/run_outputs/"
 readonly CHECKOUT_DIR="${SLURM_JOBTMP}/Closure/"
 readonly EVAL_DATA_DIR="${SCRATCH}/closure/data/test/op1/"
-readonly OUT_DIR="${OUT_BASE_DIR}/${BASE_NAME}-${SLURM_JOB_ID}"
 
 # Clone Repository
 mkdir -p "$CHECKOUT_DIR"

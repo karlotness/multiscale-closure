@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=multi-train-cnn
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=25GB
 #SBATCH --gres=gpu:1
@@ -9,18 +9,17 @@
 
 set -euo pipefail
 
-if [[ $# -lt 6 ]]; then
+if [[ $# -lt 5 ]]; then
     echo 'ERROR: Insufficient parameters for training'
-    echo 'Usage multi-train-cnn.sh RUN_KEY ARCH INPUT_CHANNELS(spaces) PROC_SIZE OUTPUT_CHANNELS(spaces) NOISE_SPECS(spaces)'
+    echo 'Usage multi-train-cnn.sh OUT_DIR ARCH INPUT_CHANNELS(spaces) PROC_SIZE OUTPUT_CHANNELS(spaces)'
     exit 1
 fi
 
-readonly RUN_KEY="$1"
+readonly OUT_DIR="$1"
 readonly ARCHITECTURE="$2"
 readonly INPUT_CHANNELS="$3"
 readonly PROC_SIZE="$4"
 readonly OUTPUT_CHANNELS="$5"
-readonly NOISE_SPECS="$6"
 
 # Begin execution
 module purge
@@ -31,21 +30,18 @@ shopt -s failglob
 set -euo pipefail
 
 # Constants
-readonly BASE_NAME="multi-train-cnn-${RUN_KEY}"
 readonly SINGULARITY_CONTAINER="${SCRATCH}/closure/closure.sif"
 readonly ORIGIN_REPO_DIR="${HOME}/repos/closure.git"
-readonly OUT_BASE_DIR="${SCRATCH}/closure/run_outputs/"
 readonly CHECKOUT_DIR="${SLURM_JOBTMP}/Closure/"
 readonly TRAIN_DATA_DIR="${SCRATCH}/closure/data/train/op1/"
 readonly VAL_DATA_DIR="${SCRATCH}/closure/data/val/op1/"
-readonly OUT_DIR="${OUT_BASE_DIR}/${BASE_NAME}-${SLURM_JOB_ID}"
 
 if [[ "$ARCHITECTURE" == "gz-fcnn-v1" ]]; then
-    LR='0.001'
-    NUM_EPOCHS='66'
+    LR='0.0005'
+    NUM_EPOCHS='132'
 elif [[ "$ARCHITECTURE" == "gz-fcnn-v1-medium" ]]; then
-    LR='0.000222'
-    NUM_EPOCHS='48'
+    LR='0.0002'
+    NUM_EPOCHS='96'
 else
     echo "Unsupported architecture '${ARCHITECTURE}'"
     exit 1
@@ -63,7 +59,7 @@ export JAX_ENABLE_X64=True
 export JAX_DEFAULT_DTYPE_BITS=32
 singularity run --nv "$SINGULARITY_CONTAINER" \
             python "${CHECKOUT_DIR}/src/train.py" "$OUT_DIR" "$TRAIN_DATA_DIR" "$VAL_DATA_DIR" \
-            --optimizer=adabelief \
+            --optimizer=adam \
             --batch_size=256 \
             --num_epochs="$NUM_EPOCHS" \
             --batches_per_epoch=333 \
@@ -72,9 +68,8 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --save_interval=1 \
             --lr="$LR" \
             --end_lr=0.0 \
-            --lr_schedule=warmup1-cosine \
+            --lr_schedule=constant \
             --architecture="$ARCHITECTURE" \
             --processing_size="$PROC_SIZE" \
             --input_channels $INPUT_CHANNELS \
-            --noise_specs $NOISE_SPECS \
             --output_channels $OUTPUT_CHANNELS
