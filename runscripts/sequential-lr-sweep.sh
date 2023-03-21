@@ -56,9 +56,9 @@ git clone "$ORIGIN_REPO_DIR" "$CHECKOUT_DIR"
 mkdir -p "$OUT_DIR"
 
 # Copy in previous network weights and info
-mkdir "${OUT_DIR}/net0"
-cp "${BASE_RUN}/best_loss.eqx" "${OUT_DIR}/net0/best_loss.eqx"
-cp "${BASE_RUN}/network_info.json" "${OUT_DIR}/net0/network_info.json"
+mkdir -p "${OUT_DIR}/net0/weights/"
+cp "${BASE_RUN}/weights/best_loss.eqx" "${OUT_DIR}/net0/weights/best_loss.eqx"
+cp "${BASE_RUN}/weights/network_info.json" "${OUT_DIR}/net0/weights/network_info.json"
 
 # Run
 export JAX_ENABLE_X64=True
