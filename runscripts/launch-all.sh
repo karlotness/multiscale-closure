@@ -132,7 +132,7 @@ function launch_separate_job() {
 
     # Store job path and training ID
     local run_arr_key="${run_type}-${run_arch_size}"
-    sep_train_paths[$run_arr_key]="${sep_train_paths[$run_arr_key]} ${run_sep_out}"
+    sep_train_paths[$run_arr_key]="${sep_train_paths[$run_arr_key]} ${run_sep_out}/weights/best_loss.eqx"
     sep_train_ids[$run_arr_key]="${sep_train_ids[$run_arr_key]} ${run_jobid}"
 
     # Launch single net evaluation
