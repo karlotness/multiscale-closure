@@ -125,7 +125,7 @@ def load_eval_data(eval_file, num_samples, sample_seed, min_sample_step, require
         return batch, sample_trajs, sample_steps
 
 
-@eqx.filter_jit(args=(eqx.is_array, get_network_pytree_mask(), get_network_pytree_mask()))
+@eqx.filter_jit
 def compute_network_stats(batch, masked_downscale, masked_buildup):
     downscale_input = make_chunk_from_batch(
         channels=masked_downscale.input_channels,
