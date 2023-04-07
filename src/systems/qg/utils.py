@@ -32,5 +32,10 @@ def qg_model_param_json(model):
 
 def qg_model_from_param_json(param):
     args = json.loads(param)
-    args["precision"] = pyqg_jax.state.Precision[args["precision"]]
+    if "precision" in args:
+        args["precision"] = pyqg_jax.state.Precision[args["precision"]]
+    args.pop("dt", None)
+    args.pop("tmax", None)
+    args.pop("tavestart", None)
+    args.pop("taveint", None)
     return pyqg_jax.qg_model.QGModel(**args)
