@@ -9,6 +9,7 @@ import numpy as np
 import random
 import h5py
 from . import kernel
+import .utils as qg_utils
 from .qg_model import QGModel
 
 
@@ -36,7 +37,7 @@ class PartialState:
 def qg_model_from_hdf5(file_path, model="small"):
     with h5py.File(file_path, "r") as h5_file:
         params = h5_file["params"][f"{model}_model"].asstr()[()]
-        return QGModel.from_param_json(params)
+        return qg_utils.qg_model_from_param_json(params)
 
 
 def _get_core_traj_data(file_path):
@@ -46,43 +47,6 @@ def _get_core_traj_data(file_path):
         ablevel = h5_file["trajs"]["ablevel"][:]
         return CoreTrajData(t=t, tc=tc, ablevel=ablevel)
 
-
-def _make_small_model_recomputer(small_model):
-    def recompute_1(q, t, tc, ablevel):
-        small_state = small_model.create_initial_state(jax.random.PRNGKey(0))
-        small_state.t = t
-        small_state.tc = tc
-        small_state.ablevel = ablevel
-        small_state.q = q
-        # Initialize other values
-        small_state = small_model.invert(small_state) # Recompute ph, u, v
-        small_state = small_model.do_advection(small_state) # Recompute uq, vq, dqhdt
-        small_state = small_model.do_friction(small_state) # Recompute dqhdt
-        return small_state
-
-    def recompute(q, dqhdt, t, tc, ablevel):
-        small_state = jax.vmap(recompute_1)(q, t, tc, ablevel)
-        # Fix up dqhdt, etc
-        small_state.dqhdt = dqhdt[2:]
-        small_state.dqhdt_p = dqhdt[1:-1]
-        small_state.dqhdt_pp = dqhdt[:-2]
-        return small_state
-
-    return recompute
-
-
-def _make_partial_state_recomputer(small_model):
-    recompute_fun = _make_small_model_recomputer(small_model)
-
-    def recompute_state(partial_state):
-        q = partial_state.q
-        dqhdt = partial_state.dqhdt_seq
-        t = partial_state.t
-        tc = partial_state.tc
-        ablevel = partial_state.ablevel
-        return recompute_fun(q, dqhdt, t, tc, ablevel)
-
-    return recompute_state
 
 class SimpleQGLoader:
     def __init__(self, file_path, fields=("q", "dqhdt", "t", "tc", "ablevel")):
@@ -99,8 +63,6 @@ class SimpleQGLoader:
         self.num_trajectories = num_traj
         self.num_steps = self._trajs_group["traj00000_q"].shape[0]
         self.num_trajs = self.num_trajectories
-        small_model = qg_model_from_hdf5(file_path=file_path, model="small") # Source for recomputing other values from q
-        self._state_recomputer = jax.jit(_make_small_model_recomputer(small_model))
         self._core_traj_data = _get_core_traj_data(file_path) # Source for t, tc, ablevel
 
     def __enter__(self):
@@ -136,10 +98,6 @@ class SimpleQGLoader:
                     self._trajs_group[f"traj{traj:05d}_{field}"][slicer]
                 )
         return jax.device_put(PartialState(**result_fields))
-
-    @staticmethod
-    def make_reconstruct_state_func(small_model):
-        return _make_partial_state_recomputer(small_model)
 
 
 @kernel.register_dataclass_pytree
