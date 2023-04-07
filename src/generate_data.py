@@ -279,7 +279,7 @@ def gen_qg(out_dir, args, base_logger):
             jax.vmap(
                 make_coarsen_to_size(
                     coarse_op=coarse_cls,
-                    big_model=coarse_cls(big_model=big_model, small_nx=main_small_size).small_model,
+                    big_model=coarse_cls(big_model=big_model, small_nx=main_small_size).small_model if main_small_size != big_model.nx else big_model,
                     small_nx=size,
                 ),
             ),
