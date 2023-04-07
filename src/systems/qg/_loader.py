@@ -21,7 +21,7 @@ def main(args):
             field_prefix = f"traj{traj:05d}_"
             sys.stdout.buffer.write(
                 b"".join(
-                    trajs_group[f"{field_prefix}{field}"][step:(end_step + 2 if field == "dqhdt" else end_step)].tobytes()
+                    trajs_group[f"{field_prefix}{field}"][step:end_step)].tobytes()
                     for field in fields
                 )
             )
