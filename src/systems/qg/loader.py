@@ -9,7 +9,7 @@ import numpy as np
 import random
 import h5py
 from . import kernel
-import .utils as qg_utils
+from . import utils as qg_utils
 from .qg_model import QGModel
 
 
