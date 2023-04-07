@@ -21,8 +21,8 @@ import json
 import functools
 import operator
 from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader
-from systems.qg import coarsen, diagnostics as qg_spec_diag
-from systems.qg.qg_model import QGModel
+from systems.qg import coarsen, diagnostics as qg_spec_diag, utils as qg_utils
+from pyqg_jax.qg_model import QGModel
 from methods import ARCHITECTURES
 import jax_utils
 import utils
@@ -164,7 +164,7 @@ def load_model_params(train_path):
         coarse_op_name = data_file["params"]["coarsen_op"].asstr()[()]
         for k in data_file["params"]:
             if m := re.match(r"^small_model_(?P<size>\d+)$", k):
-                qg_models[int(m.group("size"))] = QGModel.from_param_json(
+                qg_models[int(m.group("size"))] = qg_utils.qg_model_from_param_json(
                     data_file["params"][k].asstr()[()]
                 )
     return ModelParams(
