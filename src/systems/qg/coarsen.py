@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 import pyqg_jax
 from . import utils
@@ -17,7 +18,7 @@ def coarsen_model(big_model, small_nx):
     assert small_nx % 2 == 0
     model_args = utils.qg_model_to_args(big_model)
     model_args["nx"] = small_nx
-    model_args["ny"] = small_ny
+    model_args["ny"] = small_nx
     return pyqg_jax.qg_model.QGModel(**model_args)
 
 
@@ -32,6 +33,15 @@ class Coarsener:
 
     def uncoarsen(self, var):
         raise NotImplementedError("implement in a subclass")
+
+    def compute_q_total_forcing(self, big_q):
+        big_state = self.big_model.create_initial_state(jax.random.PRNGKey(0)).update(q=big_q)
+        big_deriv = self.big_model.get_full_state(big_state).dqdt
+        coarsened_deriv = self.coarsen(big_deriv)
+        small_q = self.coarsen(big_q)
+        small_state = self.small_model.create_initial_state(jax.random.PRNGKey(0)).update(q=small_q)
+        small_deriv = self.small_model.get_full_state(small_state).dqdt
+        return coarsened_deriv - small_deriv
 
     def _to_spec(self, q):
         return _generic_rfftn(q)
