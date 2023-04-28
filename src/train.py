@@ -105,6 +105,28 @@ def determine_channel_size(chan):
         raise ValueError(f"unsupported channel {chan}")
 
 
+def determine_channel_layers(chan):
+    """Determine the number of layers based on the channel name"""
+    if m := re.match(r"^q_total_forcing_\d+$", chan):
+        return 2
+    elif m := re.match(r"^q_\d+$", chan):
+        return 2
+    elif m := re.match(r"^q_scaled_forcing_(?P<orig_size>\d+)to\d+$", chan):
+        orig_size = int(m.group("orig_size"))
+        return determine_channel_layers(f"q_total_forcing_{orig_size}")
+    elif m := re.match(r"^q_scaled_(?P<orig_size>\d+)to\d+$", chan):
+        orig_size = int(m.group("orig_size"))
+        return determine_channel_layers(f"q_{orig_size}")
+    elif m := re.match(r"^residual:(?P<chan1>[^-]+)-(?P<chan2>[^-]+)$", chan):
+        chan1_layers = determine_channel_layers(m.group("chan1"))
+        chan2_layers = determine_channel_layers(m.group("chan2"))
+        if chan1_layers != chan2_layers:
+            raise ValueError(f"incompatible channel layer counts for {chan} ({chan1_layers} vs {chan2_layers})")
+        return chan1_layers
+    else:
+        raise ValueError(f"unsupported channel {chan}")
+
+
 def determine_processing_size(input_channels, output_channels, user_processing_size=None):
     """Determine what size the network should be run at"""
     auto_processing_size = max(determine_channel_size(chan) for chan in itertools.chain(input_channels, output_channels))
@@ -481,10 +503,8 @@ def init_network(architecture, lr, rng, input_channels, output_channels, process
                 return leaf.astype(jnp.complex64)
         return leaf
 
-    num_inputs = len(input_channels)
-    num_outputs = len(output_channels)
-    n_layers_in = num_inputs * 2
-    n_layers_out = num_outputs * 2
+    n_layers_in = sum(map(determine_channel_layers, input_channels))
+    n_layers_out = sum(map(determine_channel_layers, output_channels))
 
     args = {
         "img_size": processing_size,
