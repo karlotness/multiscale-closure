@@ -22,9 +22,7 @@ shopt -s failglob
 set -euo pipefail
 
 # Constants
-readonly SINGULARITY_CONTAINER="${SCRATCH}/closure/closure.sif"
-readonly ORIGIN_REPO_DIR="${HOME}/repos/closure.git"
-readonly CHECKOUT_DIR="${SLURM_JOBTMP}/Closure/"
+source params.sh
 
 # Clone Repository
 mkdir -p "$CHECKOUT_DIR"

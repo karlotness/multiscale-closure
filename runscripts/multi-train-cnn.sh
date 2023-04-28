@@ -30,11 +30,7 @@ shopt -s failglob
 set -euo pipefail
 
 # Constants
-readonly SINGULARITY_CONTAINER="${SCRATCH}/closure/closure.sif"
-readonly ORIGIN_REPO_DIR="${HOME}/repos/closure.git"
-readonly CHECKOUT_DIR="${SLURM_JOBTMP}/Closure/"
-readonly TRAIN_DATA_DIR="${SCRATCH}/closure/data/train/op1/"
-readonly VAL_DATA_DIR="${SCRATCH}/closure/data/val/op1/"
+source params.sh
 
 if [[ "$ARCHITECTURE" == "gz-fcnn-v1" ]]; then
     LR='0.0005'
