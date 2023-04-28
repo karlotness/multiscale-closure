@@ -81,7 +81,9 @@ def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batc
         out_channels = [f"q_scaled_forcing_{max(processing_scales)}to{min(processing_scales)}"]
     elif 1 <= train_step < len(processing_scales):
         small, big = next(itertools.islice(itertools.pairwise(sorted(processing_scales)), train_step - 1, None))
-        in_channels = [f"q_scaled_{max(processing_scales)}to{big}", f"q_scaled_forcing_{max(processing_scales)}to{small}"]
+        prev_scales = sorted(processing_scales)[:train_step]
+        assert small in prev_scales
+        in_channels = [f"q_scaled_{max(processing_scales)}to{big}"] + [f"q_scaled_forcing_{max(processing_scales)}to{sz}" for sz in prev_scales]
         if big == max(processing_scales):
             target_chan = f"q_total_forcing_{max(processing_scales)}"
         else:
