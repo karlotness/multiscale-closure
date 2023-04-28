@@ -94,6 +94,37 @@ class SpectralCoarsener(Coarsener):
         else:
             return filtered
 
+    def raw_coarsen(self, var):
+        assert self._is_spectral(var) or var.shape[-2:] == (self.big_model.ny, self.big_model.nx)
+        assert var.ndim == 3
+        dummy_varh = self._to_spec(
+            jnp.zeros(
+                (self.small_model.nz, self.small_model.ny, self.small_model.nx),
+                dtype=jnp.float32
+            )
+        )
+        nk = dummy_varh.shape[1] // 2
+        if not self._is_spectral(var):
+            vh = self._to_spec(var)
+        else:
+            vh = var
+        trunc = jnp.hstack((vh[:, :nk,:nk+1],
+                            vh[:,-nk:,:nk+1]))
+        filtered = trunc / self.ratio**2
+        if not self._is_spectral(var):
+            return self._to_real(filtered)
+        else:
+            return filtered
+
+    def compute_q_total_forcing(self, big_q):
+        big_state = self.big_model.create_initial_state(jax.random.PRNGKey(0)).update(q=big_q)
+        big_deriv = self.big_model.get_full_state(big_state).dqdt
+        coarsened_deriv = self.raw_coarsen(big_deriv)
+        small_q = self.coarsen(big_q)
+        small_state = self.small_model.create_initial_state(jax.random.PRNGKey(0)).update(q=small_q)
+        small_deriv = self.small_model.get_full_state(small_state).dqdt
+        return coarsened_deriv - small_deriv
+
     def uncoarsen(self, var):
         # Steps:
         # 1. compute target size
