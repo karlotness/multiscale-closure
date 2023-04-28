@@ -1,5 +1,5 @@
 # Constants
-readonly DATA_SUBDIR='data'
+readonly DATA_SUBDIR='data-raw-coarsen'
 readonly COARSE_OP='op1'
 
 # Run parameters
