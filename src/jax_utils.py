@@ -127,6 +127,7 @@ def chunked_vmap(fun, chunk_size):
         ret = jax.vmap(fun)(*args, **kwargs)
         return None, ret
 
+    @functools.wraps(fun)
     def wrapped_fun(*args, **kwargs):
         # Compute leading axis size
         size = jax.tree_util.tree_leaves((args, list(kwargs.values())))[0].shape[0]
