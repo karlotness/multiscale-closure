@@ -195,6 +195,31 @@ class EquinoxTrainState:
         return obj
 
 
+def filter_scan(f, init, xs, length=None, reverse=False, unroll=1):
+    # NOTE: Filtering applies only to the carry/init values
+
+    init_var, carry_static = eqx.partition(init, filter_spec=eqx.is_array_like)
+
+    @functools.wraps(f)
+    def filtered_f(carry, x):
+        carry = eqx.combine(carry, carry_static)
+        new_carry, new_y = f(carry, x)
+        new_carry = eqx.filter(new_carry, filter_spec=eqx.is_array_like)
+        return new_carry, new_y
+
+    final_carry, ys = jax.lax.scan(
+        filtered_f,
+        init_var,
+        xs,
+        length=length,
+        reverse=reverse,
+        unroll=unroll,
+    )
+    final_carry = eqx.combine(final_carry, carry_static)
+
+    return final_carry, ys
+
+
 def _leaf_serializable(leaf):
     if leaf.size == 1:
         return leaf.item()
