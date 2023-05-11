@@ -1,13 +1,31 @@
 #!/bin/bash
 set -euo pipefail
 
+# Set to 'true' or 'false'
+readonly DRY_RUN='true'
+readonly SCALES='128 96 64'
+readonly NUM_REPEATS='3'
 readonly LAUNCH_TIME="$(date '+%Y%m%d-%H%M%S')"
-readonly OUT_DIR="${SCRATCH}/closure/run_outputs/run-all-${LAUNCH_TIME}/"
-mkdir -p "$OUT_DIR"
+readonly OUT_DIR="${SCRATCH}/closure/run_outputs/run-all-nowarmup-${LAUNCH_TIME}/"
+
+if [[ "$DRY_RUN" != 'true' ]]; then
+    mkdir -p "$OUT_DIR"
+else
+    DRY_RUN_COUNTER=10000
+fi
 
 function echoing_sbatch() {
-    >&2 echo "sbatch" "$@"
-    sbatch "$@"
+    local var
+    >&2 echo -n "sbatch "
+    for var in "$@"; do
+        >&2 echo -n "\"$var\" "
+    done
+    >&2 echo ""
+    if [[ "$DRY_RUN" != 'true' ]]; then
+        sbatch "$@"
+    else
+        echo "Submitted batch job $((DRY_RUN_COUNTER++))"
+    fi
 }
 
 function get_job_id() {
@@ -20,6 +38,68 @@ function get_job_id() {
     fi
 }
 
+function check_descending() {
+    local candidate="$1"
+    local min_val=''
+    local v
+    for v in $candidate; do
+        if [[ -n $min_val ]] && (( v >= min_val )); then
+             return 1
+        fi
+        min_val="$v"
+    done
+    return 0
+}
+
+function generate_multi_scale() {
+    local num_scales
+    local concat_cmd
+    local scales_braces
+    local candidate
+    local scale_depth
+    local group
+    local i
+    num_scales="$(echo "$SCALES" | wc -w)"
+    scales_braces="{$(echo "$SCALES" | tr -s ' ' ',')}"
+    for scale_depth in $(seq 2 "$num_scales"); do
+        # Construct command
+        concat_cmd='echo '
+        for i in $(seq "$scale_depth"); do
+            concat_cmd="${concat_cmd}${scales_braces}-"
+        done
+        # Loop over the groups
+        for group in $(eval "$concat_cmd" | tr -s ' ' "\n"); do
+            candidate="$(echo "$group" | tr -s '-' ' ' | sed 's/^ *//;s/ *$//')"
+            if check_descending "$candidate"; then
+                echo "$candidate"
+            fi
+        done
+    done
+}
+
+function generate_paired_scale() {
+    local small_scale
+    local large_scale
+    for large_scale in $SCALES; do
+        for small_scale in $SCALES; do
+            if (( large_scale > small_scale )); then
+                echo "$large_scale $small_scale"
+            fi
+        done
+    done
+}
+
+function generate_direct_scale() {
+    echo "$SCALES" | tr ' ' "\n" | sort -gr | head -n -1
+}
+
+mapfile -t < <(generate_multi_scale)
+readonly multi_scales=("${MAPFILE[@]}")
+mapfile -t < <(generate_paired_scale)
+readonly paired_scales=("${MAPFILE[@]}")
+mapfile -t < <(generate_direct_scale)
+readonly direct_scales=("${MAPFILE[@]}")
+
 # LAUNCH SEQUENTIAL RUNS
 for net_arch in 'gz-fcnn-v1' 'gz-fcnn-v1-medium'; do
 
@@ -29,8 +109,8 @@ for net_arch in 'gz-fcnn-v1' 'gz-fcnn-v1-medium'; do
         arch_size='medium'
     fi
 
-    for i in {1..3}; do
-        for scales in '128 64' '128 96' '96 64' '128 96 64'; do
+    for i in $(seq "$NUM_REPEATS"); do
+        for scales in "${multi_scales[@]}"; do
             joined_scales="$(tr ' ' '_' <<< "$scales")"
             run_name="${joined_scales}-${arch_size}-${i}"
             num_scales="$(wc -w <<< "$scales")"
@@ -62,52 +142,22 @@ done
 
 
 declare -A sep_train_ids
-sep_train_ids[downscale128to96-medium]=''
-sep_train_ids[downscale128to64-medium]=''
-sep_train_ids[downscale96to64-medium]=''
-sep_train_ids[across128to96-medium]=''
-sep_train_ids[across128to64-medium]=''
-sep_train_ids[across96to64-medium]=''
-sep_train_ids[downscale128to96-small]=''
-sep_train_ids[downscale128to64-small]=''
-sep_train_ids[downscale96to64-small]=''
-sep_train_ids[across128to96-small]=''
-sep_train_ids[across128to64-small]=''
-sep_train_ids[across96to64-small]=''
-sep_train_ids[buildup96to128-medium]=''
-sep_train_ids[buildup64to128-medium]=''
-sep_train_ids[buildup64to96-medium]=''
-sep_train_ids[direct128-medium]=''
-sep_train_ids[direct96-medium]=''
-sep_train_ids[buildup96to128-small]=''
-sep_train_ids[buildup64to128-small]=''
-sep_train_ids[buildup64to96-small]=''
-sep_train_ids[direct128-small]=''
-sep_train_ids[direct96-small]=''
-
 declare -A sep_train_paths
-sep_train_paths[downscale128to96-medium]=''
-sep_train_paths[downscale128to64-medium]=''
-sep_train_paths[downscale96to64-medium]=''
-sep_train_paths[across128to96-medium]=''
-sep_train_paths[across128to64-medium]=''
-sep_train_paths[across96to64-medium]=''
-sep_train_paths[downscale128to96-small]=''
-sep_train_paths[downscale128to64-small]=''
-sep_train_paths[downscale96to64-small]=''
-sep_train_paths[across128to96-small]=''
-sep_train_paths[across128to64-small]=''
-sep_train_paths[across96to64-small]=''
-sep_train_paths[buildup96to128-medium]=''
-sep_train_paths[buildup64to128-medium]=''
-sep_train_paths[buildup64to96-medium]=''
-sep_train_paths[direct128-medium]=''
-sep_train_paths[direct96-medium]=''
-sep_train_paths[buildup96to128-small]=''
-sep_train_paths[buildup64to128-small]=''
-sep_train_paths[buildup64to96-small]=''
-sep_train_paths[direct128-small]=''
-sep_train_paths[direct96-small]=''
+for scale_pair in "${paired_scales[@]}"; do
+    mapfile -t -d ' ' < <(echo -n "$scale_pair")
+    large_scale="${MAPFILE[0]}"
+    small_scale="${MAPFILE[1]}"
+    for arch_size in 'small' 'medium'; do
+        sep_train_ids["downscale${large_scale}to${small_scale}-${arch_size}"]=''
+        sep_train_ids["across${large_scale}to${small_scale}-${arch_size}"]=''
+        sep_train_ids["buildup${small_scale}to${large_scale}-${arch_size}"]=''
+        sep_train_ids["direct${large_scale}-${arch_size}"]=''
+        sep_train_paths["downscale${large_scale}to${small_scale}-${arch_size}"]=''
+        sep_train_paths["across${large_scale}to${small_scale}-${arch_size}"]=''
+        sep_train_paths["buildup${small_scale}to${large_scale}-${arch_size}"]=''
+        sep_train_paths["direct${large_scale}-${arch_size}"]=''
+    done
+done
 
 
 function launch_separate_job() {
@@ -142,23 +192,26 @@ function launch_separate_job() {
 
 # LAUNCH SEPARATE RUNS
 for net_arch in 'gz-fcnn-v1' 'gz-fcnn-v1-medium'; do
-    for i in {1..3}; do
+    for i in $(seq "$NUM_REPEATS"); do
 
-        # Downscale and across
-        launch_separate_job "downscale128to96" "$net_arch" 'q_128' '128' 'q_scaled_forcing_128to96' "$i"
-        launch_separate_job "downscale128to64" "$net_arch" 'q_128' '128' 'q_scaled_forcing_128to64' "$i"
-        launch_separate_job "downscale96to64" "$net_arch" 'q_96' '96' 'q_scaled_forcing_96to64' "$i"
-        launch_separate_job "across128to96" "$net_arch" 'q_scaled_128to96' '128' 'q_scaled_forcing_128to96' "$i"
-        launch_separate_job "across128to64" "$net_arch" 'q_scaled_128to64' '128' 'q_scaled_forcing_128to64' "$i"
-        launch_separate_job "across96to64" "$net_arch" 'q_scaled_96to64' '96' 'q_scaled_forcing_96to64' "$i"
+        # Paired scale nets
+        for scale_pair in "${paired_scales[@]}"; do
+            mapfile -t -d ' ' < <(echo -n "$scale_pair")
+            large_scale="${MAPFILE[0]}"
+            small_scale="${MAPFILE[1]}"
+
+            # Downscale and across
+            launch_separate_job "downscale${large_scale}to${small_scale}" "$net_arch" "q_${large_scale}" "$large_scale" "q_scaled_forcing_${large_scale}to${small_scale}" "$i"
+            launch_separate_job "across${large_scale}to${small_scale}" "$net_arch" "q_scaled_${large_scale}to${small_scale}" "$large_scale" "q_scaled_forcing_${large_scale}to${small_scale}" "$i"
+
+            # Buildup
+            launch_separate_job "buildup${small_scale}to${large_scale}" "$net_arch" "q_${large_scale} q_scaled_forcing_${large_scale}to${small_scale}" "$large_scale" "residual:q_total_forcing_${large_scale}-q_scaled_forcing_${large_scale}to${small_scale}" "$i"
+        done
 
         # Buildup and direct
-        launch_separate_job "buildup96to128" "$net_arch" 'q_128 q_scaled_forcing_128to96' '128' 'residual:q_total_forcing_128-q_scaled_forcing_128to96' "$i"
-        launch_separate_job "buildup64to128" "$net_arch" 'q_128 q_scaled_forcing_128to64' '128' 'residual:q_total_forcing_128-q_scaled_forcing_128to64' "$i"
-        launch_separate_job "buildup64to96" "$net_arch" 'q_96 q_scaled_forcing_96to64' '96' 'residual:q_total_forcing_96-q_scaled_forcing_96to64' "$i"
-        launch_separate_job "direct128" "$net_arch" 'q_128' '128' 'q_total_forcing_128' "$i"
-        launch_separate_job "direct96" "$net_arch" 'q_96' '96' 'q_total_forcing_96' "$i"
-
+        for scale in "${direct_scales[@]}"; do
+            launch_separate_job "direct${scale}" "$net_arch" "q_${scale}" "${scale}" "q_total_forcing_${scale}" "$i"
+        done
     done
 done
 
@@ -178,8 +231,8 @@ function abbrev_arch() {
     fi
 }
 
-for small_size in 64 96 128; do
-    for big_size in 64 96 128; do
+for small_size in $SCALES; do
+    for big_size in $SCALES; do
         if (( small_size >= big_size )); then
             continue
         fi
