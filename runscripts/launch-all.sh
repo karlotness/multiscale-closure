@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Set to 'true' or 'false'
 readonly DRY_RUN='true'
+readonly LAUNCH_NON_CASCADED='false'
 readonly SCALES='128 96 64 48'
 readonly NUM_REPEATS='3'
 readonly LAUNCH_TIME="$(date '+%Y%m%d-%H%M%S')"
@@ -139,6 +140,11 @@ for net_arch in 'gz-fcnn-v1' 'gz-fcnn-v1-medium'; do
         done
     done
 done
+
+
+if [[ "$LAUNCH_NON_CASCADED" != 'true' ]]; then
+    exit 0
+fi
 
 
 declare -A sep_train_ids
