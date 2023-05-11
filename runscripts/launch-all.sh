@@ -5,7 +5,7 @@ set -euo pipefail
 readonly DRY_RUN='true'
 readonly LAUNCH_NON_CASCADED='false'
 readonly SCALES='128 96 64 48'
-readonly NUM_REPEATS='3'
+readonly NUM_REPEATS='1'
 readonly LAUNCH_TIME="$(date '+%Y%m%d-%H%M%S')"
 readonly OUT_DIR="${SCRATCH}/closure/run_outputs/run-all-nowarmup-${LAUNCH_TIME}/"
 
