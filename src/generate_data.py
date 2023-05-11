@@ -41,6 +41,7 @@ subparsers = parser.add_subparsers(help="Choice of system to generate", dest="sy
 parser_qg = subparsers.add_parser("qg", help="Generate training data like PyQG")
 parser_qg.add_argument("seed", type=int, help="RNG seed, must be unique for unique trajectory")
 parser_qg.add_argument("--dt", type=float, default=3600.0, help="Time step size")
+parser_qg.add_argument("--twarmup", type=float, default=0.0, help="Time at which we should start saving steps")
 parser_qg.add_argument("--tmax", type=float, default=311040000.0, help="End time for the model")
 parser_qg.add_argument("--big_size", type=int, default=256, help="Scale of large model")
 parser_qg.add_argument("--small_size", type=int, nargs="+", default=[128, 96, 64], help="Scale of small model")
@@ -91,7 +92,9 @@ class CoarseTrajResult:
     q_total_forcings: dict[int, jax.Array]
 
 
-def make_generate_coarse_traj(big_model, small_sizes, coarse_op_cls, num_steps, subsample):
+def make_generate_coarse_traj(big_model, small_sizes, coarse_op_cls, num_warmup_steps, num_steps, subsample):
+    if num_warmup_steps >= num_steps:
+        raise ValueError("warmup steps {num_warmup_steps} larger than total steps {num_steps}")
     coarse_ops = {}
     for size in set(small_sizes):
         size = operator.index(size)
@@ -114,6 +117,11 @@ def make_generate_coarse_traj(big_model, small_sizes, coarse_op_cls, num_steps, 
 
     def make_traj(big_initial_step):
 
+        def _step_until_warmup(carry, _x):
+            prev_big_state = carry
+            next_big_state = big_model.step_model(prev_big_state)
+            return next_big_state, None
+
         def _step_forward(carry, x):
             prev_big_state = carry
             # Produce new "main size" state for output
@@ -134,11 +142,21 @@ def make_generate_coarse_traj(big_model, small_sizes, coarse_op_cls, num_steps, 
                 },
             )
 
+        if num_warmup_steps > 0:
+            big_warmed_up_step, _ys = jax.lax.scan(
+                _step_until_warmup,
+                big_initial_step,
+                None,
+                length=num_warmup_steps,
+            )
+        else:
+            big_warmed_up_step = big_initial_step
+
         _carry, results = jax_utils.strided_scan(
             _step_forward,
-            big_initial_step,
+            big_warmed_up_step,
             None,
-            length=num_steps,
+            length=num_steps - num_warmup_steps,
             stride=subsample,
         )
         return results
@@ -161,7 +179,10 @@ def gen_qg(out_dir, args, base_logger):
         ),
         stepper=pyqg_jax.steppers.AB3Stepper(dt=args.dt),
     )
+    num_warmup_steps = math.ceil(args.twarmup / args.dt)
     num_steps = math.ceil(args.tmax / args.dt)
+    if num_warmup_steps >= num_steps:
+        logger.error("warmup steps %d larger than total steps %d", num_warmup_steps, num_steps)
     initial_state_fn = jax.jit(big_model.create_initial_state)
     op_name = args.coarse_op
     coarse_cls = coarsen.COARSEN_OPERATORS[op_name]
@@ -173,6 +194,7 @@ def gen_qg(out_dir, args, base_logger):
             big_model=big_model,
             small_sizes=small_sizes,
             coarse_op_cls=coarse_cls,
+            num_warmup_steps=num_warmup_steps,
             num_steps=num_steps,
             subsample=args.subsample,
         )
@@ -190,7 +212,7 @@ def gen_qg(out_dir, args, base_logger):
         for size in small_sizes
     }
     # Do computations
-    logger.info("Generating %d trajectories with %d steps (subsampled by a factor of %d to %d steps)", args.num_trajs, num_steps, args.subsample, num_steps // args.subsample)
+    logger.info("Generating %d trajectories with %d steps (subsampled by a factor of %d to %d steps)", args.num_trajs, num_steps - num_warmup_steps, args.subsample, (num_steps - num_warmup_steps) // args.subsample)
     # Create directory for this operator
     op_directory = out_dir / op_name
     op_directory.mkdir(exist_ok=True)
