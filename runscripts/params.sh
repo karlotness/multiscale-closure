@@ -1,5 +1,5 @@
 # Constants
-readonly DATA_SUBDIR='data-raw-coarsen'
+readonly DATA_SUBDIR='data-nowarmup'
 readonly COARSE_OP='op1'
 
 # Run parameters
