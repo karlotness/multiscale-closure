@@ -221,15 +221,8 @@ def filter_scan(f, init, xs, length=None, reverse=False, unroll=1):
     return final_carry, ys
 
 
-def _leaf_serializable(leaf):
-    if leaf.size == 1:
-        return leaf.item()
-    else:
-        return leaf.tolist()
-
-
 def make_json_serializable(pytree):
-    return jax.tree_util.tree_map(_leaf_serializable, pytree)
+    return jax.tree_util.tree_map(lambda leaf: leaf.item() if leaf.size == 1 else leaf.tolist(), pytree)
 
 
 
