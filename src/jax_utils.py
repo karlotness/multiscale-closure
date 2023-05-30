@@ -142,11 +142,9 @@ def chunked_vmap(fun, chunk_size):
         ret = jax.tree_util.tree_map(lambda arr: arr.reshape((-1, ) + arr.shape[2:]), ret)
         # Next, do the remainder if needed
         if remainder > 0:
-            ret = jnp.concatenate(
-                [
-                    ret,
-                    jax.vmap(fun)(*rem_args, **rem_kwargs),
-                ]
+            ret = jax.tree_util.tree_map(
+                lambda a, b: jnp.concatenate([a, b]),
+                ret, jax.vmap(fun)(*rem_args, **rem_kwargs),
             )
         return ret
 
