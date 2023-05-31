@@ -346,7 +346,7 @@ def nested_checkpoint_scan(f, init, xs, length, *, nested_lengths, scan_fn=jax.l
   """
   # Copyright 2022 Google LLC.
   # SPDX-License-Identifier: Apache-2.0
-  # THIS CODE BY shoyer on GITHUB: https://github.com/google/jax/issues/2139
+  # THIS CODE BY shoyer ON GITHUB: https://github.com/google/jax/issues/2139
   if length is not None and length != math.prod(nested_lengths):
     raise ValueError(f'inconsistent {length=} and {nested_lengths=}')
 
@@ -364,7 +364,7 @@ def _inner_nested_scan(f, init, xs, lengths, scan_fn, checkpoint_fn):
   """Recursively applied scan function."""
   # Copyright 2022 Google LLC.
   # SPDX-License-Identifier: Apache-2.0
-  # THIS CODE BY shoyer on GITHUB: https://github.com/google/jax/issues/2139
+  # THIS CODE BY shoyer ON GITHUB: https://github.com/google/jax/issues/2139
   if len(lengths) == 1:
     return scan_fn(f, init, xs, lengths[0])
 
