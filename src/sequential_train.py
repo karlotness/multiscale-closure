@@ -43,6 +43,7 @@ parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adab
 parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine"], help="What learning rate schedule")
 parser.add_argument("--normalization", type=str, default="none", choices=["none", "layer"], help="What type of normalization to apply in the network")
 parser.add_argument("--net_load_type", type=str, default="best_loss", help="Which saved weights to load for previous networks")
+parser.add_argument("--no_residual", action="store_false", dest="output_residuals", help="Set sequential networks to output non-residual values (they learn to combine the fields)")
 
 
 def load_prev_networks(base_dir, train_step, net_load_type, base_logger=None):
@@ -72,7 +73,7 @@ def load_prev_networks(base_dir, train_step, net_load_type, base_logger=None):
     return loaded_nets, loaded_net_data, loaded_net_info
 
 
-def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name, processing_scales, normalization, train_step):
+def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name, processing_scales, normalization, train_step, output_residuals=True):
     processing_scales = set(processing_scales)
 
     # Determine input and output channels
@@ -88,7 +89,10 @@ def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batc
             target_chan = f"q_total_forcing_{max(processing_scales)}"
         else:
             target_chan = f"q_scaled_forcing_{max(processing_scales)}to{big}"
-        out_channels = [f"residual:{target_chan}-q_scaled_forcing_{max(processing_scales)}to{small}"]
+        if output_residuals:
+            out_channels = [f"residual:{target_chan}-q_scaled_forcing_{max(processing_scales)}to{small}"]
+        else:
+            out_channels = [target_chan]
     else:
         raise ValueError(f"invalid train_step {train_step}")
     processing_size = determine_processing_size(input_channels=in_channels, output_channels=out_channels)
@@ -307,6 +311,7 @@ def main():
         processing_scales=processing_scales,
         normalization=args.normalization,
         train_step=args.train_step,
+        output_residuals=args.output_residuals,
     )
     logger.info("Input channels: %s", net_data.input_channels)
     logger.info("Output channels: %s", net_data.output_channels)
