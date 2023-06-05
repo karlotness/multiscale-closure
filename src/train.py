@@ -104,9 +104,7 @@ def determine_channel_size(chan):
 
 def determine_channel_layers(chan):
     """Determine the number of layers based on the channel name"""
-    if m := re.match(r"^q_total_forcing_\d+$", chan):
-        return 2
-    elif m := re.match(r"^q_\d+$", chan):
+    if re.match(r"^q_total_forcing_\d+$", chan) or re.match(r"^q_\d+$", chan):
         return 2
     elif m := re.match(r"^q_scaled_forcing_(?P<orig_size>\d+)to\d+$", chan):
         orig_size = int(m.group("orig_size"))
