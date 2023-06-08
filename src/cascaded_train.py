@@ -19,7 +19,7 @@ import numpy as np
 import equinox as eqx
 import optax
 from methods import ARCHITECTURES
-from train import determine_processing_size, load_model_params, make_basic_coarsener, determine_output_size, make_chunk_from_batch, determine_required_fields, save_network, make_non_residual_chunk_from_batch, remove_residual_from_output_chunk
+from train import determine_processing_size, load_model_params, make_basic_coarsener, determine_output_size, make_chunk_from_batch, determine_required_fields, save_network, make_non_residual_chunk_from_batch, remove_residual_from_output_chunk, determine_channel_layers
 from systems.qg import diagnostics as qg_spec_diag
 from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader
 import jax_utils
@@ -54,10 +54,18 @@ def name_remove_residual(channel):
 
 def split_chunk_into_channels(channels, chunk):
     standard_channels = sorted(set(channels))
-    return {
+    channel_sizes = [determine_channel_layers(chan) for chan in standard_channels]
+    if sum(channel_sizes) != chunk.shape[-3]:
+        raise ValueError(
+            f"input chunk has too few channels to split. found {chunk.shape[-3]}, but need {sum(channel_sizes)}"
+        )
+    ret = {
         chan: arr for chan, arr
-        in zip(standard_channels, jnp.split(chunk, len(standard_channels), axis=-3), strict=True)
+        in zip(standard_channels, jnp.split(chunk, np.cumsum(channel_sizes)[:-1], axis=-3), strict=True)
     }
+    assert all(ret[chan].shape[-3] == spec_size
+               for chan, spec_size in zip(standard_channels, channel_sizes, strict=True))
+    return ret
 
 
 @dataclasses.dataclass
