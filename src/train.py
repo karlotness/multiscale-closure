@@ -178,6 +178,11 @@ class ModelParams:
 
 
 def load_model_params(train_path):
+    train_path = pathlib.Path(train_path)
+    if not train_path.exists() and train_path.is_relative_to("/scratch"):
+        # Fix train data paths when loading Greene paths on Flatiron systems
+        train_path = pathlib.Path(os.environ["SCRATCH"]) / train_path.relative_to(train_path.parents[-3])
+    # Continue with loading params
     qg_models = {}
     with h5py.File(train_path, "r") as data_file:
         coarse_op_name = data_file["params"]["coarsen_op"].asstr()[()]
