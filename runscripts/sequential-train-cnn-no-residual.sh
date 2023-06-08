@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=sequential-train-cnn-no-residual
-#SBATCH --time=24:00:00
+#SBATCH --time=36:00:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=25GB
 #SBATCH --gres=gpu:1
