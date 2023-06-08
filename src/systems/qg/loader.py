@@ -3,6 +3,7 @@ import dataclasses
 import logging
 import queue
 import operator
+import contextlib
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -268,27 +269,21 @@ class ThreadedPreShuffledSnapshotLoader:
             return
         self._stop_event.set()
         # Stop the chunk load thread first
-        try:
+        with contextlib.suppress(queue.Empty):
             while True:
                 # Clear its queue
                 self._chunk_load_queue.get_nowait()
-        except queue.Empty:
-            pass
         self._chunk_load_thread.join()
         # Now that it is stopped, clear the queue again and place a None
         # This will ensure the batch thread exits if it hasn't already
-        try:
+        with contextlib.suppress(queue.Empty):
             while True:
                 self._chunk_load_queue.get_nowait()
-        except queue.Empty:
-            pass
         self._chunk_load_queue.put(None)
         # Next, stop the batch thread
-        try:
+        with contextlib.suppress(queue.Empty):
             while True:
                 self._batch_queue.get_nowait()
-        except queue.Empty:
-            pass
         # Join the second thread
         self._batch_thread.join()
 
