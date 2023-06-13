@@ -174,9 +174,10 @@ class ThreadedPreShuffledSnapshotLoader:
             with h5py.File(file_path, "r") as in_file:
                 dataset = in_file["shuffled"]
                 num_steps = dataset.shape[0]
+                chunk_size = min(chunk_size, num_steps)
                 valid_range = num_steps - chunk_size
                 while not stop_event.is_set():
-                    start = int(rng.integers(valid_range, dtype=np.uint64).item())
+                    start = int(rng.integers(valid_range, dtype=np.uint64, endpoint=True).item())
                     end = start + chunk_size
                     logger.debug("loading chunk from %d to %d", start, end)
                     chunk_load_queue.put(
