@@ -2,6 +2,10 @@
 readonly DATA_SUBDIR='data-nowarmup'
 readonly COARSE_OP='op1'
 
+if [[ ! -v SCRATCH ]]; then
+   export SCRATCH="/mnt/ceph/users/$USER"
+fi
+
 # Run parameters
 readonly SINGULARITY_CONTAINER="${SCRATCH}/closure/closure.sif"
 readonly ORIGIN_REPO_DIR="${HOME}/repos/closure.git"
