@@ -13,10 +13,6 @@ fi
 
 readonly NET_DIR="$1"
 
-# Begin execution
-module purge
-module load git/2.31.0
-
 # Make Bash more strict
 shopt -s failglob
 set -euo pipefail

@@ -21,10 +21,6 @@ readonly INPUT_CHANNELS="$3"
 readonly PROC_SIZE="$4"
 readonly OUTPUT_CHANNELS="$5"
 
-# Begin execution
-module purge
-module load git/2.31.0
-
 # Make Bash more strict
 shopt -s failglob
 set -euo pipefail

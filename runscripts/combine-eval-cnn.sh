@@ -7,10 +7,6 @@
 #SBATCH --gpus=1
 #SBATCH --partition=gpu
 
-# Begin execution
-module purge
-module load git/2.31.0
-
 # Handle arguments
 if [[ $# -lt 3 ]]; then
     echo 'ERROR: Insufficient parameters for combined evaluation'

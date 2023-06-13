@@ -16,10 +16,6 @@ fi
 readonly EVAL_TYPE="$1"
 readonly NET_DIR="$2"
 
-# Begin execution
-module purge
-module load git/2.31.0
-
 # Make Bash more strict
 shopt -s failglob
 set -euo pipefail
