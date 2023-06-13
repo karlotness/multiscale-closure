@@ -48,7 +48,7 @@ parser.add_argument("--noise_specs", type=str, nargs="+", default=[], help="Chan
 parser.add_argument("--processing_size", type=int, default=None, help="Size to user for internal network evaluation (default: select automatically)")
 parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", choices=sorted(ARCHITECTURES.keys()), help="Network architecture to train")
 parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam", "adamw"], help="Which optimizer to use")
-parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine"], help="What learning rate schedule")
+parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine", "ross22"], help="What learning rate schedule")
 
 
 def save_network(output_name, output_dir, state, base_logger=None):
@@ -544,6 +544,18 @@ def init_network(architecture, lr, rng, input_channels, output_channels, process
                 },
             }
             schedule = optax.warmup_cosine_decay_schedule(**sched_args["args"])
+        case "ross22":
+            sched_args = {
+                "type": "ross22",
+                "args": {
+                    "init_value": lr,
+                    "boundaries_and_scales": {
+                        step: 0.1
+                        for step in [math.floor(s * steps_per_epoch * num_epochs) for s in (1/2, 3/4, 7/8)]
+                    },
+                },
+            }
+            schedule = optax.piecewise_constant_schedule(**sched_args["args"])
         case _:
             raise ValueError(f"unsupported schedule {schedule_type}")
 
@@ -559,7 +571,7 @@ def init_network(architecture, lr, rng, input_channels, output_channels, process
 
     optim = optax.apply_if_finite(
         optax.chain(
-            optax.clip(1.0),
+            optax.clip(1.0) if schedule_type not in {"ross22"} else optax.identity(),
             optim,
         ),
         100,
