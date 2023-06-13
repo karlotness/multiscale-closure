@@ -49,6 +49,7 @@ parser.add_argument("--processing_size", type=int, default=None, help="Size to u
 parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", choices=sorted(ARCHITECTURES.keys()), help="Network architecture to train")
 parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam", "adamw"], help="Which optimizer to use")
 parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine", "ross22"], help="What learning rate schedule")
+parser.add_argument("--loader_chunk_size", type=int, default=10850, help="Chunk size to read before batching")
 
 
 def save_network(output_name, output_dir, state, base_logger=None):
@@ -707,6 +708,7 @@ def main():
             ThreadedPreShuffledSnapshotLoader(
                 file_path=train_path,
                 batch_size=args.batch_size,
+                chunk_size=args.loader_chunk_size,
                 buffer_size=10,
                 seed=np_rng.integers(2**32).item(),
                 base_logger=logger.getChild("train_loader"),
