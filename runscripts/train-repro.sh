@@ -49,6 +49,7 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --lr=0.001 \
             --end_lr=0.001 \
             --lr_schedule=ross22 \
+            --network_zero_mean \
             --architecture='gz-fcnn-v1' \
             --input_channels "q_64" \
             --output_channels "q_total_forcing_64"
