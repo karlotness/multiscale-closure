@@ -49,6 +49,7 @@ parser.add_argument("--processing_size", type=int, default=None, help="Size to u
 parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", choices=sorted(ARCHITECTURES.keys()), help="Network architecture to train")
 parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam", "adamw"], help="Which optimizer to use")
 parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine", "ross22"], help="What learning rate schedule")
+parser.add_argument("--network_zero_mean", action="store_true", help="Constrain the network to zero mean outputs")
 parser.add_argument("--loader_chunk_size", type=int, default=10850, help="Chunk size to read before batching")
 
 
@@ -497,7 +498,7 @@ def do_validation(train_state, np_rng, loader, sample_stat_fn, num_samples, logg
     return stats_report
 
 
-def init_network(architecture, lr, rng, input_channels, output_channels, processing_size, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name):
+def init_network(architecture, lr, rng, input_channels, output_channels, processing_size, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name, arch_args={}):
 
     def leaf_map(leaf):
         if isinstance(leaf, jnp.ndarray):
@@ -514,6 +515,7 @@ def init_network(architecture, lr, rng, input_channels, output_channels, process
         "img_size": processing_size,
         "n_layers_in": n_layers_in,
         "n_layers_out": n_layers_out,
+        **arch_args,
     }
     net_cls = ARCHITECTURES[architecture]
     net = net_cls(
@@ -671,6 +673,9 @@ def main():
         end_lr=args.end_lr,
         schedule_type=args.lr_schedule,
         coarse_op_name=coarse_op_name,
+        arch_args={
+            "zero_mean": args.network_zero_mean,
+        },
     )
     # Store network info
     with utils.rename_save_file(weights_dir / "network_info.json", "w", encoding="utf8") as net_info_file:
