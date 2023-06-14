@@ -211,6 +211,7 @@ class ThreadedPreShuffledSnapshotLoader:
                 else:
                     # This must be q
                     q = np.concatenate(field_stack, axis=0)
+                field_stack.clear()
             return SnapshotStates(
                 q=q,
                 q_total_forcings=q_total_forcings,
