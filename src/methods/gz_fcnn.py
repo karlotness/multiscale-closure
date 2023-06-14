@@ -121,7 +121,7 @@ class BaseGZFCNN(eqx.Module):
         return res
 
 
-def GZFCNN(img_size, n_layers_in, n_layers_out, padding="circular", normalization=None, *, key):
+def GZFCNN(img_size, n_layers_in, n_layers_out, padding="circular", normalization=None, zero_mean=False, *, key):
     return BaseGZFCNN(
         img_size=img_size,
         n_layers_in=n_layers_in,
@@ -129,11 +129,12 @@ def GZFCNN(img_size, n_layers_in, n_layers_out, padding="circular", normalizatio
         padding=padding,
         arch_size="small",
         normalization=normalization,
+        zero_mean=zero_mean,
         key=key,
     )
 
 
-def LargeGZFCNN(img_size, n_layers_in, n_layers_out, padding="circular", normalization=None, *, key):
+def LargeGZFCNN(img_size, n_layers_in, n_layers_out, padding="circular", normalization=None, zero_mean=False, *, key):
     return BaseGZFCNN(
         img_size=img_size,
         n_layers_in=n_layers_in,
@@ -141,11 +142,12 @@ def LargeGZFCNN(img_size, n_layers_in, n_layers_out, padding="circular", normali
         padding=padding,
         arch_size="large",
         normalization=normalization,
+        zero_mean=zero_mean,
         key=key,
     )
 
 
-def MediumGZFCNN(img_size, n_layers_in, n_layers_out, padding="circular", normalization=None, *, key):
+def MediumGZFCNN(img_size, n_layers_in, n_layers_out, padding="circular", normalization=None, zero_mean=False, *, key):
     return BaseGZFCNN(
         img_size=img_size,
         n_layers_in=n_layers_in,
@@ -153,5 +155,6 @@ def MediumGZFCNN(img_size, n_layers_in, n_layers_out, padding="circular", normal
         padding=padding,
         arch_size="medium",
         normalization=normalization,
+        zero_mean=zero_mean,
         key=key,
     )
