@@ -3,7 +3,7 @@
 #SBATCH --job-name=train-repro-moredata
 #SBATCH --time=3:00:00
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=11GB
+#SBATCH --mem=25GB
 #SBATCH --gpus=1
 #SBATCH --partition=gpu
 
