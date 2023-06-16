@@ -422,6 +422,8 @@ def main():
                         plt.savefig(var_pdf_fig, format="png", facecolor="white", dpi=150, bbox_inches="tight")
                         plt.clf()
 
+    logger.info("Finished evaluation")
+
 
 if __name__ == "__main__":
     main()
