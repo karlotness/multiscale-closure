@@ -411,7 +411,7 @@ def main():
                 for level in range(2):
                     logger.info("PDF variable %s level %d", var, level)
                     var_func = jax.jit(make_pdf_var(var, level, loaded_nets[0].model_params.qg_models[small_size]))
-                    with utils.rename_save_file(out_dir / f"varpdf_{var}_traj{traj:05}_dt{dt_name_slug}.png", "wb") as var_pdf_fig:
+                    with utils.rename_save_file(out_dir / f"varpdf_{var}_traj{traj:05}_lev{level}_dt{dt_name_slug}.png", "wb") as var_pdf_fig:
                         for label, rollout in net_rollouts:
                             pdf_points, pdf_density = var_func(rollout)
                             plt.semilogy(pdf_points, pdf_density, label=label, **get_net_style(label))
