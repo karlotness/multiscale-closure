@@ -33,6 +33,7 @@ class PartialState:
     tc: jnp.ndarray
     ablevel: jnp.ndarray
     q_total_forcings: dict[int, jnp.ndarray]
+    sys_params: dict[str, object] = dataclasses.field(default_factory=dict)
 
 
 def qg_model_from_hdf5(file_path, model="small"):
@@ -85,8 +86,11 @@ class SimpleQGLoader:
         if end is not None:
             end = operator.index(end)
         slicer = slice(start, end)
+        idx_start, idx_stop, _ = slicer.indices(self.num_steps)
+        num_steps = idx_stop - idx_start
         result_fields = {k: None for k in ("q", "dqhdt_seq", "t", "tc", "ablevel")}
         result_fields["q_total_forcings"] = {}
+        result_fields["sys_params"] = {}
         for field in self._core_fields:
             result_fields[field] = getattr(self._core_traj_data, field)[slicer]
         for field in self._non_core_fields:
@@ -94,6 +98,13 @@ class SimpleQGLoader:
                 # Handle forcings specially
                 size = int(field[len("q_total_forcing_"):])
                 result_fields["q_total_forcings"][size] = self._trajs_group[f"traj{traj:05d}_{field}"][slicer]
+            elif field in {"rek", "delta", "beta"}:
+                # This is a system parameter field
+                result_fields["sys_params"][field] = np.full(
+                    shape=(num_steps, 1, 1, 1),
+                    fill_value=self._trajs_group[f"traj{traj:05d}_sysparams"][field][()].item(),
+                    dtype=np.float32
+                )
             else:
                 result_fields[field if field != "dqhdt" else "dqhdt_seq"] = jax.device_put(
                     self._trajs_group[f"traj{traj:05d}_{field}"][slicer]
@@ -104,8 +115,9 @@ class SimpleQGLoader:
 @kernel.register_dataclass_pytree
 @dataclasses.dataclass
 class SnapshotStates:
-    q: jnp.ndarray
-    q_total_forcings: dict[int, jnp.ndarray]
+    q: jnp.ndarray = None
+    q_total_forcings: dict[int, jnp.ndarray] = dataclasses.field(default_factory=dict)
+    sys_params: dict[str, object] = dataclasses.field(default_factory=dict)
 
 
 class ThreadedPreShuffledSnapshotLoader:
@@ -123,8 +135,8 @@ class ThreadedPreShuffledSnapshotLoader:
             base_logger = logging.getLogger("preshuffle_loader")
         # Note: Loads only q and q_total_forcing
         self.fields = sorted(set(fields))
-        if not all(f.startswith("q_total_forcing_") or f == "q" for f in self.fields):
-            raise ValueError("invalid field, can only load q and q_total_forcing")
+        if not all(f.startswith("q_total_forcing_") or f in {"q", "rek", "delta", "beta"} for f in self.fields):
+            raise ValueError("invalid field, can only load q, q_total_forcing, and system parameters")
         if seed is None:
             seed = random.SystemRandom().randint(0, 2**32)
         # Create queues
@@ -167,7 +179,14 @@ class ThreadedPreShuffledSnapshotLoader:
         def load_chunk(dataset, start, end):
             chunk = dataset[start:end]
             rng.shuffle(chunk, axis=0)
-            return tuple(chunk[field].copy() for field in fields)
+            return tuple(
+                (
+                    chunk[field].copy().astype(np.float32)
+                    if field in {"rek", "delta", "beta"}
+                    else chunk[field].copy()
+                )
+                for field in fields
+            )
 
         try:
             rng = np.random.default_rng(seed=seed)
@@ -205,9 +224,13 @@ class ThreadedPreShuffledSnapshotLoader:
         def build_snapshot_states(fields, construct_batch):
             q = None
             q_total_forcings = {}
+            sys_params = {}
             for field, field_stack in zip(fields, construct_batch, strict=True):
                 if field.startswith("q_total_forcing_"):
                     q_total_forcings[int(field[len_q_total_forcing:])] = np.concatenate(field_stack, axis=0)
+                elif field in {"rek", "delta", "beta"}:
+                    # This is a system parameter field
+                    sys_params[field] = np.concatenate(field_stack, axis=0)
                 else:
                     # This must be q
                     q = np.concatenate(field_stack, axis=0)
@@ -215,6 +238,7 @@ class ThreadedPreShuffledSnapshotLoader:
             return SnapshotStates(
                 q=q,
                 q_total_forcings=q_total_forcings,
+                sys_params=sys_params,
             )
 
         try:
