@@ -230,6 +230,7 @@ def gen_qg(out_dir, args, base_logger):
         param_group["small_model"] = h5py.SoftLink(f"/params/small_model_{main_small_size}")
         param_group.create_dataset("dt", data=args.dt)
         param_group.create_dataset("coarsen_op", data=op_name)
+        param_group.create_dataset("subsample", data=args.subsample)
         out_file.flush()
         # Generate trajectories
         compound_dtype = None
