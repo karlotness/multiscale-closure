@@ -49,6 +49,7 @@ parser_qg.add_argument("--subsample", type=int, default=1, help="Stride used to 
 parser_qg.add_argument("--num_trajs", type=int, default=1, help="Number of trajectories to generate")
 parser_qg.add_argument("--config", type=str, default="eddy", help="Eddy or jet configuration", choices=sorted(CONFIG_VARS.keys()))
 parser_qg.add_argument("--coarse_op", type=str, default="op1", help="Which coarsening operators to apply", choices=sorted(coarsen.COARSEN_OPERATORS.keys()))
+parser_qg.add_argument("--max_gen_tries", type=int, default=5, help="Number of retries to generate a trajectory")
 
 
 def make_coarsen_to_size(coarse_op, big_model, small_nx):
@@ -236,9 +237,18 @@ def gen_qg(out_dir, args, base_logger):
         compound_dtype = None
         out_file.create_group("trajs")
         for traj_num in range(args.num_trajs):
-            rng, rng_ctr = jax.random.split(rng_ctr, 2)
             logger.info("Starting trajectory %d", traj_num)
-            result = traj_gen_func(initial_state_fn(rng))
+            for generation_trial in range(arg.max_gen_tries):
+                logger.info("Generation attempt %d of %d", generation_trial + 1, arg.max_gen_tries)
+                rng, rng_ctr = jax.random.split(rng_ctr, 2)
+                result = traj_gen_func(initial_state_fn(rng))
+                if jnp.all(jnp.isfinite(result.q)) and jnp.all(jnp.isfinite(result.dqhdt)):
+                    # Successfully generated trajectory
+                    break
+                logger.warning("Generation attempt %d produced NaN", generation_trial + 1)
+            else:
+                logger.error("Exhausted all %d attempts for trajectory %d, failing", args.max_gen_tries, traj_num)
+                raise RuntimeError(f"Exhausted all attempts when generating trajectory {traj_num}")
             logger.info("Finished generating trajectory %d", traj_num)
             if traj_num == 0:
                 # First trajectory, store t, tc, ablevel
