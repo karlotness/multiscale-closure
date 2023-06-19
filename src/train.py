@@ -70,8 +70,8 @@ def determine_required_fields(channels):
     for chan in channels:
         if re.match(r"^q_total_forcing_\d+$", chan):
             loader_chans.add(chan)
-        elif re.match(r"^q_\d+$", chan):
-            loader_chans.add("q")
+        elif m := re.match(r"^(?P<chan>q|rek|delta|beta)_\d+$", chan):
+            loader_chans.add(m.group("chan"))
         elif m := re.match(r"^q_scaled_forcing_(?P<orig_size>\d+)to\d+$", chan):
             orig_size = m.group("orig_size")
             loader_chans.update(determine_required_fields([f"q_total_forcing_{orig_size}"]))
@@ -87,13 +87,9 @@ def determine_required_fields(channels):
 
 def determine_channel_size(chan):
     """Determine the final scaled size of the channel from its name"""
-    if m := re.match(r"^q_total_forcing_(?P<size>\d+)$", chan):
+    if m := re.match(r"^(q_total_forcing|q|rek|delta|beta)_(?P<size>\d+)$", chan):
         return int(m.group("size"))
-    elif m := re.match(r"^q_(?P<size>\d+)$", chan):
-        return int(m.group("size"))
-    elif m := re.match(r"^q_scaled_forcing_\d+to(?P<size>\d+)$", chan):
-        return int(m.group("size"))
-    elif m := re.match(r"^q_scaled_\d+to(?P<size>\d+)$", chan):
+    elif m := re.match(r"^(q_scaled_forcing|q_scaled)_\d+to(?P<size>\d+)$", chan):
         return int(m.group("size"))
     elif m := re.match(r"^residual:(?P<chan1>[^-]+)-(?P<chan2>[^-]+)$", chan):
         return max(
@@ -106,10 +102,10 @@ def determine_channel_size(chan):
 
 def determine_channel_layers(chan):
     """Determine the number of layers based on the channel name"""
-    if m := re.match(r"^q_total_forcing_\d+$", chan):
+    if re.match(r"^(q|q_total_forcing)_\d+$", chan):
         return 2
-    elif m := re.match(r"^q_\d+$", chan):
-        return 2
+    elif re.match(r"^(rek|delta|beta)_\d+$", chan):
+        return 1
     elif m := re.match(r"^q_scaled_forcing_(?P<orig_size>\d+)to\d+$", chan):
         orig_size = int(m.group("orig_size"))
         return determine_channel_layers(f"q_total_forcing_{orig_size}")
@@ -263,6 +259,13 @@ def make_channel_from_batch(channel, batch, model_params, alt_source=None):
             )
         )(make_channel_from_batch(m.group("chan2"), batch, model_params, alt_source=alt_source))
         return chan1 - chan2
+    # System parameters
+    elif m := re.match(r"^(?P<chan>rek|delta|beta)_\d+$", channel):
+        data = batch.sys_params[m.group("chan")]
+        size = determine_channel_size(channel)
+        assert data.shape[-3:] == (determine_channel_layers(channel), 1, 1)
+        tile_shape = ((1, ) * (data.ndim - 2)) + (size, size)
+        return jnp.tile(data, tile_shape)
     else:
         raise ValueError(f"unsupported channel {channel}")
 
@@ -315,6 +318,7 @@ def make_chunk_from_batch(channels, batch, model_params, processing_size, alt_so
         else:
             key = None
         data = make_noisy_channel_from_batch(channel, batch, model_params, alt_source=alt_source, noise_var=noise_var, key=key)
+        assert channel not in {"rek", "beta", "delta"} or data.shape[-1] == processing_size
         stacked_channels.append(
             jax.vmap(make_basic_coarsener(data.shape[-1], processing_size, model_params))(data)
         )
@@ -337,6 +341,7 @@ def make_non_residual_chunk_from_batch(channels, batch, model_params, processing
         else:
             # Normal processing
             data = make_channel_from_batch(channel, batch, model_params, alt_source=alt_source)
+            assert channel not in {"rek", "beta", "delta"} or data.shape[-1] == processing_size
             stacked_channels.append(
                 jax.vmap(make_basic_coarsener(data.shape[-1], processing_size, model_params))(data)
             )
