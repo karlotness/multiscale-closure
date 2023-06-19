@@ -15,6 +15,7 @@ from systems.qg import coarsen, compute_stats
 from systems.qg import utils as qg_utils
 import jax_utils
 import pyqg_jax
+import itertools
 
 
 CONFIG_VARS = {
@@ -47,7 +48,7 @@ parser_qg.add_argument("--big_size", type=int, default=256, help="Scale of large
 parser_qg.add_argument("--small_size", type=int, nargs="+", default=[128, 96, 64], help="Scale of small model")
 parser_qg.add_argument("--subsample", type=int, default=1, help="Stride used to select how many generated steps to keep")
 parser_qg.add_argument("--num_trajs", type=int, default=1, help="Number of trajectories to generate")
-parser_qg.add_argument("--config", type=str, default="eddy", help="Eddy or jet configuration", choices=sorted(CONFIG_VARS.keys()))
+parser_qg.add_argument("--config", type=str, default="eddy", help="Eddy or jet configuration")
 parser_qg.add_argument("--coarse_op", type=str, default="op1", help="Which coarsening operators to apply", choices=sorted(coarsen.COARSEN_OPERATORS.keys()))
 parser_qg.add_argument("--max_gen_tries", type=int, default=5, help="Number of retries to generate a trajectory")
 
@@ -97,6 +98,7 @@ def make_generate_coarse_traj(big_model, small_sizes, coarse_op_cls, num_warmup_
     if num_warmup_steps >= num_steps:
         raise ValueError("warmup steps {num_warmup_steps} larger than total steps {num_steps}")
     coarse_ops = {}
+    base_big_model = big_model
     for size in set(small_sizes):
         size = operator.index(size)
         if size > big_model.model.nx:
@@ -116,7 +118,14 @@ def make_generate_coarse_traj(big_model, small_sizes, coarse_op_cls, num_warmup_
         coarse_ops[size] = op
     size_main_states = max(map(operator.index, small_sizes))
 
-    def make_traj(big_initial_step):
+    def make_traj(big_initial_step, sys_params):
+
+        model_args = qg_utils.qg_model_to_args(base_big_model.model)
+        model_args.update(sys_params)
+        big_model = pyqg_jax.steppers.SteppedModel(
+            model=pyqg_jax.qg_model.QGModel(**model_args),
+            stepper=pyqg_jax.steppers.AB3Stepper(dt=base_big_model.stepper.dt),
+        )
 
         def _step_until_warmup(carry, _x):
             prev_big_state = carry
@@ -165,6 +174,31 @@ def make_generate_coarse_traj(big_model, small_sizes, coarse_op_cls, num_warmup_
     return make_traj
 
 
+def make_parameter_sampler(args_config, np_rng):
+    if args_config == "eddy":
+        return itertools.repeat(CONFIG_VARS["eddy"])
+    elif args_config == "jet":
+        return itertools.repeat(CONFIG_VARS["jet"])
+    elif args_config.startswith("rand-eddy-to-jet-"):
+        assert CONFIG_VARS["eddy"].keys() == CONFIG_VARS["jet"].keys()
+        frac = float(args_config[len("rand-eddy-to-jet-"):])
+        assert 0 <= frac <= 1
+
+        def sample_rand_eddy_jet(np_rng, frac):
+            while True:
+                res = {}
+                for k, eddy_endpoint in CONFIG_VARS["eddy"].items():
+                    jet_endpoint = CONFIG_VARS["jet"][k]
+                    interpolated_endpoint = eddy_endpoint + (jet_endpoint - eddy_endpoint) * frac
+                    rand = np_rng.random()
+                    res[k] = float((1 - rand) * eddy_endpoint + rand * interpolated_endpoint)
+                yield res
+
+        return sample_rand_eddy_jet(np_rng, frac)
+    else:
+        raise ValueError(f"invalid configuration type {args_config}")
+
+
 def gen_qg(out_dir, args, base_logger):
     out_dir = pathlib.Path(out_dir)
     logger = base_logger.getChild("qg")
@@ -176,7 +210,6 @@ def gen_qg(out_dir, args, base_logger):
         model=pyqg_jax.qg_model.QGModel(
             nx=args.big_size,
             ny=args.big_size,
-            **CONFIG_VARS[args.config],
         ),
         stepper=pyqg_jax.steppers.AB3Stepper(dt=args.dt),
     )
@@ -189,6 +222,7 @@ def gen_qg(out_dir, args, base_logger):
     coarse_cls = coarsen.COARSEN_OPERATORS[op_name]
     # Set up data generator
     rng_ctr = jax.random.PRNGKey(seed=args.seed)
+    np_rng = np.random.default_rng(args.seed)
     # Create trajectory generation function
     traj_gen_func = jax.jit(
         make_generate_coarse_traj(
@@ -236,12 +270,12 @@ def gen_qg(out_dir, args, base_logger):
         # Generate trajectories
         compound_dtype = None
         out_file.create_group("trajs")
-        for traj_num in range(args.num_trajs):
+        for traj_num, sys_params in zip(range(args.num_trajs), make_parameter_sampler(args.config, np_rng)):
             logger.info("Starting trajectory %d", traj_num)
-            for generation_trial in range(arg.max_gen_tries):
-                logger.info("Generation attempt %d of %d", generation_trial + 1, arg.max_gen_tries)
+            for generation_trial in range(args.max_gen_tries):
+                logger.info("Generation attempt %d of %d", generation_trial + 1, args.max_gen_tries)
                 rng, rng_ctr = jax.random.split(rng_ctr, 2)
-                result = traj_gen_func(initial_state_fn(rng))
+                result = traj_gen_func(initial_state_fn(rng), sys_params)
                 if jnp.all(jnp.isfinite(result.q)) and jnp.all(jnp.isfinite(result.dqhdt)):
                     # Successfully generated trajectory
                     break
@@ -266,6 +300,11 @@ def gen_qg(out_dir, args, base_logger):
                 forcing_dataset = out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q_total_forcing_{size}", data=np.asarray(result.q_total_forcings[size]))
                 out_file.flush()
             out_file["trajs"][f"traj{traj_num:05d}_q_total_forcing"] = h5py.SoftLink(f"/trajs/traj{traj_num:05d}_q_total_forcing_{main_small_size}")
+            out_file.flush()
+            # Store trajectory system parameters
+            traj_sys_param_group = out_file["trajs"].create_group(f"traj{traj_num:05d}_sysparams")
+            for param_k, param_v in sys_params.items():
+                traj_sys_param_group.create_dataset(param_k, data=param_v)
             out_file.flush()
             logger.info("Finished storing trajectory %d", traj_num)
             # Keep only q and forcings and discard the rest
