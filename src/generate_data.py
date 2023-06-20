@@ -207,6 +207,21 @@ def make_parameter_sampler(args_config, np_rng):
                 yield res
 
         return sample_rand_eddy_jet(np_rng, frac)
+    elif args_config.startswith("rand-1d-eddy-to-jet-"):
+        assert CONFIG_VARS["eddy"].keys() == CONFIG_VARS["jet"].keys()
+        frac = float(args_config[len("rand-1d-eddy-to-jet-"):])
+        assert 0 <= frac <= 1
+
+        def sample_rand_1d_eddy_jet(np_rng, frac):
+            while True:
+                res = {}
+                for k, eddy_endpoint in CONFIG_VARS["eddy"].items():
+                    jet_endpoint = CONFIG_VARS["jet"][k]
+                    rand = np_rng.random() * frac
+                    res[k] = float((1 - rand) * eddy_endpoint + rand * jet_endpoint)
+                yield res
+
+        return sample_rand_1d_eddy_jet(np_rng, frac)
     else:
         raise ValueError(f"invalid configuration type {args_config}")
 
