@@ -16,6 +16,8 @@ from systems.qg import utils as qg_utils
 import jax_utils
 import pyqg_jax
 import itertools
+import collections
+import re
 
 
 CONFIG_VARS = {
@@ -50,7 +52,11 @@ parser_qg.add_argument("--subsample", type=int, default=1, help="Stride used to 
 parser_qg.add_argument("--num_trajs", type=int, default=1, help="Number of trajectories to generate")
 parser_qg.add_argument("--config", type=str, default="eddy", help="Eddy or jet configuration")
 parser_qg.add_argument("--coarse_op", type=str, default="op1", help="Which coarsening operators to apply", choices=sorted(coarsen.COARSEN_OPERATORS.keys()))
-parser_qg.add_argument("--max_gen_tries", type=int, default=5, help="Number of retries to generate a trajectory")
+parser_qg.add_argument("--max_gen_tries", type=int, default=10, help="Number of retries to generate a trajectory")
+parser_qg.add_argument("--traj_slice", type=str, default=None, help="Which subset of trajectories to generate")
+
+# Combine QG slice options
+parser_combine_qg_slice = subparsers.add_parser("combine_qg_slice", help="Combine slices of QG data")
 
 
 def make_coarsen_to_size(coarse_op, big_model, small_nx):
@@ -81,6 +87,12 @@ def as_chunk_host_iter(source_arr, dtype, chunk_size=1000):
     if remainder != 0:
         yield np.asarray(source_arr[-remainder:]).astype(dtype)
 
+
+def rng_yielder(rng_ctr):
+
+    while True:
+        rng, rng_ctr = jax.random.split(rng_ctr, 2)
+        yield rng
 
 
 @jax_utils.register_pytree_dataclass
@@ -199,6 +211,96 @@ def make_parameter_sampler(args_config, np_rng):
         raise ValueError(f"invalid configuration type {args_config}")
 
 
+def combine_qg_slice(out_dir, args, base_logger):
+    out_dir = pathlib.Path(out_dir)
+    logger = base_logger.getChild("combine_qg_slice")
+    # Locate data slice files
+    slice_files = list(out_dir.glob("data-slice*.hdf5"))
+    if not slice_files:
+        logger.error("No slice files found")
+        raise ValueError("No slice files found")
+    logger.info("Located %d dataset slice files", len(slice_files))
+    with h5py.File(out_dir / "data.hdf5", "w", libver="latest") as out_file:
+        for slice_file in slice_files:
+            logger.info("Processing slice file %s", slice_file)
+            with h5py.File(slice_file, "r") as in_file:
+                # Copy parameters if not present
+                if "params" not in out_file:
+                    in_file.copy(source=in_file["/params"], dest=out_file["/"], shallow=False, expand_soft=True, expand_external=True, expand_refs=True, without_attrs=False)
+                # Copy trajectories
+                if "trajs" not in out_file:
+                    out_file.create_group("trajs")
+                for k, v in in_file["trajs"].items():
+                    logger.info("Copying trajectory data %s", k)
+                    in_file.copy(source=v, dest=out_file["/trajs"], shallow=False, expand_soft=True, expand_external=True, expand_refs=True, without_attrs=False)
+        # Need to compute statistics over the new dataset
+        # Determine small_sizes
+        logger.info("Recomputing statistics")
+        small_sizes = set()
+        op_name = out_file["params"]["coarsen_op"].asstr()[()]
+        logger.info("Coarsening operator %s", op_name)
+        for k in out_file["params"].keys():
+            if m := re.match(r"^small_model_(?P<size>\d+)$", k):
+                small_sizes.add(int(m.group("size")))
+        main_small_size = max(small_sizes)
+        logger.info("Main small size %d", main_small_size)
+        coarse_cls = coarsen.COARSEN_OPERATORS[op_name]
+        # Prep stats computers
+        forcing_stats = {sz: compute_stats.QGStatAccumulator() for sz in small_sizes}
+        q_stats = {sz: compute_stats.QGStatAccumulator() for sz in small_sizes}
+        big_model = qg_utils.qg_model_from_param_json(out_file["params"]["big_model"].asstr()[()])
+        # Prep coarsen fns
+        coarsen_fns = {
+            size: jax.jit(
+                jax.vmap(
+                    make_coarsen_to_size(
+                        coarse_op=coarse_cls,
+                        big_model=coarse_cls(big_model=big_model, small_nx=main_small_size).small_model if main_small_size != big_model.nx else big_model,
+                        small_nx=size,
+                    ),
+                ),
+            )
+            for size in small_sizes
+        }
+        # Loop over all q and q_total_forcing values and compute stats
+        logger.info("Computing statistics for variables")
+        for k in out_file["trajs"].keys():
+            if m := re.match(r"^traj\d+_q_total_forcing_(?P<size>\d+)$", k):
+                logger.info("Processing forcing %s", k)
+                forcing_size = int(m.group("size"))
+                with contextlib.closing(as_chunk_host_iter(out_file["trajs"][k], dtype=np.float64, chunk_size=1000)) as batch_iter:
+                    for batch in batch_iter:
+                        forcing_stats[forcing_size].add_batch(batch)
+            elif re.match(r"^traj\d+_q$", k):
+                logger.info("Processing q %s", k)
+                # The q values require their own coarsening steps
+                with contextlib.closing(as_chunk_host_iter(out_file["trajs"][k], dtype=np.float64, chunk_size=1000)) as batch_iter:
+                    for batch in batch_iter:
+                        for size in small_sizes:
+                            q_stats[size].add_batch(coarsen_fns[size](batch))
+        # Store statistics
+        logger.info("Finalizing statistics")
+        stats_group = out_file.create_group("stats")
+        forcing_stats_group = stats_group.create_group("q_total_forcing")
+        for size in small_sizes:
+            stats = forcing_stats[size].finalize()
+            group = forcing_stats_group.create_group(f"{size}")
+            group.create_dataset("mean", data=stats.mean)
+            group.create_dataset("var", data=stats.var)
+            group.create_dataset("min", data=stats.min)
+            group.create_dataset("max", data=stats.max)
+        q_stats_group = stats_group.create_group("q")
+        for size in small_sizes:
+            stats = q_stats[size].finalize()
+            group = q_stats_group.create_group(f"{size}")
+            group.create_dataset("mean", data=stats.mean)
+            group.create_dataset("var", data=stats.var)
+            group.create_dataset("min", data=stats.min)
+            group.create_dataset("max", data=stats.max)
+        logger.info("Finished storing statistics")
+    logger.info("Finished merging data")
+
+
 def gen_qg(out_dir, args, base_logger):
     out_dir = pathlib.Path(out_dir)
     logger = base_logger.getChild("qg")
@@ -254,7 +356,19 @@ def gen_qg(out_dir, args, base_logger):
     # Prep stats computers
     forcing_stats = {sz: compute_stats.QGStatAccumulator() for sz in small_sizes}
     q_stats = {sz: compute_stats.QGStatAccumulator() for sz in small_sizes}
-    with h5py.File(op_directory / "data.hdf5", "w", libver="latest") as out_file:
+    if args.traj_slice is None:
+        out_file_name = "data.hdf5"
+        traj_slice_start = None
+        traj_slice_end = None
+    else:
+        slice_underscore = args.traj_slice.replace(":", "_")
+        out_file_name = f"data-slice{slice_underscore}.hdf5"
+        slice_parts = [int(p.strip()) if p.strip() else None for p in args.traj_slice.split(":")]
+        if len(slice_parts) != 2:
+            raise ValueError(f"invalid slice spec!")
+        traj_slice_start = slice_parts[0]
+        traj_slice_end = slice_parts[1]
+    with h5py.File(op_directory / out_file_name, "w", libver="latest") as out_file:
         # Store model parameters in each file
         param_group = out_file.create_group("params")
         param_group.create_dataset("big_model", data=qg_utils.qg_model_param_json(big_model.model))
@@ -270,7 +384,11 @@ def gen_qg(out_dir, args, base_logger):
         # Generate trajectories
         compound_dtype = None
         out_file.create_group("trajs")
-        for traj_num, sys_params in zip(range(args.num_trajs), make_parameter_sampler(args.config, np_rng)):
+        for traj_num, sys_params, rng_ctr in itertools.islice(
+                zip(range(args.num_trajs), make_parameter_sampler(args.config, np_rng), rng_yielder(rng_ctr)),
+                traj_slice_start,
+                traj_slice_end,
+        ):
             logger.info("Starting trajectory %d", traj_num)
             for generation_trial in range(args.max_gen_tries):
                 logger.info("Generation attempt %d of %d", generation_trial + 1, args.max_gen_tries)
@@ -374,6 +492,8 @@ if __name__ == "__main__":
     match args.system:
         case "qg":
             gen_qg(out_dir, args, logger)
+        case "combine_qg_slice":
+            combine_qg_slice(out_dir, args, logger)
         case _:
             raise ValueError(f"invalid system: {args.system}")
     logger.info("Finished generating data")
