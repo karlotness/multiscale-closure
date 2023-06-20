@@ -10,6 +10,7 @@ import itertools
 import pathlib
 import logging
 import sys
+import re
 import argparse
 import dataclasses
 import cascaded_eval
@@ -22,6 +23,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 
 DATA_SUBSAMPLE_FACTOR = 8
+SYS_INFO_CHANNELS = r"^(rek|beta|delta)_\d+$"
 
 parser = argparse.ArgumentParser(description="Compare offline and online metrics for individual networks vs ensemble")
 parser.add_argument("out_dir", type=str, help="Directory to store evaluation results")
@@ -296,10 +298,17 @@ def main():
         qg_model_args=qg_utils.qg_model_to_args(ensemble_loaded_network.model_params.qg_models[small_size]),
         dt=args.dt,
     )
+    null_net_info = loaded_nets[0].net_info.copy()
+    null_net_info["input_channels"] = list(filter(lambda c: not re.match(SYS_INFO_CHANNELS, c), loaded_nets[0].net_info["input_channels"]))
+    null_net_data = cascaded_eval.NetData(
+        input_channels=null_net_info["input_channels"],
+        output_channels=null_net_info["output_channels"],
+        processing_size=null_net_info["processing_size"],
+    )
     null_loaded_network = LoadedNetwork(
         net=lambda chunk: jnp.zeros_like(chunk),
-        net_info=loaded_nets[0].net_info,
-        net_data=loaded_nets[0].net_data,
+        net_info=null_net_info,
+        net_data=null_net_data,
         net_path="null net",
         model_params=loaded_nets[0].model_params,
     )
