@@ -477,7 +477,18 @@ if __name__ == "__main__":
     if out_dir.is_file():
         raise ValueError(f"Path must be a directory, not a file: {args.out_dir}")
     out_dir.mkdir(exist_ok=True)
-    utils.set_up_logging(level=args.log_level, out_file=out_dir/"run.log")
+    match args.system:
+        case "qg":
+            if args.traj_slice is not None:
+                slice_underscore = args.traj_slice.replace(":", "_")
+                log_name = f"run-slice{slice_underscore}.log"
+            else:
+                log_name = "run.log"
+        case "combine_qg_slice":
+            log_name = "run-combine.log"
+        case _:
+            log_name = "run.log"
+    utils.set_up_logging(level=args.log_level, out_file=out_dir / log_name)
     logger = logging.getLogger("generate_data")
     logger.info("Arguments: %s", vars(args))
     git_info = utils.get_git_info(base_logger=logger)
