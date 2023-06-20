@@ -14,11 +14,12 @@ import jax_utils
 
 def make_network_results_computer(nets, net_data, model_params):
 
-    def compute_results(q):
+    def compute_results(q, sys_params={}):
         q = jnp.expand_dims(q, 0)
+        sys_params = jax.tree_map(lambda a: jnp.expand_dims(a, 0), sys_params)
         # Scale to standard
         q = jax.vmap(model_params.scalers.q_scalers[q.shape[-1]].scale_to_standard)(q)
-        dummy_batch = SnapshotStates(q=None, q_total_forcings={})
+        dummy_batch = SnapshotStates(q=None, q_total_forcings={}, sys_params=sys_params)
         # Pre-populate alt_sources with input q value
         alt_sources = {
             f"q_{q.shape[-1]}": q,
@@ -57,8 +58,8 @@ def make_network_results_computer(nets, net_data, model_params):
 
 def make_forcing_computer(nets, net_data, model_params):
 
-    def compute_forcing(q):
-        results = make_network_results_computer(nets, net_data, model_params)(q)
+    def compute_forcing(q, sys_params={}):
+        results = make_network_results_computer(nets, net_data, model_params)(q, sys_params=sys_params)
         # Final step, extract the forcing from alt_sources
         out_val = jnp.expand_dims(results[f"q_total_forcing_{q.shape[-1]}"], 0)
         out_val = jax.vmap(model_params.scalers.q_total_forcing_scalers[out_val.shape[-1]].scale_from_standard)(out_val)
@@ -70,30 +71,38 @@ def make_forcing_computer(nets, net_data, model_params):
 def make_net_param_func(nets, net_data, model_params):
 
     @pyqg_jax.parameterizations.q_parameterization
-    def net_param_func(model_state, param_aux, model):
+    def net_param_func(model_state, param_aux, model, sys_params={}):
         compute_forcing_fn = make_forcing_computer(nets, net_data, model_params)
-        return compute_forcing_fn(model_state.q), None
+        return compute_forcing_fn(model_state.q, sys_params=sys_params), None
 
     return net_param_func
 
 
 def make_parameterized_stepped_model(nets, net_data, model_params, qg_model_args, dt):
-    model = pyqg_jax.steppers.SteppedModel(
-        pyqg_jax.parameterizations.ParameterizedModel(
-            pyqg_jax.qg_model.QGModel(
-                **qg_model_args,
-            ),
-            param_func=make_net_param_func(
-                nets=nets,
-                net_data=net_data,
-                model_params=model_params,
-            ),
-        ),
-        pyqg_jax.steppers.AB3Stepper(dt=dt),
-    )
 
     @functools.partial(jax.jit, static_argnums=(1, 2))
-    def model_stepper(initial_q, num_steps, subsampling=1):
+    def model_stepper(initial_q, num_steps, subsampling=1, sys_params={}):
+        assert all(v.ndim == 0 for v in sys_params.values())
+        new_model_params = qg_model_args.copy()
+        new_model_params.update(sys_params)
+        fixed_sys_params = {k: jnp.full((1, 1, 1), fill_value=v) for k, v in sys_params.items()}
+        model = pyqg_jax.steppers.SteppedModel(
+            pyqg_jax.parameterizations.ParameterizedModel(
+                pyqg_jax.qg_model.QGModel(
+                    **new_model_params,
+                ),
+                param_func=functools.partial(
+                    make_net_param_func(
+                        nets=nets,
+                        net_data=net_data,
+                        model_params=model_params,
+                    ),
+                    sys_params=fixed_sys_params,
+                )
+            ),
+            pyqg_jax.steppers.AB3Stepper(dt=dt),
+        )
+
         # Wrap in model states
         inner_state = model.model.model.create_initial_state(jax.random.PRNGKey(0))
         inner_state = inner_state.update(q=initial_q)

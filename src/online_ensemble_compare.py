@@ -351,7 +351,9 @@ def main():
         logger.info("Running online tests")
         for traj in range(data_loader.num_trajs):
             logger.info("Testing trajectory %d", traj)
-            data_q = data_loader.get_trajectory(traj).q
+            traj_data = data_loader.get_trajectory(traj)
+            data_q = traj_data.q
+            traj_sys_params = jax.tree_map(lambda d: d[0, 0, 0, 0], traj_data.sys_params)
             ref_subsample = math.ceil(args.rollout_subsample / (DATA_SUBSAMPLE_FACTOR * (args.dt / 3600.0)))
             num_steps = math.ceil(data_loader.num_steps * DATA_SUBSAMPLE_FACTOR / (args.dt / 3600.0))
             coarsener = make_basic_coarsener(data_q.shape[-1], small_size, loaded_nets[0].model_params)
@@ -367,7 +369,7 @@ def main():
                 ]
             ):
                 logger.info("Rolling out with network %s", loaded_net.net_path)
-                rolled_out_traj = net_rollout_fn(coarsener(data_q[0]), num_steps=num_steps, subsampling=args.rollout_subsample)
+                rolled_out_traj = net_rollout_fn(coarsener(data_q[0]), num_steps=num_steps, subsampling=args.rollout_subsample, sys_params=traj_sys_params)
                 net_rollouts.append((net_label, rolled_out_traj.q))
             # PRODUCE PLOTS
             # 1. KE OVER TIME
