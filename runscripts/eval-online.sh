@@ -42,5 +42,5 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             python "${CHECKOUT_DIR}/src/online_ensemble_compare.py" \
             --net_type="$NET_TYPE" \
             "$OUT_DIR" \
-            "${SCRATCH}/closure/data-rand-eddytojet/factor-${TRAIN_FACTOR_UNDERSCORE}/test/${COARSE_OP}/" \
+            "${SCRATCH}/closure/data-rand-1d-eddytojet/factor-${TRAIN_FACTOR_UNDERSCORE}/test/${COARSE_OP}/" \
             "${NET_DIRS[@]}"
