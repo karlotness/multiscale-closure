@@ -15,7 +15,7 @@ import dataclasses
 import cascaded_eval
 from cascaded_online_eval import make_parameterized_stepped_model
 from eval import load_network, make_network_evaluator
-from train import load_model_params, make_basic_coarsener
+from train import load_model_params, make_basic_coarsener, determine_required_fields
 from systems.qg import utils as qg_utils, loader, spectral
 import pyqg_jax
 import matplotlib.pyplot as plt
@@ -315,7 +315,9 @@ def main():
     dt_name_slug = str(int(args.dt))
     logger.info("Using time step dt=%f", args.dt)
     # Load data
-    with loader.SimpleQGLoader(eval_file, fields=["q", f"q_total_forcing_{small_size}"]) as data_loader:
+    required_fields = determine_required_fields(loaded_nets[0].net_data.input_channels)
+    required_fields.update(["q", f"q_total_forcing_{small_size}"])
+    with loader.SimpleQGLoader(eval_file, fields=required_fields) as data_loader:
         logger.info("Using data set with %d trajectories of %d steps", data_loader.num_trajs, data_loader.num_steps)
         # OFFLINE TESTS
         logger.info("Running offline tests")
