@@ -54,6 +54,7 @@ parser_qg.add_argument("--config", type=str, default="eddy", help="Eddy or jet c
 parser_qg.add_argument("--coarse_op", type=str, default="op1", help="Which coarsening operators to apply", choices=sorted(coarsen.COARSEN_OPERATORS.keys()))
 parser_qg.add_argument("--max_gen_tries", type=int, default=25, help="Number of retries to generate a trajectory")
 parser_qg.add_argument("--traj_slice", type=str, default=None, help="Which subset of trajectories to generate")
+parser_qg.add_argument("--precision", type=str, default="single", choices=["single", "double"], help="Precision to use when generating trajectories")
 
 # Combine QG slice options
 parser_combine_qg_slice = subparsers.add_parser("combine_qg_slice", help="Combine slices of QG data")
@@ -327,6 +328,7 @@ def gen_qg(out_dir, args, base_logger):
         model=pyqg_jax.qg_model.QGModel(
             nx=args.big_size,
             ny=args.big_size,
+            precision=pyqg_jax.state.Precision[args.precision.upper()],
         ),
         stepper=pyqg_jax.steppers.AB3Stepper(dt=args.dt),
     )
