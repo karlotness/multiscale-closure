@@ -216,7 +216,7 @@ def make_channel_from_batch(channel, batch, model_params, alt_source=None):
     if re.match(r"^q_total_forcing_\d+$", channel):
         return jax.vmap(model_params.scalers.q_total_forcing_scalers[end_size].scale_to_standard)(
             batch.q_total_forcings[end_size]
-        )
+        ).astype(jnp.float32)
     elif re.match(r"^q_\d+$", channel):
         # Need to scale q down to proper size
         q_size = batch.q.shape[-1]
@@ -232,7 +232,7 @@ def make_channel_from_batch(channel, batch, model_params, alt_source=None):
             )
         return jax.vmap(model_params.scalers.q_scalers[end_size].scale_to_standard)(
             jax.vmap(coarse_op.coarsen)(batch.q)
-        )
+        ).astype(jnp.float32)
     elif m := re.match(r"^q_scaled_forcing_(?P<orig_size>\d+)to\d+$", channel):
         orig_size = int(m.group("orig_size"))
         return jax.vmap(make_basic_coarsener(orig_size, end_size, model_params))(

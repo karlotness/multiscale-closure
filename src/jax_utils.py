@@ -10,18 +10,26 @@ import equinox as eqx
 @jax.tree_util.register_pytree_node_class
 class Scaler:
     def __init__(self, mean, var):
-        self.mean = jnp.expand_dims(jnp.asarray(mean, dtype=jnp.float32), (-1, -2))
-        self.var = jnp.expand_dims(jnp.asarray(var, dtype=jnp.float32), (-1, -2))
+        self.mean = jnp.expand_dims(jnp.asarray(mean), (-1, -2))
+        self.var = jnp.expand_dims(jnp.asarray(var), (-1, -2))
         self.std = jnp.sqrt(self.var)
 
     def scale_to_standard(self, a):
-        return (a - self.mean) / self.std
+        if a.dtype == jnp.dtype(jnp.float64):
+            dest_type = jnp.float64
+        else:
+            dest_type = jnp.float32
+        return (a - self.mean.astype(dest_type)) / self.std.astype(dest_type)
 
     def scale(self, a):
         return self.scale_to_standard(a)
 
     def scale_from_standard(self, a):
-        return (a * self.std) + self.mean
+        if a.dtype == jnp.dtype(jnp.float64):
+            dest_type = jnp.float64
+        else:
+            dest_type = jnp.float32
+        return (a * self.std.astype(dest_type)) + self.mean.astype(dest_type)
 
     def unscale(self, a):
         return self.scale_from_standard(a)
