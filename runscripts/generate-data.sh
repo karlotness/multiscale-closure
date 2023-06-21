@@ -23,28 +23,28 @@ for expansion_level in '0.8' '0.9'; do
 
     mkdir -p "${SCRATCH}/closure/${DATA_DIR}"
     # Train
-    TRAIN_OUT1=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/train/' qg 0 --config ${data_config} --num_trajs=275 --traj_slice '0:60' --coarse_op ${COARSEN_OP} --subsample 1000 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-train" --time="7:00:00" --cpus-per-task=1 --mem="20G" --gpus=1 --partition=gpu)
+    TRAIN_OUT1=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/train/' qg 0 --config ${data_config} --precision double --num_trajs=275 --traj_slice '0:60' --coarse_op ${COARSEN_OP} --subsample 1000 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-train" --time="7:00:00" --cpus-per-task=1 --mem="20G" --gpus=1 --partition=gpu)
     TRAIN_JOBID1=$(get_job_id "$TRAIN_OUT1")
     sleep 0.5
-    TRAIN_OUT2=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/train/' qg 0 --config ${data_config} --num_trajs=275 --traj_slice '60:120' --coarse_op ${COARSEN_OP} --subsample 1000 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-train" --time="7:00:00" --cpus-per-task=1 --mem="20G" --gpus=1 --partition=gpu)
+    TRAIN_OUT2=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/train/' qg 0 --config ${data_config} --precision double --num_trajs=275 --traj_slice '60:120' --coarse_op ${COARSEN_OP} --subsample 1000 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-train" --time="7:00:00" --cpus-per-task=1 --mem="20G" --gpus=1 --partition=gpu)
     TRAIN_JOBID2=$(get_job_id "$TRAIN_OUT2")
     sleep 0.5
-    TRAIN_OUT3=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/train/' qg 0 --config ${data_config} --num_trajs=275 --traj_slice '120:180' --coarse_op ${COARSEN_OP} --subsample 1000 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-train" --time="7:00:00" --cpus-per-task=1 --mem="20G" --gpus=1 --partition=gpu)
+    TRAIN_OUT3=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/train/' qg 0 --config ${data_config} --precision double --num_trajs=275 --traj_slice '120:180' --coarse_op ${COARSEN_OP} --subsample 1000 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-train" --time="7:00:00" --cpus-per-task=1 --mem="20G" --gpus=1 --partition=gpu)
     TRAIN_JOBID3=$(get_job_id "$TRAIN_OUT3")
     sleep 0.5
-    TRAIN_OUT4=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/train/' qg 0 --config ${data_config} --num_trajs=275 --traj_slice '180:240' --coarse_op ${COARSEN_OP} --subsample 1000 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-train" --time="7:00:00" --cpus-per-task=1 --mem="20G" --gpus=1 --partition=gpu)
+    TRAIN_OUT4=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/train/' qg 0 --config ${data_config} --precision double --num_trajs=275 --traj_slice '180:240' --coarse_op ${COARSEN_OP} --subsample 1000 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-train" --time="7:00:00" --cpus-per-task=1 --mem="20G" --gpus=1 --partition=gpu)
     TRAIN_JOBID4=$(get_job_id "$TRAIN_OUT4")
     sleep 0.5
-    TRAIN_OUT5=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/train/' qg 0 --config ${data_config} --num_trajs=275 --traj_slice '240:' --coarse_op ${COARSEN_OP} --subsample 1000 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-train" --time="7:00:00" --cpus-per-task=1 --mem="20G" --gpus=1 --partition=gpu)
+    TRAIN_OUT5=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/train/' qg 0 --config ${data_config} --precision double --num_trajs=275 --traj_slice '240:' --coarse_op ${COARSEN_OP} --subsample 1000 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-train" --time="7:00:00" --cpus-per-task=1 --mem="20G" --gpus=1 --partition=gpu)
     TRAIN_JOBID5=$(get_job_id "$TRAIN_OUT5")
     sleep 0.5
     TRAIN_OUT=$(sbatch --wrap="singularity exec '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/train/${COARSEN_OP}/' combine_qg_slice && rm ${SCRATCH}/closure/${DATA_DIR}/train/${COARSEN_OP}/data-slice*.hdf5" --job-name="qg-combine" --time="8:00:00" --cpus-per-task=2 --mem="20G" --dependency="afterok:$TRAIN_JOBID1:$TRAIN_JOBID2:$TRAIN_JOBID3:$TRAIN_JOBID4:$TRAIN_JOBID5" --kill-on-invalid-dep=yes)
     sleep 0.5
     # Val
-    VAL_OUT=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/val/' qg 1 --config ${data_config} --num_trajs=4 --coarse_op ${COARSEN_OP} --subsample 1000 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-val" --time="4:00:00" --cpus-per-task=1 --mem="15G" --gpus=1 --partition=gpu)
+    VAL_OUT=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/val/' qg 1 --config ${data_config} --precision double --num_trajs=4 --coarse_op ${COARSEN_OP} --subsample 1000 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-val" --time="4:00:00" --cpus-per-task=1 --mem="15G" --gpus=1 --partition=gpu)
     sleep 0.5
     # Test
-    TEST_OUT=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/test/' qg 2 --config ${data_config} --num_trajs=4 --coarse_op ${COARSEN_OP} --subsample 8 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-test" --time="4:00:00" --cpus-per-task=1 --mem="15G" --gpus=1 --partition=gpu)
+    TEST_OUT=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/test/' qg 2 --config ${data_config} --precision double --num_trajs=4 --coarse_op ${COARSEN_OP} --subsample 8 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-test" --time="4:00:00" --cpus-per-task=1 --mem="15G" --gpus=1 --partition=gpu)
     sleep 0.5
 
     TRAIN_JOBID=$(get_job_id "$TRAIN_OUT")
