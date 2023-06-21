@@ -52,7 +52,7 @@ parser_qg.add_argument("--subsample", type=int, default=1, help="Stride used to 
 parser_qg.add_argument("--num_trajs", type=int, default=1, help="Number of trajectories to generate")
 parser_qg.add_argument("--config", type=str, default="eddy", help="Eddy or jet configuration")
 parser_qg.add_argument("--coarse_op", type=str, default="op1", help="Which coarsening operators to apply", choices=sorted(coarsen.COARSEN_OPERATORS.keys()))
-parser_qg.add_argument("--max_gen_tries", type=int, default=10, help="Number of retries to generate a trajectory")
+parser_qg.add_argument("--max_gen_tries", type=int, default=25, help="Number of retries to generate a trajectory")
 parser_qg.add_argument("--traj_slice", type=str, default=None, help="Which subset of trajectories to generate")
 
 # Combine QG slice options
