@@ -4,7 +4,7 @@ set -euo pipefail
 # Set to 'true' or 'false'
 readonly DRY_RUN='true'
 readonly SCALES='64 48'
-readonly FACTORS='0.05 0.10 0.20 0.50 0.75'
+readonly FACTORS='1.0'
 readonly NUM_REPEATS='3'
 readonly LAUNCH_TIME="$(date '+%Y%m%d-%H%M%S')"
 readonly OUT_DIR="${SCRATCH}/closure/run_outputs/run-rand-eddytojet-${LAUNCH_TIME}"
