@@ -135,24 +135,24 @@ def make_generate_coarse_traj(big_model, small_sizes, coarse_op_cls, num_warmup_
 
         model_args = qg_utils.qg_model_to_args(base_big_model.model)
         model_args.update(sys_params)
-        big_model = pyqg_jax.steppers.SteppedModel(
+        step_big_model = pyqg_jax.steppers.SteppedModel(
             model=pyqg_jax.qg_model.QGModel(**model_args),
             stepper=pyqg_jax.steppers.AB3Stepper(dt=base_big_model.stepper.dt),
         )
 
         def _step_until_warmup(carry, _x):
             prev_big_state = carry
-            next_big_state = big_model.step_model(prev_big_state)
+            next_big_state = step_big_model.step_model(prev_big_state)
             return next_big_state, None
 
         def _step_forward(carry, x):
             prev_big_state = carry
             # Produce new "main size" state for output
             prev_small_q = coarse_ops[size_main_states].coarsen(prev_big_state.state.q)
-            prev_big_dqhdt = big_model.get_full_state(prev_big_state).dqhdt
+            prev_big_dqhdt = step_big_model.get_full_state(prev_big_state).dqhdt
             prev_small_dqhdt = coarse_ops[size_main_states].coarsen(prev_big_dqhdt)
             # Step the large model forward
-            next_big_state = big_model.step_model(prev_big_state)
+            next_big_state = step_big_model.step_model(prev_big_state)
             return next_big_state, CoarseTrajResult(
                 q=prev_small_q,
                 t=prev_big_state.t,
