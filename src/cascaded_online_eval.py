@@ -15,10 +15,12 @@ import jax_utils
 def make_network_results_computer(nets, net_data, model_params):
 
     def compute_results(q, sys_params={}):
+        q_was_double = (q.dtype == jnp.dtype(jnp.float64))
         q = jnp.expand_dims(q, 0)
         sys_params = jax.tree_map(lambda a: jnp.expand_dims(a, 0), sys_params)
         # Scale to standard
         q = jax.vmap(model_params.scalers.q_scalers[q.shape[-1]].scale_to_standard)(q)
+        q = q.astype(jnp.float32)
         dummy_batch = SnapshotStates(q=None, q_total_forcings={}, sys_params=sys_params)
         # Pre-populate alt_sources with input q value
         alt_sources = {
@@ -50,6 +52,9 @@ def make_network_results_computer(nets, net_data, model_params):
             )
             results.update({name_remove_residual(k): v for k, v in predictions.items()})
             alt_sources.update(results)
+        if q_was_double:
+            # Cast back up to float64 if q was double precision
+            results = {k: v.astype(jnp.float64) for k, v in results.items()}
         # Remove batch dimension from each result and return
         return {k: jnp.squeeze(v, 0) for k, v in results.items()}
 
