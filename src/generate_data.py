@@ -199,13 +199,22 @@ def make_parameter_sampler(args_config, np_rng):
 
         def sample_rand_eddy_jet(np_rng, frac):
             while True:
-                res = {}
-                for k, eddy_endpoint in CONFIG_VARS["eddy"].items():
-                    jet_endpoint = CONFIG_VARS["jet"][k]
-                    interpolated_endpoint = eddy_endpoint + (jet_endpoint - eddy_endpoint) * frac
-                    rand = np_rng.random()
-                    res[k] = float((1 - rand) * eddy_endpoint + rand * interpolated_endpoint)
-                yield res
+                # We interpolate three variables:
+                # 1. rek
+                # 2. beta
+                # 3. delta
+                # At high rek factors, beta and delta need to be closer together
+                # So we decay how far apart they are permitted to be as the factor rises
+                rek_factor = np_rng.random() * frac
+                delta_beta_max_radius = np.clip(1 / (1 + np.exp(12 * rek_factor**2 - 6)), 0, 1)
+                delta_factor = np_rng.random() * frac
+                min_beta = np.clip(delta_factor - delta_beta_max_radius, 0, frac)
+                max_beta = np.clip(delta_factor + delta_beta_max_radius, 0, frac)
+                beta_factor = min_beta + (max_beta - min_beta) * np_rng.random()
+                yield {
+                    var: float((1 - factor) * CONFIG_VARS["eddy"][var] + factor * CONFIG_VARS["jet"][var])
+                    for var, factor in [("rek", rek_factor), ("delta", delta_factor), ("beta", beta_factor)]
+                }
 
         return sample_rand_eddy_jet(np_rng, frac)
     elif args_config.startswith("rand-1d-eddy-to-jet-"):
