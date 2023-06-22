@@ -216,9 +216,9 @@ def make_parameter_sampler(args_config, np_rng):
         def sample_rand_1d_eddy_jet(np_rng, frac):
             while True:
                 res = {}
+                rand = np_rng.random() * frac
                 for k, eddy_endpoint in CONFIG_VARS["eddy"].items():
                     jet_endpoint = CONFIG_VARS["jet"][k]
-                    rand = np_rng.random() * frac
                     res[k] = float((1 - rand) * eddy_endpoint + rand * jet_endpoint)
                 yield res
 
