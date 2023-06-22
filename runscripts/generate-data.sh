@@ -16,10 +16,10 @@ export JAX_ENABLE_X64=True
 export JAX_DEFAULT_DTYPE_BITS=32
 readonly COARSEN_OP='op1'
 
-for expansion_level in '0.8' '0.9'; do
+for expansion_level in '1.0'; do
     level_underscore=$(echo "$expansion_level" | tr '.' '_')
-    DATA_DIR="data-rand-1d-eddytojet/factor-${level_underscore}"
-    data_config="rand-1d-eddy-to-jet-${expansion_level}"
+    DATA_DIR="data-rand-eddytojet/factor-${level_underscore}"
+    data_config="rand-eddy-to-jet-${expansion_level}"
 
     mkdir -p "${SCRATCH}/closure/${DATA_DIR}"
     # Train
@@ -44,7 +44,7 @@ for expansion_level in '0.8' '0.9'; do
     VAL_OUT=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/val/' qg 1 --config ${data_config} --precision double --num_trajs=4 --coarse_op ${COARSEN_OP} --subsample 1000 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-val" --time="4:00:00" --cpus-per-task=1 --mem="15G" --gpus=1 --partition=gpu)
     sleep 0.5
     # Test
-    TEST_OUT=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/test/' qg 2 --config ${data_config} --precision double --num_trajs=4 --coarse_op ${COARSEN_OP} --subsample 8 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-test" --time="4:00:00" --cpus-per-task=1 --mem="15G" --gpus=1 --partition=gpu)
+    TEST_OUT=$(sbatch --wrap="singularity exec --nv '${SCRATCH}/closure/closure.sif' python generate_data.py '${SCRATCH}/closure/${DATA_DIR}/test/' qg 2 --config ${data_config} --precision double --num_trajs=16 --coarse_op ${COARSEN_OP} --subsample 8 --small_size 64 48 --dt 3600.0 --tmax 470160000.0 --twarmup 155520000.0" --job-name="qg-gen-test" --time="4:00:00" --cpus-per-task=1 --mem="15G" --gpus=1 --partition=gpu)
     sleep 0.5
 
     TRAIN_JOBID=$(get_job_id "$TRAIN_OUT")
