@@ -33,7 +33,7 @@ git clone "$ORIGIN_REPO_DIR" "$CHECKOUT_DIR"
 export JAX_ENABLE_X64=True
 export JAX_DEFAULT_DTYPE_BITS=32
 singularity run --nv "$SINGULARITY_CONTAINER" \
-            python "${CHECKOUT_DIR}/src/eval.py" "$NET_DIR" "${SCRATCH}/closure/data-rand-1d-eddytojet/factor-${TRAIN_FACTOR_UNDERSCORE}/test/${COARSE_OP}/" "$EVAL_TYPE" \
+            python "${CHECKOUT_DIR}/src/eval.py" "$NET_DIR" "${SCRATCH}/closure/data-rand-eddytojet/factor-${TRAIN_FACTOR_UNDERSCORE}/test/${COARSE_OP}/" "$EVAL_TYPE" \
             --seed=0 \
             --sample_seed=0 \
             --num_samples=1024

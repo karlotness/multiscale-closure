@@ -7,7 +7,7 @@ readonly SCALES='64 48'
 readonly FACTORS='0.05 0.10 0.20 0.50 0.75'
 readonly NUM_REPEATS='3'
 readonly LAUNCH_TIME="$(date '+%Y%m%d-%H%M%S')"
-readonly OUT_DIR="${SCRATCH}/closure/run_outputs/run-rand-1d-eddytojet-${LAUNCH_TIME}"
+readonly OUT_DIR="${SCRATCH}/closure/run_outputs/run-rand-eddytojet-${LAUNCH_TIME}"
 
 if [[ "$DRY_RUN" != 'true' ]]; then
     mkdir -p "$OUT_DIR"

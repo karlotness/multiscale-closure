@@ -40,7 +40,7 @@ mkdir -p "$OUT_DIR"
 export JAX_ENABLE_X64=True
 export JAX_DEFAULT_DTYPE_BITS=32
 singularity run --nv "$SINGULARITY_CONTAINER" \
-            python "${CHECKOUT_DIR}/src/train.py" "$OUT_DIR" "${SCRATCH}/closure/data-rand-1d-eddytojet/factor-${TRAIN_FACTOR_UNDERSCORE}/train/${COARSE_OP}/" "${SCRATCH}/closure/data-rand-1d-eddytojet/factor-${TRAIN_FACTOR_UNDERSCORE}/val/${COARSE_OP}/" \
+            python "${CHECKOUT_DIR}/src/train.py" "$OUT_DIR" "${SCRATCH}/closure/data-rand-eddytojet/factor-${TRAIN_FACTOR_UNDERSCORE}/train/${COARSE_OP}/" "${SCRATCH}/closure/data-rand-eddytojet/factor-${TRAIN_FACTOR_UNDERSCORE}/val/${COARSE_OP}/" \
             --optimizer=adam \
             --batch_size=64 \
             --num_epochs=50 \
