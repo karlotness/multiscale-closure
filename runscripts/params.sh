@@ -13,6 +13,8 @@ function cleanup_jobtmp_dir() {
 }
 trap cleanup_jobtmp_dir EXIT
 
+export TMPDIR="$JOBTMP_DIR"
+
 # Run parameters
 readonly SINGULARITY_CONTAINER="${SCRATCH}/closure/closure.sif"
 readonly ORIGIN_REPO_DIR="${HOME}/repos/closure.git"
