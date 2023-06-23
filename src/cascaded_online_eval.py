@@ -85,9 +85,10 @@ def make_net_param_func(nets, net_data, model_params):
 
 def make_parameterized_stepped_model(nets, net_data, model_params, qg_model_args, dt):
 
-    @functools.partial(jax.jit, static_argnums=(1, 2))
-    def model_stepper(initial_q, num_steps, subsampling=1, sys_params={}):
+    @functools.partial(jax.jit, static_argnums=(1, 2, 4))
+    def model_stepper(initial_q, num_steps, subsampling=1, sys_params={}, skip_steps=0):
         assert all(v.ndim == 0 for v in sys_params.values())
+        assert num_steps > skip_steps
         new_model_params = qg_model_args.copy()
         new_model_params.update(sys_params)
         fixed_sys_params = {k: jnp.full((1, 1, 1), fill_value=v) for k, v in sys_params.items()}
@@ -120,11 +121,24 @@ def make_parameterized_stepped_model(nets, net_data, model_params, qg_model_args
             new_state = model.step_model(old_state)
             return new_state, old_state.state.model_state
 
+        def skip_states(carry, _x):
+            new_state, _y = step_state(carry, _x)
+            return new_state, None
+
+        # Skip the warmup steps, if any
+        if skip_steps > 0:
+            state, _states = jax.lax.scan(
+                skip_states,
+                state,
+                None,
+                length=skip_steps,
+            )
+
         _last_state, states = jax_utils.strided_scan(
             step_state,
             state,
             None,
-            length=num_steps,
+            length=num_steps - skip_steps,
             stride=subsampling,
         )
 

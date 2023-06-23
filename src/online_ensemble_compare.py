@@ -32,6 +32,7 @@ parser.add_argument("nets", type=str, nargs="+", help="Trained network directory
 parser.add_argument("--net_type", type=str, default="best_loss", help="Trained network directory")
 parser.add_argument("--dt", type=float, default=3600.0, help="Time step size")
 parser.add_argument("--rollout_subsample", type=int, default=DATA_SUBSAMPLE_FACTOR, help="Stride to use when rolling out simulations")
+parser.add_argument("--t_metric_start", type=float, default=155520000.0, help="Time at which we should start averaging")
 parser.add_argument("--log_level", type=str, help="Level for logger", default="info", choices=["debug", "info", "warning", "error", "critical"])
 
 LoadedNetwork = dataclasses.make_dataclass("LoadedNetwork", ["net", "net_info", "net_data", "net_path", "model_params"])
@@ -365,9 +366,10 @@ def main():
             traj_sys_params = jax.tree_map(lambda d: d[0, 0, 0, 0], traj_data.sys_params)
             ref_subsample = math.ceil(args.rollout_subsample / (DATA_SUBSAMPLE_FACTOR * (args.dt / 3600.0)))
             num_steps = math.ceil(data_loader.num_steps * DATA_SUBSAMPLE_FACTOR / (args.dt / 3600.0))
+            skip_steps = math.ceil(args.t_metric_start / args.dt)
             coarsener = make_basic_coarsener(data_q.shape[-1], small_size, loaded_nets[0].model_params)
             # Reference trajectory
-            ref_traj = jax.vmap(coarsener)(data_q[::ref_subsample])
+            ref_traj = jax.vmap(coarsener)(data_q[(skip_steps // DATA_SUBSAMPLE_FACTOR)::ref_subsample])
             # Roll out trajectories with network corrections
             net_rollouts = [("ref", ref_traj)]
             for (loaded_net, net_rollout_fn, net_label) in itertools.chain(
@@ -378,7 +380,7 @@ def main():
                 ]
             ):
                 logger.info("Rolling out with network %s", loaded_net.net_path)
-                rolled_out_traj = net_rollout_fn(coarsener(data_q[0]), num_steps=num_steps, subsampling=args.rollout_subsample, sys_params=traj_sys_params)
+                rolled_out_traj = net_rollout_fn(coarsener(data_q[0]), num_steps=num_steps, subsampling=args.rollout_subsample, sys_params=traj_sys_params, skip_steps=skip_steps)
                 net_rollouts.append((net_label, rolled_out_traj.q))
             # PRODUCE PLOTS
             # 1. KE OVER TIME
@@ -386,7 +388,7 @@ def main():
             with utils.rename_save_file(out_dir / f"ke_over_time_traj{traj:05}_dt{dt_name_slug}.png", "wb") as ke_plot_fig:
                 for label, rollout in net_rollouts:
                     kes = time_ke_computer(rollout)
-                    net_times = np.linspace(0, args.dt * data_loader.num_steps, kes.shape[0])
+                    net_times = np.linspace(args.t_metric_start, args.dt * data_loader.num_steps, kes.shape[0])
                     plt.plot(net_times, kes, **get_net_style(label), label=label)
                 plt.legend()
                 plt.grid(True)
