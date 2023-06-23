@@ -266,7 +266,7 @@ def main():
                     processing_size=net_info["processing_size"]
                 ),
                 net_path=net_path,
-                model_params=load_model_params(net_info["train_path"]),
+                model_params=load_model_params(net_info["train_path"], eval_path=eval_file),
             )
         )
     # Build parameterized models and ensemble

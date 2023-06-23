@@ -175,15 +175,22 @@ class ModelParams:
     scale_operator: str
 
 
-def load_model_params(train_path):
+def load_model_params(train_path, eval_path=None):
+    if eval_path is None:
+        eval_path = train_path
     train_path = pathlib.Path(train_path)
+    eval_path = pathlib.Path(eval_path)
     if not train_path.exists() and train_path.is_relative_to("/scratch"):
         # Fix train data paths when loading Greene paths on Flatiron systems
         train_path = pathlib.Path(os.environ["SCRATCH"]) / train_path.relative_to(train_path.parents[-3])
+    if not eval_path.exists() and eval_path.is_relative_to("/scratch"):
+        # Fix train data paths when loading Greene paths on Flatiron systems
+        eval_path = pathlib.Path(os.environ["SCRATCH"]) / eval_path.relative_to(eval_path.parents[-3])
     # Continue with loading params
-    qg_models = {}
     with h5py.File(train_path, "r") as data_file:
         coarse_op_name = data_file["params"]["coarsen_op"].asstr()[()]
+    qg_models = {}
+    with h5py.File(eval_path, "r") as data_file:
         for k in data_file["params"]:
             if m := re.match(r"^small_model_(?P<size>\d+)$", k):
                 qg_models[int(m.group("size"))] = qg_utils.qg_model_from_param_json(
