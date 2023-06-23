@@ -325,7 +325,7 @@ def main():
     logger.info("Using time step dt=%f", args.dt)
     # Load data
     required_fields = determine_required_fields(loaded_nets[0].net_data.input_channels)
-    required_fields.update(["q", f"q_total_forcing_{small_size}"])
+    required_fields.update(["q", f"q_total_forcing_{small_size}", "rek", "beta", "delta"])
     with loader.SimpleQGLoader(eval_file, fields=required_fields) as data_loader:
         logger.info("Using data set with %d trajectories of %d steps", data_loader.num_trajs, data_loader.num_steps)
         # OFFLINE TESTS
