@@ -9,6 +9,7 @@ matplotlib
 seaborn
 jupyterlab
 ipywidgets
+ipympl
 tqdm
 zarr
 h5py
