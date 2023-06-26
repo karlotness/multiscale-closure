@@ -12,15 +12,16 @@
 
 set -euo pipefail
 
-if [[ $# -lt 3 ]]; then
+if [[ $# -lt 4 ]]; then
     echo 'ERROR: Insufficient parameters for training'
-    echo 'Usage multi-train-cnn.sh OUT_DIR TRAIN_DIR VAL_DIR'
+    echo 'Usage multi-train-cnn.sh OUT_DIR TRAIN_DIR VAL_DIR SCALE'
     exit 1
 fi
 
 readonly OUT_DIR="$1"
 readonly TRAIN_DIR="$2"
 readonly VAL_DIR="$3"
+readonly SCALE="$4"
 
 # Make Bash more strict
 shopt -s failglob
@@ -53,5 +54,5 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --end_lr=0.001 \
             --lr_schedule=ross22 \
             --architecture='gz-fcnn-v1' \
-            --input_channels "q_64" "rek_64" "delta_64" "beta_64" \
-            --output_channels "q_total_forcing_64"
+            --input_channels "q_${SCALE}" "rek_${SCALE}" "delta_${SCALE}" "beta_${SCALE}" \
+            --output_channels "q_total_forcing_${SCALE}"

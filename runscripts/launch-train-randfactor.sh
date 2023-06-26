@@ -71,7 +71,7 @@ for train_set_base in "${TRAIN_SETS[@]}"; do
                 net_out_dirs+=("$run_out_dir")
 
                 # Launch network training
-                run_out=$(echoing_sbatch train-randfactor.sh "$run_out_dir" "$train_dir" "$val_dir")
+                run_out=$(echoing_sbatch train-randfactor.sh "$run_out_dir" "$train_dir" "$val_dir" "$scale")
                 run_jobid="$(get_job_id "$run_out")"
                 echo "Submitted job ${run_jobid}"
                 online_eval_deps="${online_eval_deps}:${run_jobid}"
