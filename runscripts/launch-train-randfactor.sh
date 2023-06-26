@@ -3,11 +3,19 @@ set -euo pipefail
 
 # Set to 'true' or 'false'
 readonly DRY_RUN='true'
-readonly SCALES='64 48'
-readonly FACTORS='1.0'
+readonly SCALES=('64')
 readonly NUM_REPEATS='3'
 readonly LAUNCH_TIME="$(date '+%Y%m%d-%H%M%S')"
-readonly OUT_DIR="${SCRATCH}/closure/run_outputs/run-rand-eddytojet-${LAUNCH_TIME}"
+readonly TRAIN_SETS=(
+    "${SCRATCH}/closure/data-rand-eddytojet/factor-1_0"
+    "${SCRATCH}/closure/data-eddyonly"
+)
+readonly TRAIN_SET_NAMES=(
+    "rand-eddytojet"
+    "eddyonly"
+)
+readonly SUBSET_SIZES=('2' '10' '25' '50' '100')
+readonly OUT_DIR="${SCRATCH}/closure/run_outputs/run-varied-data-size-${LAUNCH_TIME}"
 
 if [[ "$DRY_RUN" != 'true' ]]; then
     mkdir -p "$OUT_DIR"
@@ -41,35 +49,41 @@ function get_job_id() {
     fi
 }
 
-for factor in $FACTORS; do
-    factor_underscore=$(echo "$factor" | tr '.' '_')
-    factor_out_dir="${OUT_DIR}/factor${factor_underscore}"
-    if [[ "$DRY_RUN" != 'true' ]]; then
-        mkdir -p "$factor_out_dir"
-    fi
-    for scale in $SCALES; do
-        scale_out_dir="${factor_out_dir}/scale${scale}"
-        if [[ "$DRY_RUN" != 'true' ]]; then
-            mkdir -p "$scale_out_dir"
-        fi
-        declare -a net_out_dirs=()
-        online_eval_deps=""
-        for i in $(seq 0 "$(( NUM_REPEATS - 1 ))"); do
-            run_out_dir="${scale_out_dir}/net${i}"
-            net_out_dirs+=("$run_out_dir")
+seti=0
+for train_set_base in "${TRAIN_SETS[@]}"; do
+    train_set_name="${TRAIN_SET_NAMES[$seti]}"
+    for subset_size in "${SUBSET_SIZES[@]}"; do
+        train_dir="${train_set_base}/train${subset_size}"
+        val_dir="${train_set_base}/val"
+        test_dir="${train_set_base}/test"
 
-            # Launch network training
-            run_out=$(echoing_sbatch train-randfactor.sh "${run_out_dir}/" "$factor")
-            run_jobid="$(get_job_id "$run_out")"
-            echo "Submitted job ${run_jobid}"
-            online_eval_deps="${online_eval_deps}:${run_jobid}"
+        for scale in "${SCALES[@]}"; do
+            scale_out_dir="${OUT_DIR}/${train_set_name}/size${subset_size}-scale${scale}"
+            if [[ "$DRY_RUN" != 'true' ]]; then
+                mkdir -p "$scale_out_dir"
+            else
+                echo "mkdir -p $scale_out_dir"
+            fi
+            declare -a net_out_dirs=()
+            online_eval_deps=""
+            for i in $(seq 0 "$(( NUM_REPEATS - 1 ))" ); do
+                run_out_dir="$scale_out_dir/net${i}"
+                net_out_dirs+=("$run_out_dir")
 
-            # Launch single network evaluation
-            echoing_sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes cnn-net-eval-randfactor.sh best_loss "${run_out_dir}/" "$factor"
-            echoing_sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes cnn-net-eval-randfactor.sh interval "${run_out_dir}/" "$factor"
+                # Launch network training
+                run_out=$(echoing_sbatch train-randfactor.sh "$run_out_dir" "$train_dir" "$val_dir")
+                run_jobid="$(get_job_id "$run_out")"
+                echo "Submitted job ${run_jobid}"
+                online_eval_deps="${online_eval_deps}:${run_jobid}"
+
+                # Launch single network evaluation
+                echoing_sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes cnn-net-eval-randfactor.sh best_loss "${run_out_dir}/" "$test_dir"
+                echoing_sbatch --dependency="afterok:${run_jobid}" --kill-on-invalid-dep=yes cnn-net-eval-randfactor.sh interval "${run_out_dir}/" "$test_dir"
+            done
+
+            # Launch online evaluation
+            echoing_sbatch --dependency="afterok${online_eval_deps}" --kill-on-invalid-dep=yes eval-online.sh "${scale_out_dir}/ensemble-eval" "$test_dir" 'best_loss' "${net_out_dirs[@]}"
         done
-
-        # Launch online evaluation
-        echoing_sbatch --dependency="afterok${online_eval_deps}" --kill-on-invalid-dep=yes eval-online.sh "${scale_out_dir}/ensemble-eval" "$factor" 'best_loss' "${net_out_dirs[@]}"
     done
+    seti=$(( seti + 1 ))
 done

@@ -12,15 +12,15 @@
 
 set -euo pipefail
 
-if [[ $# -lt 2 ]]; then
+if [[ $# -lt 3 ]]; then
     echo 'ERROR: Insufficient parameters for training'
-    echo 'Usage multi-train-cnn.sh OUT_DIR TRAIN_FACTOR'
+    echo 'Usage multi-train-cnn.sh OUT_DIR TRAIN_DIR VAL_DIR'
     exit 1
 fi
 
 readonly OUT_DIR="$1"
-readonly TRAIN_FACTOR="$2"
-readonly TRAIN_FACTOR_UNDERSCORE=$(echo "$TRAIN_FACTOR" | tr '.' '_')
+readonly TRAIN_DIR="$2"
+readonly VAL_DIR="$3"
 
 # Make Bash more strict
 shopt -s failglob
@@ -40,7 +40,7 @@ mkdir -p "$OUT_DIR"
 export JAX_ENABLE_X64=True
 export JAX_DEFAULT_DTYPE_BITS=32
 singularity run --nv "$SINGULARITY_CONTAINER" \
-            python "${CHECKOUT_DIR}/src/train.py" "$OUT_DIR" "${SCRATCH}/closure/data-rand-eddytojet/factor-${TRAIN_FACTOR_UNDERSCORE}/train/${COARSE_OP}/" "${SCRATCH}/closure/data-rand-eddytojet/factor-${TRAIN_FACTOR_UNDERSCORE}/val/${COARSE_OP}/" \
+            python "${CHECKOUT_DIR}/src/train.py" "$OUT_DIR" "${TRAIN_DIR}/${COARSE_OP}/" "${VAL_DIR}/${COARSE_OP}/" \
             --optimizer=adam \
             --batch_size=64 \
             --num_epochs=50 \
