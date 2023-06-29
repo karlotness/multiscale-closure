@@ -191,6 +191,8 @@ def load_model_params(train_path, eval_path=None):
         coarse_op_name = data_file["params"]["coarsen_op"].asstr()[()]
     qg_models = {}
     with h5py.File(eval_path, "r") as data_file:
+        # Load the big model
+        qg_models["big_model"] = qg_utils.qg_model_from_param_json(data_file["params"]["big_model"].asstr()[()])
         for k in data_file["params"]:
             if m := re.match(r"^small_model_(?P<size>\d+)$", k):
                 qg_models[int(m.group("size"))] = qg_utils.qg_model_from_param_json(
