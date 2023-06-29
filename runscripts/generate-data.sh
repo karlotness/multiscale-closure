@@ -18,8 +18,8 @@ readonly COARSEN_OP='op1'
 
 for expansion_level in '1.0'; do
     level_underscore=$(echo "$expansion_level" | tr '.' '_')
-    DATA_DIR='data-eddyonly'
-    data_config='eddy'
+    DATA_DIR='data-jetonly'
+    data_config='jet'
 
     mkdir -p "${SCRATCH}/closure/${DATA_DIR}"
     # Train

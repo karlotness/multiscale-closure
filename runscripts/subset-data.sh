@@ -1,7 +1,7 @@
 #! /bin/bash
 set -euxo pipefail
 
-for base_data_path in "${SCRATCH}/closure/data-rand-eddytojet/factor-1_0" "${SCRATCH}/closure/data-eddyonly"; do
+for base_data_path in "${SCRATCH}/closure/data-jetonly"; do
     for set_size in 2 10 25 50 100; do
         out_name="train${set_size}"
         mkdir -p "${base_data_path}/${out_name}/op1"

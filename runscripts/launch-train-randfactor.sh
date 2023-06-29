@@ -3,16 +3,14 @@ set -euo pipefail
 
 # Set to 'true' or 'false'
 readonly DRY_RUN='true'
-readonly SCALES=('64')
+readonly SCALES=('48' '64')
 readonly NUM_REPEATS='3'
 readonly LAUNCH_TIME="$(date '+%Y%m%d-%H%M%S')"
 readonly TRAIN_SETS=(
-    "${SCRATCH}/closure/data-rand-eddytojet/factor-1_0"
-    "${SCRATCH}/closure/data-eddyonly"
+    "${SCRATCH}/closure/data-jetonly"
 )
 readonly TRAIN_SET_NAMES=(
-    "rand-eddytojet"
-    "eddyonly"
+    "jetonly"
 )
 readonly SUBSET_SIZES=('2' '10' '25' '50' '100')
 readonly OUT_DIR="${SCRATCH}/closure/run_outputs/run-varied-data-size-${LAUNCH_TIME}"
