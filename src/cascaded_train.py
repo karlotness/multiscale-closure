@@ -60,6 +60,7 @@ def split_chunk_into_channels(channels, chunk):
     }
 
 
+@jax_utils.register_pytree_dataclass
 @dataclasses.dataclass
 class NetData:
     input_channels: set[str]
