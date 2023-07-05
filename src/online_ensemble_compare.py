@@ -35,7 +35,9 @@ parser.add_argument("--rollout_subsample", type=int, default=DATA_SUBSAMPLE_FACT
 parser.add_argument("--t_metric_start", type=float, default=155520000.0, help="Time at which we should start averaging")
 parser.add_argument("--log_level", type=str, help="Level for logger", default="info", choices=["debug", "info", "warning", "error", "critical"])
 
-LoadedNetwork = dataclasses.make_dataclass("LoadedNetwork", ["net", "net_info", "net_data", "net_path", "model_params"])
+LoadedNetwork = jax_utils.register_pytree_dataclass(
+    dataclasses.make_dataclass("LoadedNetwork", ["net", "net_info", "net_data", "net_path", "model_params"])
+)
 
 def make_ensemble_net(nets):
     def ensemble_net(chunk):
