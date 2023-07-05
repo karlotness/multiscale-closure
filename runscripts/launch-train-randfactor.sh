@@ -16,7 +16,7 @@ readonly TRAIN_SET_NAMES=(
     "eddyonly"
     "jetonly"
 )
-readonly SUBSET_SIZES=('2' '10' '25' '50' '100')
+readonly SUBSET_SIZES=('25' '50' '100')
 readonly OUT_DIR="${SCRATCH}/closure/run_outputs/run-varied-data-size-${LAUNCH_TIME}"
 
 if [[ "$DRY_RUN" != 'true' ]]; then
