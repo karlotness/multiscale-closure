@@ -69,7 +69,7 @@ LoadedNetwork = dataclasses.make_dataclass("LoadedNetwork", ["net", "net_info", 
 
 
 NET_PATHS = [
-    f"/mnt/ceph/users/kotness/closure/run_outputs/run-varied-data-size-20230626-174855/{RUN_TYPE}/size{SIZE:d}-scale{SCALE:d}/net{net_id}"
+    f"/mnt/ceph/users/kotness/closure/run_outputs/run-varied-data-size-20230629-173901/{RUN_TYPE}/size{SIZE:d}-scale{SCALE:d}/net{net_id}"
     for net_id in range(3)
 ]
 loaded_nets = []
@@ -228,7 +228,7 @@ step_fn = jax.jit(make_step_traj(loaded_nets, subsample=20))
 # In[11]:
 
 
-eddy_trajs = {k: np.asarray(v) for k, v in step_fn(jax.random.PRNGKey(100), CONFIG_VARS["eddy"]).items()}
+eddy_trajs = {k: np.asarray(v) for k, v in step_fn(jax.random.PRNGKey(100), CONFIG_VARS["jet"]).items()}
 
 
 # In[12]:
