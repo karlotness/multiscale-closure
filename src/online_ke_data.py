@@ -55,7 +55,7 @@ def main():
     # Make our directory, but only the last two levels (we don't want to create net_dir if it doesn't exist)
     out_path.parent.mkdir(exist_ok=True, parents=True)
     # Set up logging
-    utils.set_up_logging(level=args.log_level, out_file=out_path.parent/"run.log")
+    utils.set_up_logging(level=args.log_level, out_file=out_path.parent/f"run-{out_path.stem}.log")
     logger = logging.getLogger("main")
     logger.info("Arguments: %s", vars(args))
     git_info = utils.get_git_info(base_logger=logger)
@@ -121,11 +121,12 @@ def main():
             ref_traj = jax.vmap(coarsener)(data_q[(skip_steps // DATA_SUBSAMPLE_FACTOR)::ref_subsample])
             logger.info("Finished coarsening reference trajectory %d", traj)
             traj_group = out_file.create_group(f"traj{traj:05d}")
+            path_group = traj_group.create_group("paths")
             net_times = np.linspace(args.t_metric_start, args.dt * data_loader.num_steps, ref_traj.shape[0])
             traj_group.create_dataset("times", data=net_times)
             # Roll out trajectories with network corrections
-            for label, rollout_q in itertools.chain(
-                    [("reference", ref_traj)],
+            for label, rollout_q, net_path in itertools.chain(
+                    [("reference", ref_traj, None)],
                     (
                         (
                             str(ln.net_path.relative_to(ln.net_path.parent.parent.parent)).replace("/", "-"),
@@ -138,12 +139,15 @@ def main():
                                 subsampling=args.rollout_subsample,
                                 skip_steps=skip_steps,
                             ),
+                            ln.net_path
                         )
                         for ln in loaded_nets
                     )
             ):
                 kes = time_ke_computer(rollout_q)
                 traj_group.create_dataset(label, data=kes)
+                if net_path is not None:
+                    path_group.create_dataset(label, data=str(net_path))
                 out_file.flush()
                 logger.info("Computed KE traj %d and net %s", traj, label)
 
