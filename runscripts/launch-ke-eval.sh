@@ -11,6 +11,7 @@ readonly SCALES=('64' '48')
 readonly RUN_DIRS=(
     "${SCRATCH}/closure/run_outputs/run-varied-data-size-20230626-174855"
     "${SCRATCH}/closure/run_outputs/run-varied-data-size-20230629-173901"
+    "${SCRATCH}/closure/run_outputs/run-varied-data-size-20230705-174209"
 )
 readonly RUN_TYPES=(
     'jetonly'
