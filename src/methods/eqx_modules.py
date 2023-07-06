@@ -1,5 +1,7 @@
 from collections.abc import Sequence
 import typing
+import types
+import functools
 from jaxtyping import Array
 import jax.numpy as jnp
 import equinox as eqx
@@ -54,6 +56,34 @@ def _do_pad_input(x, pad_type, strides, filter_sizes, n_spatial_dims, dilations)
         x,
         pad_amts,
         mode="wrap" if pad_type == "circular" else "constant",
+    )
+
+
+@functools.cache
+def make_circular_pooling(pool_cls):
+
+    def cls_init(self, *args, **kwargs):
+        return pool_cls.__init__(self, *args, **kwargs, padding=0)
+
+    def cls_call(self, x, *, key=None):
+        padded = _do_pad_input(
+            x,
+            pad_type="circular",
+            strides=self.stride,
+            filter_sizes=self.kernel_size,
+            n_spatial_dims=self.num_spatial_dims,
+            dilations=1,
+        )
+        return pool_cls.__call__(self, padded, key=key)
+
+    def update_namespace(ns):
+        ns["__init__"] = cls_init
+        ns["__call__"] = cls_call
+
+    return types.new_class(
+        f"CircularPadded{pool_cls.__name__}",
+        bases=(pool_cls, ),
+        exec_body=update_namespace,
     )
 
 
