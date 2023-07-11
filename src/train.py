@@ -51,6 +51,7 @@ parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adab
 parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine", "ross22"], help="What learning rate schedule")
 parser.add_argument("--network_zero_mean", action="store_true", help="Constrain the network to zero mean outputs")
 parser.add_argument("--loader_chunk_size", type=int, default=10850, help="Chunk size to read before batching")
+parser.add_argument("--net_weight_continue", type=str, default=None, help="Network weights to load and continue training")
 
 
 def save_network(output_name, output_dir, state, base_logger=None):
@@ -612,6 +613,21 @@ def init_network(architecture, lr, rng, input_channels, output_channels, process
     return state, network_info
 
 
+def load_network_continue(weight_file, old_state, old_net_info):
+    weight_file = pathlib.Path(weight_file)
+    # Load network info
+    with open(weight_file.parent / "network_info.json", "r", encoding="utf8") as net_info_file:
+        net_info = json.load(net_info_file)
+    net = eqx.tree_deserialise_leaves(weight_file, old_state.net)
+    # Replace old net with new net
+    state = old_state
+    state.net = net
+    # Compare net_info contents
+    if net_info != old_net_info:
+        raise ValueError("network info does not match (check command line arguments)")
+    return state, net_info
+
+
 def main():
     args = parser.parse_args()
     out_dir = pathlib.Path(args.out_dir)
@@ -691,6 +707,15 @@ def main():
             "zero_mean": args.network_zero_mean,
         },
     )
+    if args.net_weight_continue is not None:
+        logger.info("CONTINUING NETWORK: %s", args.net_weight_continue)
+        # Load network from file, wrap in train state
+        state, network_info = load_network_continue(
+            args.net_weight_continue,
+            state,
+            network_info,
+        )
+        logger.info("Loaded trained network weights")
     # Store network info
     with utils.rename_save_file(weights_dir / "network_info.json", "w", encoding="utf8") as net_info_file:
         json.dump(network_info, net_info_file)
