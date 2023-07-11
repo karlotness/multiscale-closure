@@ -628,8 +628,7 @@ def load_network_continue(weight_file, old_state, old_net_info):
     return state, net_info
 
 
-def main():
-    args = parser.parse_args()
+def main(args):
     out_dir = pathlib.Path(args.out_dir)
     if out_dir.is_file():
         raise ValueError(f"Path must be a directory, not a file: {args.out_dir}")
@@ -848,4 +847,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(parser.parse_args())
