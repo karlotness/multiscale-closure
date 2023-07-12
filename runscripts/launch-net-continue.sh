@@ -18,7 +18,7 @@ readonly NET_FILES=(
 )
 readonly TRAIN_DIR="${SCRATCH}/closure/data-rand-eddytojet/factor-1_0/train100"
 readonly VAL_DIR="${SCRATCH}/closure/data-rand-eddytojet/factor-1_0/val"
-readonly TEST_DIR="${SCRATCH}/closure/data-rand-eddytojet/factor-1_0/test"
+readonly TEST_DIR="${SCRATCH}/closure/data-rand-eddytojet/factor-1_0/test-trainset"
 readonly LR_MODES=('continue' 'restart')
 readonly NUM_REPEATS='3'
 
@@ -81,14 +81,14 @@ for net_file in "${NET_FILES[@]}"; do
            done
 
             if [[ "$DRY_RUN" != 'true' ]]; then
-                mkdir -p "${net_out_dir}/online-ke/"
+                mkdir -p "${net_out_dir}/online-ke-trainset/"
             else
-                echo "mkdir -p ${net_out_dir}/online-ke/"
+                echo "mkdir -p ${net_out_dir}/online-ke-trainset/"
             fi
 
             # Launch online evaluation
             for eval_epoch in 'best_loss' 'epoch0050' 'epoch0075' 'epoch0100'; do
-                echoing_sbatch --dependency="afterok${online_eval_deps}" --kill-on-invalid-dep=yes run-online-ke-data.sh "${net_out_dir}/online-ke/ke-${eval_epoch}.hdf5" "$TEST_DIR" ${net_out_dirs[*]/%//weights/${eval_epoch}.eqx}
+                echoing_sbatch --dependency="afterok${online_eval_deps}" --kill-on-invalid-dep=yes run-online-ke-data.sh "${net_out_dir}/online-ke-trainset/ke-${eval_epoch}.hdf5" "$TEST_DIR" ${net_out_dirs[*]/%//weights/${eval_epoch}.eqx}
             done
         done
     fi
