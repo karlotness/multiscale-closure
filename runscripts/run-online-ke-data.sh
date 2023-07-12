@@ -39,4 +39,5 @@ export JAX_ENABLE_X64=True
 export JAX_DEFAULT_DTYPE_BITS=32
 singularity run --nv "$SINGULARITY_CONTAINER" \
             python "${CHECKOUT_DIR}/src/online_ke_data.py" \
-            "$OUT_FILE" "${EVAL_PATH}/${COARSE_OP}" "${NET_WEIGHTS[@]}"
+            "$OUT_FILE" "${EVAL_PATH}/${COARSE_OP}" "${NET_WEIGHTS[@]}" \
+            --traj_limit=20

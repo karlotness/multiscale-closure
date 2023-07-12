@@ -25,6 +25,7 @@ parser.add_argument("--dt", type=float, default=3600.0, help="Time step size")
 parser.add_argument("--rollout_subsample", type=int, default=DATA_SUBSAMPLE_FACTOR, help="Stride to use when rolling out simulations")
 parser.add_argument("--t_metric_start", type=float, default=155520000.0, help="Time at which we should start averaging")
 parser.add_argument("--log_level", type=str, help="Level for logger", default="info", choices=["debug", "info", "warning", "error", "critical"])
+parser.add_argument("--traj_limit", type=int, help="Max trajectories to run", default=None)
 
 
 @eqx.filter_jit
@@ -106,7 +107,11 @@ def main():
         # ONLINE TESTS
         time_ke_computer = jax.jit(make_ke_time_computer(loaded_nets[0].model_params.qg_models[small_size]))
         logger.info("Running online tests")
-        for traj in range(data_loader.num_trajs):
+        num_trajs_to_run = data_loader.num_trajs
+        if args.traj_limit is not None:
+            num_trajs_to_run = min(num_trajs_to_run, args.traj_limit)
+            logger.info("Limiting run to %d trajectories", num_trajs_to_run)
+        for traj in range(num_trajs_to_run):
             logger.info("Testing trajectory %d", traj)
             traj_data = data_loader.get_trajectory(traj)
             data_q = traj_data.q
