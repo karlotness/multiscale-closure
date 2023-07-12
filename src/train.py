@@ -589,7 +589,7 @@ def init_network(architecture, lr, rng, input_channels, output_channels, process
 
     optim = optax.apply_if_finite(
         optax.chain(
-            optax.clip(1.0) if schedule_type not in {"ross22"} else optax.identity(),
+            optax.identity() if schedule_type in {"ross22"} else optax.clip(1.0),
             optim,
         ),
         100,
