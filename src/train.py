@@ -773,7 +773,8 @@ def main(args):
                 model_params=model_params,
                 processing_size=processing_size,
                 noise_spec=noise_spec,
-            )
+            ),
+            donate="all",
         )
         val_stats_fn = eqx.filter_jit(
             make_validation_stats_function(
