@@ -58,7 +58,7 @@ def check_coarse_op(eval_file, coarse_op_name):
         return data_file["params"]["coarsen_op"].asstr()[()] == coarse_op_name
 
 
-def make_network_evaluator(net, net_info, model_params):
+def make_network_evaluator(net, net_info, model_params, scale_results_from_standard=True):
 
     def eval_net(batch, alt_source=None):
         in_chunk = make_chunk_from_batch(
@@ -92,14 +92,17 @@ def make_network_evaluator(net, net_info, model_params):
             chunk=net_result,
         )
         # Unscale network results
-        result_dict = {}
-        for chan, res in net_result.items():
-            if "q_total_forcing" in chan:
-                result_dict[name_remove_residual(chan)] = jax.vmap(model_params.scalers.q_total_forcing_scalers[res.shape[-1]].scale_from_standard)(res)
-            elif "q" in chan:
-                result_dict[name_remove_residual(chan)] = jax.vmap(model_params.scalers.q_scalers[res.shape[-1]].scale_from_standard)(res)
-            else:
-                raise ValueError(f"invalid channel {chan}")
+        if scale_results_from_standard:
+            result_dict = {}
+            for chan, res in net_result.items():
+                if "q_total_forcing" in chan:
+                    result_dict[name_remove_residual(chan)] = jax.vmap(model_params.scalers.q_total_forcing_scalers[res.shape[-1]].scale_from_standard)(res)
+                elif "q" in chan:
+                    result_dict[name_remove_residual(chan)] = jax.vmap(model_params.scalers.q_scalers[res.shape[-1]].scale_from_standard)(res)
+                else:
+                    raise ValueError(f"invalid channel {chan}")
+        else:
+            result_dict = net_result
 
         return result_dict
 
