@@ -331,3 +331,63 @@ class ThreadedPreShuffledSnapshotLoader:
 
     def __del__(self):
         self.close()
+
+
+class AggregateLoader:
+    def __init__(self, loaders, batch_size, seed=None):
+        self.loaders = list(loaders)
+        self.batch_size = batch_size
+        self._closed = False
+        if seed is None:
+            seed = random.SystemRandom().randint(0, 2**32)
+        self._np_rng = np.random.default_rng(seed=seed)
+        if any(loader.batch_size < self.batch_size for loader in self.loaders):
+            raise ValueError("Batch size too small for aggregation")
+
+    def num_samples(self):
+        return sum(l.num_samples() for l in self.loaders)
+
+    def next_batch(self):
+        if self._closed:
+            raise ValueError("Closed loader, cannot load batches")
+        weights = np.asarray([loader.num_samples() for loader in self.loaders])
+        weights = weights / weights.sum()
+        samples_per_loader = self._np_rng.multinomial(self.batch_size, weights)
+        return jax.device_put(
+            jax.tree_util.tree_map(
+                lambda *loader_batches: jnp.concatenate(
+                    [
+                        AggregateLoader._slice_batch(batch, num_samples)
+                        for num_samples, batch in zip(samples_per_loader, loader_batches, strict=True)
+                    ]
+                ),
+                *(loader.next_batch() for loader in self.loaders),
+            )
+        )
+
+    @staticmethod
+    def _slice_batch(batch, num_samples):
+        assert batch.shape[0] >= num_samples
+        return batch[:num_samples]
+
+
+    def iter_batches(self):
+        # A generator over the batches
+        while True:
+            yield self.next_batch()
+
+    def close(self):
+        if self._closed:
+            return
+        for loader in self.loaders:
+            loader.close()
+        self._closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        self.close()
