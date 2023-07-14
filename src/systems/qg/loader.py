@@ -120,7 +120,7 @@ class SimpleQGLoader:
 class SnapshotStates:
     q: jnp.ndarray = None
     q_total_forcings: dict[int, jnp.ndarray] = dataclasses.field(default_factory=dict)
-    sys_params: dict[str, object] = dataclasses.field(default_factory=dict)
+    sys_params: dict[str, jnp.ndarray] = dataclasses.field(default_factory=dict)
 
 
 class ThreadedPreShuffledSnapshotLoader:
