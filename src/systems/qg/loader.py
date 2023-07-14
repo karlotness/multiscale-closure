@@ -76,6 +76,9 @@ class SimpleQGLoader:
     def __del__(self):
         self.close()
 
+    def num_samples(self):
+        return self.num_steps * self.num_trajs
+
     def close(self):
         if self._trajs_group is not None:
             self._trajs_group = None
@@ -135,6 +138,7 @@ class ThreadedPreShuffledSnapshotLoader:
             base_logger = logging.getLogger("preshuffle_loader")
         # Note: Loads only q and q_total_forcing
         self.fields = sorted(set(fields))
+        self.batch_size = batch_size
         if not all(f.startswith("q_total_forcing_") or f in {"q", "rek", "delta", "beta"} for f in self.fields):
             raise ValueError("invalid field, can only load q, q_total_forcing, and system parameters")
         if seed is None:
@@ -169,6 +173,9 @@ class ThreadedPreShuffledSnapshotLoader:
                 "logger": base_logger.getChild("batcher"),
             },
         )
+        # Compute number of samples
+        with h5py.File(file_path, "r") as in_file:
+            self._num_samples = operator.index(in_file["shuffled"].shape[0])
         self._chunk_load_thread.start()
         self._batch_thread.start()
 
@@ -288,6 +295,9 @@ class ThreadedPreShuffledSnapshotLoader:
         # A generator over the batches
         while True:
             yield self.next_batch()
+
+    def num_samples(self):
+        return self._num_samples
 
     def close(self):
         if self._stop_event.is_set():
