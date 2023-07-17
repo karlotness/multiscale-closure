@@ -4,11 +4,15 @@ import logging
 import queue
 import operator
 import contextlib
+import tempfile
+import pathlib
 import jax
 import jax.numpy as jnp
 import numpy as np
 import random
 import h5py
+import zarr
+import re
 from . import kernel
 from . import utils as qg_utils
 from .qg_model import QGModel
@@ -383,6 +387,121 @@ class AggregateLoader:
         for loader in self.loaders:
             loader.close()
         self._closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        self.close()
+
+
+class FillableDataLoader:
+    def __init__(self, batch_size, fields=("q", "q_total_forcing_64"), seed=None):
+        self.batch_size = batch_size
+        self.fields = sorted(set(fields))
+        self._temp_dir = tempfile.TemporaryDirectory(prefix="temp-fill-loader-")
+        self._data = None
+        if seed is None:
+            seed = random.SystemRandom().randint(0, 2**32)
+        self._np_rng = np.random.default_rng(seed=seed)
+
+    def _create_struct_dtype(self, sample):
+        struct_dtype = []
+        for field in self.fields:
+            if field == "q":
+                struct_dtype.append((field, sample.q.dtype, sample.q.shape[1:]))
+            elif m := re.match(r"^q_total_forcing_(?P<size>\d+)$", field):
+                size = int(m.group("size"))
+                struct_dtype.append((field, sample.q_total_forcings[size].dtype, sample.q_total_forcings[size].shape[1:]))
+            elif field in {"rek", "delta", "beta"}:
+                struct_dtype.append((field, sample.sys_params[field].dtype, (1, 1, 1)))
+            else:
+                raise ValueError(f"unsupported field {field}")
+        return np.dtype(struct_dtype)
+
+    def _combine_array(self, sample, dtype):
+        if sample.q is not None:
+            num_steps = sample.q.shape[0]
+        else:
+            num_steps = next(iter(sample.q_total_forcings.values())).shape[0]
+        arr = np.empty(shape=num_steps, dtype=dtype)
+        for field in self.fields:
+            if field == "q":
+                value = sample.q
+            elif m := re.match(r"^q_total_forcing_(?P<size>\d+)$", field):
+                size = int(m.group("size"))
+                value = m.q_total_forcings[size]
+            elif field in {"rek", "delta", "beta"}:
+                value = np.asarray(sample.sys_params[field]).item()
+            else:
+                raise ValueError(f"unsupported field {field}")
+            arr[field] = value
+        return arr
+
+    def add_data(self, sample):
+        if self._temp_dir is None:
+            raise ValueError("Closed loader, cannot add data")
+        if self._data is None:
+            self._data = zarr.open_array(
+                pathlib.Path(self._temp_dir.name) / "data.zarr",
+                dtype=self._create_struct_dtype(sample),
+                fill_value=None,
+                shape=(0,),
+                chunks=(25,),
+                mode="w-",
+                compressor=None,
+            )
+        self._data.append(self._combine_array(sample, self._data.dtype), axis=0)
+
+    def num_samples(self):
+        if self._data is None:
+            return 0
+        return self._data.shape[0]
+
+    def next_batch(self):
+        if self._temp_dir is None:
+            raise ValueError("Closed loader, cannot load batches")
+        num_samps = self.num_samples()
+        if num_samps <= 0:
+            raise ValueError("Empty fillable dataset, insert data first")
+        indices = self._np_rng.integers(0, num_samps, size=self.batch_size)
+        samples = self._data[indices]
+        # Bundle samples into batch
+        q = None
+        q_total_forcings = {}
+        sys_params = {}
+        for field in self.fields:
+            if field in {"rek", "delta", "beta"}:
+                sys_params[field] = samples[field].astype(np.float32)
+            elif field.startswith("q_total_forcing_"):
+                size = int(field[16:])
+                q_total_forcings[size] = samples[field]
+            elif field == "q":
+                q = samples["q"]
+            else:
+                raise ValueError(f"invalid field {field}")
+        return jax.device_put(
+            SnapshotStates(
+                q=q,
+                q_total_forcings=q_total_forcings,
+                sys_params=sys_params,
+            )
+        )
+
+    def iter_batches(self):
+        # A generator over the batches
+        while True:
+            yield self.next_batch()
+
+    def close(self):
+        if self._temp_dir is None:
+            return
+        self._data = None
+        self._temp_dir.cleanup()
+        self._temp_dir = None
 
     def __enter__(self):
         return self
