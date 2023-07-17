@@ -335,7 +335,7 @@ class ThreadedPreShuffledSnapshotLoader:
 
 class AggregateLoader:
     def __init__(self, loaders, batch_size, seed=None):
-        self.loaders = list(loaders)
+        self.loaders = tuple(loaders)
         self.batch_size = batch_size
         self._closed = False
         if seed is None:
@@ -350,7 +350,8 @@ class AggregateLoader:
     def next_batch(self):
         if self._closed:
             raise ValueError("Closed loader, cannot load batches")
-        weights = np.asarray([loader.num_samples() for loader in self.loaders])
+        active_loaders = [loader for loader in self.loaders if loader.num_samples() > 0]
+        weights = np.asarray([loader.num_samples() for loader in active_loaders])
         weights = weights / weights.sum()
         samples_per_loader = self._np_rng.multinomial(self.batch_size, weights)
         return jax.device_put(
@@ -361,7 +362,7 @@ class AggregateLoader:
                         for num_samples, batch in zip(samples_per_loader, loader_batches, strict=True)
                     ]
                 ),
-                *(loader.next_batch() for loader in self.loaders),
+                *(loader.next_batch() for loader in active_loaders),
             )
         )
 
