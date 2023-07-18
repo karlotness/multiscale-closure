@@ -433,7 +433,7 @@ class FillableDataLoader:
                 value = sample.q
             elif m := re.match(r"^q_total_forcing_(?P<size>\d+)$", field):
                 size = int(m.group("size"))
-                value = m.q_total_forcings[size]
+                value = sample.q_total_forcings[size]
             elif field in {"rek", "delta", "beta"}:
                 value = np.asarray(sample.sys_params[field]).item()
             else:

@@ -20,10 +20,13 @@ import time
 import json
 import functools
 import operator
-from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader
+import importlib
+from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader, AggregateLoader, FillableDataLoader, SnapshotStates
 from systems.qg import coarsen, diagnostics as qg_spec_diag, utils as qg_utils
 from pyqg_jax.qg_model import QGModel
+import pyqg_jax
 from methods import ARCHITECTURES
+from generate_data import make_parameter_sampler
 import jax_utils
 import utils
 
@@ -52,6 +55,205 @@ parser.add_argument("--lr_schedule", type=str, default="constant", choices=["con
 parser.add_argument("--network_zero_mean", action="store_true", help="Constrain the network to zero mean outputs")
 parser.add_argument("--loader_chunk_size", type=int, default=10850, help="Chunk size to read before batching")
 parser.add_argument("--net_weight_continue", type=str, default=None, help="Network weights to load and continue training")
+parser.add_argument("--live_gen_start_epoch", type=int, default=1, help="")
+parser.add_argument("--live_gen_interval", type=int, default=1, help="")
+parser.add_argument("--live_gen_sampler", type=str, default="rand-eddy-to-jet-1.0", help="")
+parser.add_argument("--live_gen_candidates", type=int, default=0, help="")
+parser.add_argument("--live_gen_winners", type=int, default=0, help="")
+
+
+def live_sample_get_args(train_path, required_fields):
+    q_forcing_sizes = set()
+    for field in required_fields:
+        if m := re.match(r"^q_total_forcing_(?P<size>\d+)$", field):
+            q_forcing_sizes.add(int(m.group("size")))
+    with h5py.File(train_path, "r") as data_file:
+        dt = data_file["params"]["dt"][()].item()
+        subsample = data_file["params"]["subsample"][()].item()
+        num_warmup_steps = math.ceil(155520000.0 / dt)
+        _traj_store_steps = data_file["source"]["step"][:].max()
+        q_size = data_file["shuffled"][0]["q"].shape[-1]
+        num_steps = (_traj_store_steps * subsample) + num_warmup_steps
+        return {
+            "dt": dt,
+            "subsample": subsample,
+            "num_warmup_steps": num_warmup_steps,
+            "num_steps": num_steps,
+            "q_size": q_size,
+            "q_forcing_sizes": list(q_forcing_sizes),
+        }
+
+
+def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_winners, dt, num_steps, num_warmup_steps, subsample, np_rng, logger, model_params, net_info, q_size, q_forcing_sizes):
+
+    logger.info("Live generation %d candidates, %d winners, %d steps", num_candidates, num_winners, (num_steps - num_warmup_steps) // subsample)
+
+    def no_gen_traj_func(epoch, rng_ctr, net):
+        return [], None, rng_ctr
+
+    # User requested that no trajectories be generated
+    if num_candidates == 0:
+        return no_gen_traj_func
+
+    assert num_winners <= num_candidates
+    assert start_epoch > 0
+    assert num_steps > num_warmup_steps
+
+    # late import to avoid issues with circular imports before initialization
+    make_parameterized_stepped_model = importlib.import_module("cascaded_online_eval").make_parameterized_stepped_model
+    make_ke_time_computer = importlib.import_module("online_ensemble_compare").make_ke_time_computer
+    NetData = importlib.import_module("cascaded_eval").NetData
+    logger.info("Generating samples with %s", sample_conf)
+    param_sampler = make_parameter_sampler(args_config=sample_conf, np_rng=np_rng)
+    coarse_cls = coarsen.COARSEN_OPERATORS[model_params.scale_operator]
+    big_model = model_params.qg_models["big_model"]
+    net_data = NetData(
+        input_channels=net_info["input_channels"],
+        output_channels=net_info["output_channels"],
+        processing_size=net_info["processing_size"],
+    )
+    q_coarsener = coarse_cls(big_model=big_model, small_nx=q_size)
+    forcing_coarseners = {s: coarse_cls(big_model=big_model, small_nx=s) for s in q_forcing_sizes}
+
+    def make_reference_traj(rng, sys_params):
+        nonlocal q_coarsener
+        nonlocal forcing_coarseners
+        # Prepare for stepping
+        stepped_model = pyqg_jax.steppers.SteppedModel(
+            big_model,
+            pyqg_jax.steppers.AB3Stepper(dt=dt),
+        )
+        # initial state
+        init_state = stepped_model.create_initial_state(rng)
+
+        # do warmup phase
+        def step_until_warmup(carry, _x):
+            prev_big_state = carry
+            next_big_state = stepped_model.step_model(prev_big_state)
+            return next_big_state, None
+
+        big_warmed_up_step, _ys = jax.lax.scan(
+            step_until_warmup,
+            init_state,
+            None,
+            length=num_warmup_steps,
+        )
+
+        # collect reference steps
+        def ref_steps(carry, _x):
+            prev_big_state = carry
+            next_big_state = stepped_model.step_model(prev_big_state)
+            # Produce new "main size" state for output
+            prev_small_q = q_coarsener.coarsen(prev_big_state.state.q)
+            prev_forcings = {
+                s: op.compute_q_total_forcing(prev_big_state.state.q)
+                for s, op in forcing_coarseners.items()
+            }
+            return next_big_state, (prev_small_q, prev_forcings)
+
+        _carry, (ref_q, ref_forcings) = jax_utils.strided_scan(
+            ref_steps,
+            big_warmed_up_step,
+            None,
+            length=num_steps - num_warmup_steps,
+            stride=subsample,
+        )
+        return ref_q, ref_forcings
+
+    def get_final_net_step(net, init_q, sys_params):
+        qg_model_params = qg_utils.qg_model_to_args(q_coarsener.small_model)
+        param_step_func = make_parameterized_stepped_model(
+            nets=[net],
+            net_data=[net_data],
+            model_params=model_params,
+            qg_model_args=qg_model_params,
+            dt=dt,
+        )
+        states = param_step_func(
+            initial_q=init_q,
+            num_steps=num_steps - num_warmup_steps,
+            subsampling=1,
+            sys_params=sys_params,
+            skip_steps=(num_steps - num_warmup_steps) - 1,
+        )
+        assert states.q.shape[0] == 1
+        return states.q[0]
+
+    def get_ke_relerr(ref_q, net_q):
+        ke_time = make_ke_time_computer(q_coarsener.small_model)
+        ref_ke = ke_time(jnp.expand_dims(ref_q, 0))
+        net_ke = ke_time(jnp.expand_dims(net_q, 0))
+        err = ref_ke - net_ke
+        relerr = jnp.abs(err / ref_ke)
+        return relerr
+
+    def run_sequence(rng, sys_params, net):
+        ref_q, ref_forcings = make_reference_traj(rng, sys_params)
+        init_q = ref_q[0]
+        final_net_q = get_final_net_step(net, init_q, sys_params)
+        ke_relerr = get_ke_relerr(ref_q[-1], final_net_q)
+        return ref_q, ref_forcings, ke_relerr
+
+    @eqx.filter_jit
+    def run_multi_sequence(rng, sys_params, net):
+        rngs = jax.random.split(rng, num_candidates)
+        ref_q, ref_forcing, ke_relerr = jax.vmap(functools.partial(run_sequence, net=net))(rngs, sys_params)
+        return ref_q, ref_forcing, ke_relerr
+
+    def gen_traj_func(epoch, rng_ctr, net):
+        # Inactive epoch, generate no trajectories
+        if epoch < start_epoch or ((epoch - start_epoch) % interval) != 0:
+            return no_gen_traj_func(epoch=epoch, rng_ctr=rng_ctr, net=net)
+        # Active epoch, continue with generation
+        rng, rng_ctr = jax.random.split(rng_ctr, 2)
+        plain_sys_params = list(itertools.islice(param_sampler, num_candidates))
+        sys_params = jax.tree_util.tree_map(
+            lambda *args: jnp.stack(args),
+            *plain_sys_params,
+        )
+        ref_q, ref_forcing, ke_relerr = run_multi_sequence(rng, sys_params, net)
+        # Pick top trajectories by ke_relerr
+        ke_relerr = np.nan_to_num(np.asarray(ke_relerr), nan=np.inf, posinf=np.inf, neginf=0)
+        idxs = np.arange(ke_relerr.shape[0])
+        relerr_idx = list(zip(ke_relerr, idxs, strict=True))
+        relerr_idx.sort(reverse=True)
+
+        def valid_idx(args):
+            _ke, idx = args
+            return jnp.all(jnp.isfinite(ref_q[idx])) and all(jnp.all(jnp.isfinite(v[idx])) for v in ref_forcing.values())
+
+        top_candidates = [
+            idx for _err, idx in
+            itertools.islice(
+                filter(
+                    valid_idx,
+                    relerr_idx,
+                ),
+                num_winners
+            )
+        ]
+        logger.info("Selected %d candidates from live generation", len(top_candidates))
+
+        # Package selected candidates into data suitable for storage
+        winners = []
+        for idx in top_candidates:
+            winners.append(
+                SnapshotStates(
+                    q=ref_q[idx],
+                    q_total_forcings={
+                        k: v[idx] for k, v in ref_forcing.items()
+                    },
+                    sys_params={k: np.asarray(v) for k, v in plain_sys_params[idx].items()},
+                )
+            )
+        result_stats = {
+            "num_winners": len(top_candidates),
+            "num_candidates": num_candidates,
+            "winning_ke_relerrs": np.asarray(ke_relerr).tolist(),
+        }
+        return winners, result_stats, rng_ctr
+
+    return gen_traj_func
 
 
 def save_network(output_name, output_dir, state, base_logger=None):
@@ -744,18 +946,46 @@ def main(args):
         chan_name, var = spec.split("=")
         noise_spec[chan_name.strip()] = np.array([float(v.strip()) for v in var.strip().split(",")])
 
+    # Live generation function
+    live_gen_func = make_live_gen_func(
+        start_epoch=args.live_gen_start_epoch,
+        interval=args.live_gen_interval,
+        sample_conf=args.live_gen_sampler,
+        num_candidates=args.live_gen_candidates,
+        num_winners=args.live_gen_winners,
+        np_rng=np_rng,
+        logger=logger.getChild("live-gen"),
+        model_params=model_params,
+        net_info=network_info,
+        **live_sample_get_args(
+            train_path=train_path,
+            required_fields=required_fields,
+        ),
+    )
+
     # Open data files
     with contextlib.ExitStack() as train_context:
         # Open data files
         train_loader = train_context.enter_context(
-            ThreadedPreShuffledSnapshotLoader(
-                file_path=train_path,
+            AggregateLoader(
+                loaders=[
+                    ThreadedPreShuffledSnapshotLoader(
+                        file_path=train_path,
+                        batch_size=args.batch_size,
+                        chunk_size=args.loader_chunk_size,
+                        buffer_size=10,
+                        seed=np_rng.integers(2**32).item(),
+                        base_logger=logger.getChild("train_loader"),
+                        fields=required_fields,
+                    ),
+                    FillableDataLoader(
+                        batch_size=args.batch_size,
+                        fields=required_fields,
+                        seed=np_rng.integers(2**32).item(),
+                    ),
+                ],
                 batch_size=args.batch_size,
-                chunk_size=args.loader_chunk_size,
-                buffer_size=10,
                 seed=np_rng.integers(2**32).item(),
-                base_logger=logger.getChild("train_loader"),
-                fields=required_fields,
             )
         )
         val_loader = train_context.enter_context(
@@ -830,12 +1060,27 @@ def main(args):
                 )
                 logger.info("Finished validation for epoch %d", epoch)
 
+            # Add live-generated trajectories, if required
+            logger.info("Starting live trajectory generation")
+            fillable_loader = train_loader.loaders[-1]
+            assert isinstance(fillable_loader, FillableDataLoader)
+            new_live_trajs, new_traj_info, rng_ctr = live_gen_func(
+                epoch=epoch,
+                rng_ctr=rng_ctr,
+                net=state.net,
+            )
+            logger.info("Adding %d live-generated trajectories", len(new_live_trajs))
+            for live_traj in new_live_trajs:
+                fillable_loader.add_data(live_traj)
+            new_live_trajs = None
+
             epoch_reports.append(
                 {
                     "epoch": epoch,
                     "train_stats": epoch_stats,
                     "val_stats": val_stat_report,
                     "saved_names": saved_names,
+                    "live_traj": new_traj_info,
                 }
             )
             with utils.rename_save_file(out_dir / "train_report.json", "w", encoding="utf8") as train_report_file:
