@@ -23,7 +23,6 @@ import operator
 import importlib
 from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader, AggregateLoader, FillableDataLoader, SnapshotStates
 from systems.qg import coarsen, diagnostics as qg_spec_diag, utils as qg_utils
-from pyqg_jax.qg_model import QGModel
 import pyqg_jax
 from methods import ARCHITECTURES
 from generate_data import make_parameter_sampler
@@ -374,7 +373,7 @@ def make_scalers(source_data):
 @dataclasses.dataclass
 class ModelParams:
     scalers: Scalers
-    qg_models: dict[int, QGModel]
+    qg_models: dict[int, pyqg_jax.qg_model.QGModel]
     scale_operator: str
 
 
