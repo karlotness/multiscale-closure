@@ -127,7 +127,7 @@ def main():
             logger.info("Finished coarsening reference trajectory %d", traj)
             traj_group = out_file.create_group(f"traj{traj:05d}")
             path_group = traj_group.create_group("paths")
-            net_times = np.linspace(args.t_metric_start, args.dt * data_loader.num_steps, ref_traj.shape[0])
+            net_times = np.linspace(args.t_metric_start, args.t_metric_start + (args.dt * data_loader.num_steps), ref_traj.shape[0], endpoint=False)
             traj_group.create_dataset("times", data=net_times)
             # Roll out trajectories with network corrections
             for label, rollout_q, net_path in itertools.chain(
