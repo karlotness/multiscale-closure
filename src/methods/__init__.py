@@ -13,4 +13,5 @@ ARCHITECTURES = {
     "gz-fcnn-v1": make_module_factory("gz_fcnn", "GZFCNN"),
     "gz-fcnn-v1-large": make_module_factory("gz_fcnn", "LargeGZFCNN"),
     "gz-fcnn-v1-medium": make_module_factory("gz_fcnn", "MediumGZFCNN"),
+    "unet-v1": make_module_factory("basic_unet", "BasicUNetV1"),
 }
