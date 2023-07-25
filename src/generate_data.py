@@ -109,7 +109,7 @@ class CoarseTrajResult:
 
 def make_generate_coarse_traj(big_model, small_sizes, coarse_op_cls, num_warmup_steps, num_steps, subsample):
     if num_warmup_steps >= num_steps:
-        raise ValueError("warmup steps {num_warmup_steps} larger than total steps {num_steps}")
+        raise ValueError(f"warmup steps {num_warmup_steps} larger than total steps {num_steps}")
     coarse_ops = {}
     base_big_model = big_model
     for size in set(small_sizes):
