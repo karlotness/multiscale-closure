@@ -59,6 +59,8 @@ parser.add_argument("--live_gen_interval", type=int, default=1, help="")
 parser.add_argument("--live_gen_sampler", type=str, default="rand-eddy-to-jet-1.0", help="")
 parser.add_argument("--live_gen_candidates", type=int, default=0, help="")
 parser.add_argument("--live_gen_winners", type=int, default=0, help="")
+parser.add_argument("--live_gen_mode", type=str, default="add-hardest", choices=["add-hardest", "network-noise"], help="")
+parser.add_argument("--live_gen_net_steps", type=int, default=5, help="")
 
 
 def live_sample_get_args(train_path, required_fields):
@@ -83,15 +85,14 @@ def live_sample_get_args(train_path, required_fields):
         }
 
 
-def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_winners, dt, num_steps, num_warmup_steps, subsample, np_rng, logger, model_params, net_info, q_size, q_forcing_sizes):
-
-    logger.info("Live generation %d candidates, %d winners, %d steps", num_candidates, num_winners, (num_steps - num_warmup_steps) // subsample)
+def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_winners, dt, num_steps, num_warmup_steps, subsample, np_rng, logger, model_params, net_info, q_size, q_forcing_sizes, live_gen_mode, train_path, rollout_net_steps):
 
     def no_gen_traj_func(epoch, rng_ctr, net):
         return [], None, rng_ctr
 
     # User requested that no trajectories be generated
     if num_candidates == 0:
+        logger.info("Will generate *NO* live trajectories")
         return no_gen_traj_func
 
     assert num_winners <= num_candidates
@@ -102,10 +103,10 @@ def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_w
     make_parameterized_stepped_model = importlib.import_module("cascaded_online_eval").make_parameterized_stepped_model
     make_ke_time_computer = importlib.import_module("online_ensemble_compare").make_ke_time_computer
     NetData = importlib.import_module("cascaded_eval").NetData
-    logger.info("Generating samples with %s", sample_conf)
     param_sampler = make_parameter_sampler(args_config=sample_conf, np_rng=np_rng)
     coarse_cls = coarsen.COARSEN_OPERATORS[model_params.scale_operator]
     big_model = model_params.qg_models["big_model"]
+    processing_model = model_params.qg_models[net_info["processing_size"]]
     net_data = NetData(
         input_channels=net_info["input_channels"],
         output_channels=net_info["output_channels"],
@@ -252,7 +253,92 @@ def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_w
         }
         return winners, result_stats, rng_ctr
 
-    return gen_traj_func
+    def generate_network_path(net, init_q, sys_params, num_steps):
+        qg_model_params = qg_utils.qg_model_to_args(processing_model)
+        param_step_func = make_parameterized_stepped_model(
+            nets=[net],
+            net_data=[net_data],
+            model_params=model_params,
+            qg_model_args=qg_model_params,
+            dt=dt,
+        )
+        states = param_step_func(
+            initial_q=init_q,
+            num_steps=num_steps + 1,
+            subsampling=subsample,
+            sys_params=sys_params,
+            skip_steps=1,
+        )
+        return states.q
+
+    net_num_steps = rollout_net_steps * subsample
+    generate_net_path_fn = eqx.filter_jit(functools.partial(generate_network_path, num_steps=net_num_steps))
+
+    def net_noise_gen_func(epoch, rng_ctr, net):
+        # Inactive epoch, generate no trajectories
+        if epoch < start_epoch or ((epoch - start_epoch) % interval) != 0:
+            return no_gen_traj_func(epoch=epoch, rng_ctr=rng_ctr, net=net)
+        # Active epoch, continue with generation
+        # Open a basic loader on the training set
+        fields = determine_required_fields(
+            itertools.chain(
+                net_info["input_channels"],
+                net_info["output_channels"],
+            )
+        )
+        fields.update(["rek", "beta", "delta"])
+        result_trajs = []
+        fixed_train_path = pathlib.Path(train_path)
+        train_name = fixed_train_path.parts[-3]
+        assert train_name.startswith("train")
+        traj_limit = int(train_name[5:]) if len(train_name) > 5 else None
+        fixed_train_path = fixed_train_path.parent.parent.parent / "train" / fixed_train_path.parent.name / "data.hdf5"
+        with SimpleQGLoader(file_path=fixed_train_path, fields=fields) as ref_loader:
+            if traj_limit is not None:
+                select_trajs = min(ref_loader.num_trajs, traj_limit)
+            else:
+                select_trajs = ref_loader.num_trajs
+            for rollout_num in range(num_candidates):
+                traj = np_rng.integers(select_trajs).item()
+                step = np_rng.integers(low=0, high=ref_loader.num_steps - rollout_net_steps - 1).item()
+                logger.info("Live generation sample %d, traj=%d, step=%d", rollout_num + 1, traj, step)
+                traj_data = ref_loader.get_trajectory(traj, step, step + rollout_net_steps + 1)
+                traj_sys_params = jax.tree_map(lambda d: jnp.asarray(d[0, 0, 0, 0]), traj_data.sys_params)
+                init_q = traj_data.q[0]
+                net_q = np.asarray(generate_net_path_fn(net, init_q, traj_sys_params))
+                assert net_q.shape[0] == traj_data.q.shape[0] - 1
+                if not np.all(np.isfinite(net_q)):
+                    logger.warning("Dropping one trajectory for NaNs")
+                    continue
+                result_trajs.append(
+                    SnapshotStates(
+                        q=net_q,
+                        q_total_forcings={
+                            k: np.asarray(v[1:]) for k, v in traj_data.q_total_forcings.items()
+                        },
+                        sys_params={
+                            k: np.asarray(v)
+                            for k, v in traj_sys_params.items()
+                        },
+                    )
+                )
+        # Return results
+        result_stats = {
+            "num_winners": len(result_trajs),
+            "num_candidates": len(result_trajs),
+        }
+        return result_trajs, result_stats, rng_ctr
+
+    match live_gen_mode:
+        case "add-hardest":
+            logger.info("Live generation %d candidates, %d winners, %d steps", num_candidates, num_winners, (num_steps - num_warmup_steps) // subsample)
+            logger.info("Generating samples with %s", sample_conf)
+            return gen_traj_func
+        case "network-noise":
+            logger.info("Live generation with net noise of %d trajectories %d steps", num_candidates, rollout_net_steps)
+            return net_noise_gen_func
+        case _:
+            raise ValueError(f"invalid live generation mode {live_gen_mode}")
 
 
 def save_network(output_name, output_dir, state, base_logger=None):
@@ -996,6 +1082,9 @@ def main(args):
         logger=logger.getChild("live-gen"),
         model_params=model_params,
         net_info=network_info,
+        live_gen_mode=args.live_gen_mode,
+        train_path=train_path,
+        rollout_net_steps=args.live_gen_net_steps,
         **live_sample_get_args(
             train_path=train_path,
             required_fields=required_fields,
