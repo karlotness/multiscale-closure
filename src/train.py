@@ -708,7 +708,8 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
             # More complicated: must mix and join the two separately
             input_chunks = []
             target_chunks = []
-            for batch in [batch_1, batch_2]:
+            rngs = jax.random.split(rng, 2)
+            for use_rng, batch in zip(rngs, [batch_1, batch_2]):
                 input_chunks.append(
                     make_chunk_from_batch(
                         channels=input_channels,
@@ -716,7 +717,7 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
                         model_params=model_params,
                         processing_size=processing_size,
                         noise_spec=noise_spec,
-                        key=rng,
+                        key=use_rng,
                     )
                 )
                 target_chunks.append(
