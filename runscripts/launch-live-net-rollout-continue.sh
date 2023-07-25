@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly LAUNCH_TIME="$(date '+%Y%m%d-%H%M%S')"
-readonly OUT_DIR="${SCRATCH}/closure/run_outputs/continue-live-net-rollout-runs-${LAUNCH_TIME}"
+readonly OUT_DIR="${SCRATCH}/closure/run_outputs/continue-live-net-rollout-runs-10step17traj-${LAUNCH_TIME}"
 
 # Set to 'true' or 'false'
 readonly DRY_RUN='true'
@@ -21,8 +21,8 @@ readonly VAL_DIR="${SCRATCH}/closure/data-rand-eddytojet/factor-1_0/val"
 readonly TEST_DIR="${SCRATCH}/closure/data-rand-eddytojet/factor-1_0/test-trainset"
 readonly LR_MODES=('restart')
 readonly NUM_REPEATS='3'
-readonly NUM_CANDIDATES='34'
-readonly NUM_ROLLOUT_STEPS='5'
+readonly NUM_CANDIDATES='17'
+readonly NUM_ROLLOUT_STEPS='10'
 
 
 if [[ "$DRY_RUN" != 'true' ]]; then
