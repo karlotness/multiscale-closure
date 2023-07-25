@@ -6,7 +6,9 @@ import itertools
 
 SCRATCH = pathlib.Path(os.environ["SCRATCH"])
 DRY_RUN = True
-EVAL_SET = SCRATCH / "closure/data-rand-eddytojet/factor-1_0/test-trainset"
+#EVAL_SET = SCRATCH / "closure/data-rand-eddytojet/factor-1_0/test-trainset"
+EVAL_SET = SCRATCH / "closure/data-rand-eddytojet/factor-1_0/test"
+assert EVAL_SET.is_dir()
 WEIGHT_FILE = "epoch0100"
 
 
