@@ -340,6 +340,7 @@ class ThreadedPreShuffledSnapshotLoader:
 class AggregateLoader:
     def __init__(self, loaders, batch_size, seed=None):
         self.loaders = tuple(loaders)
+        assert len(self.loaders) <= 2
         self.batch_size = batch_size
         self._closed = False
         if seed is None:
@@ -358,17 +359,11 @@ class AggregateLoader:
         weights = np.asarray([loader.num_samples() for loader in active_loaders])
         weights = weights / weights.sum()
         samples_per_loader = self._np_rng.multinomial(self.batch_size, weights)
-        return jax.device_put(
-            jax.tree_util.tree_map(
-                lambda *loader_batches: jnp.concatenate(
-                    [
-                        AggregateLoader._slice_batch(batch, num_samples)
-                        for num_samples, batch in zip(samples_per_loader, loader_batches, strict=True)
-                    ]
-                ),
-                *(loader.next_batch() for loader in active_loaders),
-            )
-        )
+        split_point = samples_per_loader[0]
+        batches = [loader.next_batch() for loader in active_loaders]
+        if len(batches) < 2:
+            batches.append(None)
+        return batches, split_point
 
     @staticmethod
     def _slice_batch(batch, num_samples):

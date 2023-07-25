@@ -599,22 +599,60 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
         )(input_chunk, target_chunk)
         return jnp.mean(losses)
 
-    def do_batch(batch, state, rng_ctr):
+    def do_batch(batch_pair, batch_split_point, state, rng_ctr):
         rng, rng_ctr = jax.random.split(rng_ctr, 2)
-        input_chunk = make_chunk_from_batch(
-            channels=input_channels,
-            batch=batch,
-            model_params=model_params,
-            processing_size=processing_size,
-            noise_spec=noise_spec,
-            key=rng,
-        )
-        target_chunk = make_chunk_from_batch(
-            channels=output_channels,
-            batch=batch,
-            model_params=model_params,
-            processing_size=output_size,
-        )
+        batch_1, batch_2 = batch_pair
+        if batch_2 is None:
+            # Simple: single batch
+            input_chunk = make_chunk_from_batch(
+                channels=input_channels,
+                batch=batch_1,
+                model_params=model_params,
+                processing_size=processing_size,
+                noise_spec=noise_spec,
+                key=rng,
+            )
+            target_chunk = make_chunk_from_batch(
+                channels=output_channels,
+                batch=batch_1,
+                model_params=model_params,
+                processing_size=output_size,
+            )
+        else:
+            # More complicated: must mix and join the two separately
+            input_chunks = []
+            target_chunks = []
+            for batch in [batch_1, batch_2]:
+                input_chunks.append(
+                    make_chunk_from_batch(
+                        channels=input_channels,
+                        batch=batch,
+                        model_params=model_params,
+                        processing_size=processing_size,
+                        noise_spec=noise_spec,
+                        key=rng,
+                    )
+                )
+                target_chunks.append(
+                    make_chunk_from_batch(
+                        channels=output_channels,
+                        batch=batch,
+                        model_params=model_params,
+                        processing_size=output_size,
+                    )
+                )
+            # Do the selection and concatenation
+            batch_size = jax.tree_util.tree_leaves(batch_1)[0].shape[0]
+            indices = jnp.arange(batch_size, dtype=jnp.uint32)
+            select_indices = (indices >= batch_split_point).astype(jnp.uint8)
+            input_chunk = jax.tree_util.tree_map(
+                lambda chunk1, chunk2: jnp.stack([chunk1, chunk2], axis=0)[select_indices, indices],
+                *input_chunks
+            )
+            target_chunk = jax.tree_util.tree_map(
+                lambda chunk1, chunk2: jnp.stack([chunk1, chunk2], axis=0)[select_indices, indices],
+                *target_chunks
+            )
         # Compute losses
         loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, input_chunk, target_chunk)
         # Update parameters
@@ -630,7 +668,9 @@ def do_epoch(train_state, batch_iter, batch_fn, rng_ctr, logger=None):
     epoch_start = time.perf_counter()
     losses = []
     for batch in batch_iter:
-        train_state, batch_loss, rng_ctr = batch_fn(batch, train_state, rng_ctr)
+        (batch_1, batch_2), split_point = batch
+        split_point = jax.device_put(jnp.int32(split_point))
+        train_state, batch_loss, rng_ctr = batch_fn((batch_1, batch_2), split_point, train_state, rng_ctr)
         losses.append(batch_loss)
     epoch_end = time.perf_counter()
     mean_loss = jax.device_get(jnp.mean(jnp.stack(losses)))
