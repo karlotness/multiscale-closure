@@ -23,6 +23,7 @@ class BasicUNetV1(eqx.Module):
     img_size: int = eqx.static_field()
     n_layers_in: int = eqx.static_field()
     n_layers_out: int = eqx.static_field()
+    zero_mean: bool = eqx.static_field()
     layers_down: collections.abc.Sequence[eqx.Module]
     layers_up: collections.abc.Sequence[eqx.Module]
     pool_down: eqx.Module
@@ -34,12 +35,14 @@ class BasicUNetV1(eqx.Module):
         n_layers_in: int,
         n_layers_out: int,
         padding: str = "circular",
+        zero_mean: bool = False,
         *,
         key: jax.Array
     ):
         self.img_size = img_size
         self.n_layers_in = n_layers_in
         self.n_layers_out = n_layers_out
+        self.zero_mean = zero_mean
 
         if self.img_size // 4 < 1:
             raise ValueError(f"image size to small {img_size}")
@@ -192,4 +195,6 @@ class BasicUNetV1(eqx.Module):
                 ret = skip_value
             ret = layer(ret, key=key)
         assert ret.shape == (self.n_layers_out, self.img_size, self.img_size)
+        if self.zero_mean:
+            ret = ret - jnp.mean(ret)
         return ret
