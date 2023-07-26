@@ -31,9 +31,9 @@ RUN_DIRS = {
     SCRATCH / "closure/run_outputs/continue-live-net-rollout-runs-20230725-042112",
 }
 for run_dir, noise_mode, candidates in itertools.product(
-    {"continue-live-data-runs-20230718-021748", "continue-live-data-runs-20230718-124918", "continue-live-net-rollout-runs-20230725-042112"},
+    {"continue-live-data-runs-20230718-021748", "continue-live-data-runs-20230718-124918", "continue-live-net-rollout-runs-20230725-042112", "continue-live-net-rollout-runs-10step17traj-20230725-153307", "continue-live-net-rollout-runs-2step85traj-20230725-153137"},
     ["add-noise", "noiseless"],
-    [20, 30, 34, 50],
+    [17, 20, 30, 34, 50, 85],
 ):
     possible_path = SCRATCH / "closure/run_outputs" / run_dir / noise_mode / f"candidates{candidates}"
     if possible_path.is_dir():
@@ -47,6 +47,9 @@ for path in RUN_DIRS:
 
 for experiment_dir in map(pathlib.Path, net_experiment_dirs):
     out_file = experiment_dir / "online-ke-testset" / f"ke-{WEIGHT_FILE}.hdf5"
+    if out_file.is_file():
+        print(f"Skipping {experiment_dir}")
+        continue
     net_weights = [str(p.resolve()) for p in experiment_dir.glob(f"*/weights/{WEIGHT_FILE}.eqx")]
     dry_run_mkdir(out_file.parent)
     sbatch_launch(["run-online-ke-data.sh", str(out_file.resolve()), EVAL_SET] + net_weights)
