@@ -14,7 +14,7 @@ set -euo pipefail
 
 if [[ $# -lt 8 ]]; then
     echo 'ERROR: Insufficient parameters for training'
-    echo 'Usage continue-train-randfactor.sh OUT_DIR TRAIN_DIR VAL_DIR SCALE WEIGHT_FILE LR_MODE NUM_CANDIDATES NUM_ROLLOUT_STEPS'
+    echo 'Usage continue-train-randfactor.sh OUT_DIR TRAIN_DIR VAL_DIR SCALE WEIGHT_FILE LR_MODE NUM_CANDIDATES NUM_ROLLOUT_STEPS LIVE_DATA_DIR'
     exit 1
 fi
 
@@ -26,6 +26,7 @@ readonly WEIGHT_FILE="$5"
 readonly LR_MODE="$6"
 readonly NUM_CANDIDATES="$7"
 readonly NUM_ROLLOUT_STEPS="$8"
+readonly LIVE_DATA_DIR="$9"
 readonly NOISE_MODE='noiseless'
 
 if [[ "$LR_MODE" == 'continue' ]]; then
@@ -81,4 +82,5 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --live_gen_candidates="$NUM_CANDIDATES" \
             --live_gen_mode=network-noise \
             --live_gen_net_steps="$NUM_ROLLOUT_STEPS" \
+            --live_gen_base_data="${LIVE_DATA_DIR}/${COARSE_OP}" \
             "${noise_args[@]}"

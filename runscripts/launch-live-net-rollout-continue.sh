@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly LAUNCH_TIME="$(date '+%Y%m%d-%H%M%S')"
-readonly OUT_DIR="${SCRATCH}/closure/run_outputs/continue-live-net-rollout-runs-10step17traj-${LAUNCH_TIME}"
+readonly OUT_DIR="${SCRATCH}/closure/run_outputs/continue-live-net-shortstep-rollout-runs-${LAUNCH_TIME}"
 
 # Set to 'true' or 'false'
 readonly DRY_RUN='true'
@@ -17,12 +17,15 @@ readonly NET_FILES=(
     "${SCRATCH}/closure/run_outputs/run-varied-data-size-20230705-174209/rand-eddytojet/size100-scale64/net4/weights/epoch0045.eqx"
 )
 readonly TRAIN_DIR="${SCRATCH}/closure/data-rand-eddytojet/factor-1_0/train100"
+readonly LIVE_DATA_DIR="${SCRATCH}/closure/data-smallstep-rand-eddytojet/factor-1_0/train100"
 readonly VAL_DIR="${SCRATCH}/closure/data-rand-eddytojet/factor-1_0/val"
 readonly TEST_DIR="${SCRATCH}/closure/data-rand-eddytojet/factor-1_0/test-trainset"
+readonly TEST_DIR2="${SCRATCH}/closure/data-rand-eddytojet/factor-1_0/test"
 readonly LR_MODES=('restart')
+readonly EVAL_EPOCHS=('epoch0100')
 readonly NUM_REPEATS='3'
-readonly NUM_CANDIDATES='17'
-readonly NUM_ROLLOUT_STEPS='10'
+readonly NUM_CANDIDATES='170'
+readonly NUM_ROLLOUT_STEPS='1'
 
 
 if [[ "$DRY_RUN" != 'true' ]]; then
@@ -77,7 +80,7 @@ for noise_mode in 'noiseless'; do
                 for net_repeat in $(seq "$NUM_REPEATS" ); do
                     launch_dir="${net_out_dir}/trial${net_repeat}"
                     net_out_dirs+=("$launch_dir")
-                    run_out=$(echoing_sbatch continue-train-live-data-net-rollout.sh "$launch_dir" "$TRAIN_DIR" "$VAL_DIR" "$continue_scale" "$net_file" "$lr_mode" "$NUM_CANDIDATES" "$NUM_ROLLOUT_STEPS")
+                    run_out=$(echoing_sbatch continue-train-live-data-net-rollout.sh "$launch_dir" "$TRAIN_DIR" "$VAL_DIR" "$continue_scale" "$net_file" "$lr_mode" "$NUM_CANDIDATES" "$NUM_ROLLOUT_STEPS" "$LIVE_DATA_DIR")
                     run_jobid="$(get_job_id "$run_out")"
                     echo "Submitted job ${run_jobid}"
                     online_eval_deps="${online_eval_deps}:${run_jobid}"
@@ -85,13 +88,27 @@ for noise_mode in 'noiseless'; do
 
                 if [[ "$DRY_RUN" != 'true' ]]; then
                     mkdir -p "${net_out_dir}/online-ke-trainset/"
+                    mkdir -p "${net_out_dir}/online-ke-testset/"
+                    mkdir -p "${net_out_dir}/online-eval/evalset-test"
+                    mkdir -p "${net_out_dir}/online-eval/evalset-test-trainset"
                 else
                     echo "mkdir -p ${net_out_dir}/online-ke-trainset/"
+                    echo "mkdir -p ${net_out_dir}/online-ke-testset/"
+                    echo "mkdir -p ${net_out_dir}/online-eval/"
+                    echo "mkdir -p ${net_out_dir}/online-eval/evalset-test"
+                    echo "mkdir -p ${net_out_dir}/online-eval/evalset-test-trainset"
                 fi
 
                 # Launch online evaluation
-                for eval_epoch in 'epoch0050' 'epoch0075' 'epoch0100'; do
+                for eval_epoch in "${EVAL_EPOCHS[@]}"; do
                     echoing_sbatch --dependency="afterok${online_eval_deps}" --kill-on-invalid-dep=yes run-online-ke-data.sh "${net_out_dir}/online-ke-trainset/ke-${eval_epoch}.hdf5" "$TEST_DIR" ${net_out_dirs[*]/%//weights/${eval_epoch}.eqx}
+                    echoing_sbatch --dependency="afterok${online_eval_deps}" --kill-on-invalid-dep=yes run-online-ke-data.sh "${net_out_dir}/online-ke-testset/ke-${eval_epoch}.hdf5" "$TEST_DIR2" ${net_out_dirs[*]/%//weights/${eval_epoch}.eqx}
+                done
+
+                # Launch online spectral plots
+                for eval_epoch in "${EVAL_EPOCHS[@]}"; do
+                    echoing_sbatch --dependency="afterok${online_eval_deps}" --kill-on-invalid-dep=yes eval-online.sh "${net_out_dir}/online-eval/evalset-test-trainset" "$TEST_DIR" "$eval_epoch" "${net_out_dirs[*]}"
+                    echoing_sbatch --dependency="afterok${online_eval_deps}" --kill-on-invalid-dep=yes eval-online.sh "${net_out_dir}/online-eval/evalset-test" "$TEST_DIR2" "$eval_epoch" "${net_out_dirs[@]}"
                 done
             done
         fi
