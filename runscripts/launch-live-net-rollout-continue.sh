@@ -107,7 +107,7 @@ for noise_mode in 'noiseless'; do
 
                 # Launch online spectral plots
                 for eval_epoch in "${EVAL_EPOCHS[@]}"; do
-                    echoing_sbatch --dependency="afterok${online_eval_deps}" --kill-on-invalid-dep=yes eval-online.sh "${net_out_dir}/online-eval/evalset-test-trainset" "$TEST_DIR" "$eval_epoch" "${net_out_dirs[*]}"
+                    echoing_sbatch --dependency="afterok${online_eval_deps}" --kill-on-invalid-dep=yes eval-online.sh "${net_out_dir}/online-eval/evalset-test-trainset" "$TEST_DIR" "$eval_epoch" "${net_out_dirs[@]}"
                     echoing_sbatch --dependency="afterok${online_eval_deps}" --kill-on-invalid-dep=yes eval-online.sh "${net_out_dir}/online-eval/evalset-test" "$TEST_DIR2" "$eval_epoch" "${net_out_dirs[@]}"
                 done
             done
