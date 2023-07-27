@@ -304,7 +304,6 @@ def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_w
                 while True:
                     traj = np_rng.integers(select_trajs).item()
                     step = np_rng.integers(low=0, high=ref_loader.num_steps - rollout_net_steps - 1).item()
-                    logger.info("Live generation sample %d, traj=%d, step=%d", counter, traj, step)
                     traj_data = ref_loader.get_trajectory(traj, step, step + rollout_net_steps + 1)
                     traj_sys_params = jax.tree_map(lambda d: jnp.asarray(d[0, 0, 0, 0]), traj_data.sys_params)
                     init_q = traj_data.q[0]
