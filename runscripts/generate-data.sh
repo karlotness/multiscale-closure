@@ -18,7 +18,7 @@ readonly COARSEN_OP='op1'
 
 for expansion_level in '1.0'; do
     level_underscore=$(echo "$expansion_level" | tr '.' '_')
-    DATA_DIR='data-smallstep-rand-eddytojet/factor-${level_underscore}'
+    DATA_DIR="data-smallstep-rand-eddytojet/factor-${level_underscore}"
     data_config="rand-eddy-to-jet-${expansion_level}"
 
     mkdir -p "${SCRATCH}/closure/${DATA_DIR}"
