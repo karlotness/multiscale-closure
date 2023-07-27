@@ -61,6 +61,7 @@ parser.add_argument("--live_gen_candidates", type=int, default=0, help="")
 parser.add_argument("--live_gen_winners", type=int, default=0, help="")
 parser.add_argument("--live_gen_mode", type=str, default="add-hardest", choices=["add-hardest", "network-noise"], help="")
 parser.add_argument("--live_gen_net_steps", type=int, default=5, help="")
+parser.add_argument("--live_gen_base_data", type=str, default=None, help="")
 
 
 def live_sample_get_args(train_path, required_fields):
@@ -287,31 +288,33 @@ def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_w
             )
         )
         fields.update(["rek", "beta", "delta"])
-        result_trajs = []
         fixed_train_path = pathlib.Path(train_path)
         train_name = fixed_train_path.parts[-3]
         assert train_name.startswith("train")
         traj_limit = int(train_name[5:]) if len(train_name) > 5 else None
         fixed_train_path = fixed_train_path.parent.parent.parent / "train" / fixed_train_path.parent.name / "data.hdf5"
-        with SimpleQGLoader(file_path=fixed_train_path, fields=fields) as ref_loader:
-            if traj_limit is not None:
-                select_trajs = min(ref_loader.num_trajs, traj_limit)
-            else:
-                select_trajs = ref_loader.num_trajs
-            for rollout_num in range(num_candidates):
-                traj = np_rng.integers(select_trajs).item()
-                step = np_rng.integers(low=0, high=ref_loader.num_steps - rollout_net_steps - 1).item()
-                logger.info("Live generation sample %d, traj=%d, step=%d", rollout_num + 1, traj, step)
-                traj_data = ref_loader.get_trajectory(traj, step, step + rollout_net_steps + 1)
-                traj_sys_params = jax.tree_map(lambda d: jnp.asarray(d[0, 0, 0, 0]), traj_data.sys_params)
-                init_q = traj_data.q[0]
-                net_q = np.asarray(generate_net_path_fn(net, init_q, traj_sys_params))
-                assert net_q.shape[0] == traj_data.q.shape[0] - 1
-                if not np.all(np.isfinite(net_q)):
-                    logger.warning("Dropping one trajectory for NaNs")
-                    continue
-                result_trajs.append(
-                    SnapshotStates(
+
+        def generate_trajs():
+            with SimpleQGLoader(file_path=fixed_train_path, fields=fields) as ref_loader:
+                if traj_limit is not None:
+                    select_trajs = min(ref_loader.num_trajs, traj_limit)
+                else:
+                    select_trajs = ref_loader.num_trajs
+                counter = 1
+                while True:
+                    traj = np_rng.integers(select_trajs).item()
+                    step = np_rng.integers(low=0, high=ref_loader.num_steps - rollout_net_steps - 1).item()
+                    logger.info("Live generation sample %d, traj=%d, step=%d", counter, traj, step)
+                    traj_data = ref_loader.get_trajectory(traj, step, step + rollout_net_steps + 1)
+                    traj_sys_params = jax.tree_map(lambda d: jnp.asarray(d[0, 0, 0, 0]), traj_data.sys_params)
+                    init_q = traj_data.q[0]
+                    net_q = np.asarray(generate_net_path_fn(net, init_q, traj_sys_params))
+                    assert net_q.shape[0] == rollout_net_steps
+                    assert net_q.shape[0] == traj_data.q.shape[0] - 1
+                    if not np.all(np.isfinite(net_q)):
+                        logger.warning("Dropping one trajectory for NaNs")
+                        continue
+                    yield SnapshotStates(
                         q=net_q,
                         q_total_forcings={
                             k: np.asarray(v[1:]) for k, v in traj_data.q_total_forcings.items()
@@ -321,13 +324,13 @@ def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_w
                             for k, v in traj_sys_params.items()
                         },
                     )
-                )
+                    counter += 1
         # Return results
         result_stats = {
-            "num_winners": len(result_trajs),
-            "num_candidates": len(result_trajs),
+            "num_winners": num_candidates,
+            "num_candidates": num_candidates,
         }
-        return result_trajs, result_stats, rng_ctr
+        return itertools.islice(generate_trajs(), num_candidates), result_stats, rng_ctr
 
     match live_gen_mode:
         case "add-hardest":
@@ -984,6 +987,10 @@ def main(args):
     # Configure required elements for training
     rng_ctr = jax.random.PRNGKey(seed=np_rng.integers(2**32).item())
     train_path = (pathlib.Path(args.train_set) / "shuffled.hdf5").resolve()
+    if args.live_gen_base_data is None:
+        live_gen_path = train_path
+    else:
+        live_gen_path = (pathlib.Path(args.live_gen_base_data) / "shuffled.hdf5").resolve()
     val_path = (pathlib.Path(args.val_set) / "data.hdf5").resolve()
     weights_dir = out_dir / "weights"
     weights_dir.mkdir(exist_ok=True)
@@ -1084,10 +1091,10 @@ def main(args):
         model_params=model_params,
         net_info=network_info,
         live_gen_mode=args.live_gen_mode,
-        train_path=train_path,
+        train_path=live_gen_path,
         rollout_net_steps=args.live_gen_net_steps,
         **live_sample_get_args(
-            train_path=train_path,
+            train_path=live_gen_path,
             required_fields=required_fields,
         ),
     )
@@ -1198,9 +1205,11 @@ def main(args):
                 rng_ctr=rng_ctr,
                 net=state.net,
             )
-            logger.info("Adding %d live-generated trajectories", len(new_live_trajs))
+            added_trajs = 0
             for live_traj in new_live_trajs:
                 fillable_loader.add_data(live_traj)
+                added_trajs += 1
+            logger.info("Added %d live-generated trajectories", added_trajs)
             new_live_trajs = None
 
             epoch_reports.append(
