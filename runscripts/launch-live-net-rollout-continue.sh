@@ -24,8 +24,10 @@ readonly TEST_DIR2="${SCRATCH}/closure/data-rand-eddytojet/factor-1_0/test"
 readonly LR_MODES=('restart')
 readonly EVAL_EPOCHS=('epoch0100')
 readonly NUM_REPEATS='3'
-readonly NUM_CANDIDATES='170'
-readonly NUM_ROLLOUT_STEPS='1'
+readonly NOISE_MODE='noiseless'
+
+readonly CANDIDATE_OPTIONS=('34' '7' '4')
+readonly STEP_OPTIONS=('5' '25' '50')
 
 
 if [[ "$DRY_RUN" != 'true' ]]; then
@@ -59,7 +61,9 @@ function get_job_id() {
     fi
 }
 
-for noise_mode in 'noiseless'; do
+for idx in "${!CANDIDATE_OPTIONS[@]}"; do
+    num_rollout_steps="${STEP_OPTIONS[idx]}"
+    num_candidates="${CANDIDATE_OPTIONS[idx]}"
     for net_file in "${NET_FILES[@]}"; do
         if [[ $net_file =~ /closure/run_outputs/run-varied-data-size-([[:digit:]]+-[[:digit:]]+)/([^/]+)/size([[:digit:]]+)-scale([[:digit:]]+)/([^/]+)/weights/([^/]+).eqx ]]; then
             continue_date="${BASH_REMATCH[1]}"
@@ -69,7 +73,7 @@ for noise_mode in 'noiseless'; do
             continue_name="${BASH_REMATCH[5]}"
             continue_weight="${BASH_REMATCH[6]}"
             for lr_mode in "${LR_MODES[@]}"; do
-                net_out_dir="${OUT_DIR}/${noise_mode}/candidates${NUM_CANDIDATES}/run-varied-data-size-${continue_date}-${continue_type}-size${continue_size}-scale${continue_scale}-${continue_name}-${continue_weight}-${lr_mode}"
+                net_out_dir="${OUT_DIR}/${NOISE_MODE}/candidates${num_candidates}/run-varied-data-size-${continue_date}-${continue_type}-size${continue_size}-scale${continue_scale}-${continue_name}-${continue_weight}-${lr_mode}"
                 online_eval_deps=""
                 if [[ "$DRY_RUN" != 'true' ]]; then
                     mkdir -p "$net_out_dir"
@@ -80,7 +84,7 @@ for noise_mode in 'noiseless'; do
                 for net_repeat in $(seq "$NUM_REPEATS" ); do
                     launch_dir="${net_out_dir}/trial${net_repeat}"
                     net_out_dirs+=("$launch_dir")
-                    run_out=$(echoing_sbatch continue-train-live-data-net-rollout.sh "$launch_dir" "$TRAIN_DIR" "$VAL_DIR" "$continue_scale" "$net_file" "$lr_mode" "$NUM_CANDIDATES" "$NUM_ROLLOUT_STEPS" "$LIVE_DATA_DIR")
+                    run_out=$(echoing_sbatch continue-train-live-data-net-rollout.sh "$launch_dir" "$TRAIN_DIR" "$VAL_DIR" "$continue_scale" "$net_file" "$lr_mode" "$num_candidates" "$num_rollout_steps" "$LIVE_DATA_DIR")
                     run_jobid="$(get_job_id "$run_out")"
                     echo "Submitted job ${run_jobid}"
                     online_eval_deps="${online_eval_deps}:${run_jobid}"
