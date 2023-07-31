@@ -291,7 +291,10 @@ def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_w
         fixed_train_path = pathlib.Path(train_path)
         train_name = fixed_train_path.parts[-3]
         assert train_name.startswith("train")
-        traj_limit = int(train_name[5:]) if len(train_name) > 5 else None
+        if m := re.match(r"^train(?P<size>\d+)$", train_name):
+            traj_limit = int(m.group("size"))
+        else:
+            traj_limit = None
         fixed_train_path = fixed_train_path.parent.parent.parent / "train" / fixed_train_path.parent.name / "data.hdf5"
 
         def generate_trajs():
