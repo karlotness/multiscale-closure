@@ -26,8 +26,8 @@ readonly EVAL_EPOCHS=('epoch0100')
 readonly NUM_REPEATS='3'
 readonly NOISE_MODE='noiseless'
 
-readonly CANDIDATE_OPTIONS=('34' '7' '4')
-readonly STEP_OPTIONS=('5' '25' '50')
+readonly CANDIDATE_OPTIONS=('2' '1')
+readonly STEP_OPTIONS=('87' '174')
 
 
 if [[ "$DRY_RUN" != 'true' ]]; then
