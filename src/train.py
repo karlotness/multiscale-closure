@@ -300,7 +300,6 @@ def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_w
                     select_trajs = min(ref_loader.num_trajs, traj_limit)
                 else:
                     select_trajs = ref_loader.num_trajs
-                counter = 1
                 while True:
                     traj = np_rng.integers(select_trajs).item()
                     step = np_rng.integers(low=0, high=ref_loader.num_steps - rollout_net_steps - 1).item()
@@ -323,7 +322,6 @@ def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_w
                             for k, v in traj_sys_params.items()
                         },
                     )
-                    counter += 1
         # Return results
         result_stats = {
             "num_winners": num_candidates,
