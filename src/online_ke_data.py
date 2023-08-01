@@ -82,7 +82,7 @@ def main():
                 net=net,
                 net_info=net_info,
                 net_data=cascaded_eval.NetData(
-                    input_channels=net_info['input_channels'],
+                    input_channels=net_info["input_channels"],
                     output_channels=net_info["output_channels"],
                     processing_size=net_info["processing_size"]
                 ),
