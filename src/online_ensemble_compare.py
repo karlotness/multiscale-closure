@@ -16,7 +16,7 @@ import dataclasses
 import cascaded_eval
 from cascaded_online_eval import make_parameterized_stepped_model
 from eval import load_network, make_network_evaluator
-from train import load_model_params, make_basic_coarsener, determine_required_fields
+from train import load_model_params, make_basic_coarsener, determine_required_fields, determine_channel_size
 from systems.qg import utils as qg_utils, loader, spectral
 import pyqg_jax
 import matplotlib.pyplot as plt
@@ -276,7 +276,7 @@ def main():
     logger.info("Constructing parameterized models for individual networks")
     individual_net_models = []
     for ln in loaded_nets:
-        small_size = int(ln.net_info["output_channels"][0][-2:])
+        small_size = determine_channel_size(ln.net_info["output_channels"][0])
         individual_net_models.append(
             make_parameterized_stepped_model(
                 nets=[ln.net],
