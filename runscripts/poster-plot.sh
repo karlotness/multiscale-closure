@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=eval-plots
-#SBATCH --time=10:00:00
+#SBATCH --time=15:00:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=15GB
 #SBATCH --gpus=1
@@ -38,6 +38,7 @@ export JAX_ENABLE_X64=True
 export JAX_DEFAULT_DTYPE_BITS=32
 singularity run --nv "$SINGULARITY_CONTAINER" \
             python "${CHECKOUT_DIR}/src/online_data_eval.py" \
+            --corr_num_samples=0 \
             "$OUT_FILE" \
             "$EVAL_FILE" \
             "${NET_FILES[@]}"

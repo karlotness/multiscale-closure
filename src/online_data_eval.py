@@ -128,29 +128,31 @@ def make_traj_evaluator(dt, subsampling, num_steps, small_model, ke_horizons, co
         )
         # KE Times
         ke_times = compute_step_ke(traj_q=net_traj, qg_model=small_model)
-        # Compute noise correlations
-        noise_mask = jax.random.normal(corr_rng, shape=((corr_num_samples,) + init_q.shape), dtype=init_q.dtype) * 1e-10
-        noise_init_q = jnp.expand_dims(init_q, 0) + noise_mask
-        noise_net_traj = jax.vmap(
-            functools.partial(
-                compute_traj_values,
-                loaded_net=loaded_net,
-                sys_params=sys_params,
-                dt=dt,
-                subsampling=subsampling,
-                num_steps=num_steps,
-            )
-        )(noise_init_q)
-        corr_values = jax.vmap(lambda net_q: jax.vmap(pearson_step)(ref_q, net_q))(noise_net_traj)
-        return {
+        res = {
             "losses": losses,
             "ke_spec": {
                 "kr": kr,
                 "specs": ke_specs,
             },
             "ke_times": ke_times,
-            "corr_values": corr_values,
         }
+        # Compute noise correlations
+        if corr_num_samples > 0:
+            noise_mask = jax.random.normal(corr_rng, shape=((corr_num_samples,) + init_q.shape), dtype=init_q.dtype) * 1e-10
+            noise_init_q = jnp.expand_dims(init_q, 0) + noise_mask
+            noise_net_traj = jax.vmap(
+                functools.partial(
+                    compute_traj_values,
+                    loaded_net=loaded_net,
+                    sys_params=sys_params,
+                    dt=dt,
+                    subsampling=subsampling,
+                    num_steps=num_steps,
+                )
+            )(noise_init_q)
+            corr_values = jax.vmap(lambda net_q: jax.vmap(pearson_step)(ref_q, net_q))(noise_net_traj)
+            res["corr_values"] = corr_values
+        return res
 
     return eval_traj
 
@@ -298,7 +300,8 @@ def main():
                     # ke times
                     net_group.create_dataset("ke_times", data=np.asarray(results["ke_times"]))
                     # corr values
-                    net_group.create_dataset("corr_values", data=np.asarray(results["corr_values"]))
+                    if "corr_values" in results:
+                        net_group.create_dataset("corr_values", data=np.asarray(results["corr_values"]))
                     # ke specta
                     spectra_group = net_group.create_group("spectra")
                     spectra_group.create_dataset("kr", data=np.asarray(results["ke_spec"]["kr"]))
