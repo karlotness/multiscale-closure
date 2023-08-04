@@ -59,7 +59,7 @@ parser.add_argument("--live_gen_interval", type=int, default=1, help="")
 parser.add_argument("--live_gen_sampler", type=str, default="rand-eddy-to-jet-1.0", help="")
 parser.add_argument("--live_gen_candidates", type=int, default=0, help="")
 parser.add_argument("--live_gen_winners", type=int, default=0, help="")
-parser.add_argument("--live_gen_mode", type=str, default="add-hardest", choices=["add-hardest", "network-noise", "network-noise-onestep"], help="")
+parser.add_argument("--live_gen_mode", type=str, default="add-hardest", choices=["add-hardest", "network-noise", "network-noise-onestep", "schedule-only"], help="")
 parser.add_argument("--live_gen_net_steps", type=int, default=5, help="")
 parser.add_argument("--live_gen_base_data", type=str, default=None, help="")
 
@@ -89,7 +89,14 @@ def live_sample_get_args(train_path, required_fields):
 def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_winners, dt, num_steps, num_warmup_steps, subsample, np_rng, logger, model_params, net_info, q_size, q_forcing_sizes, live_gen_mode, train_path, rollout_net_steps):
 
     def no_gen_traj_func(epoch, rng_ctr, net):
-        return [], None, rng_ctr
+        return (
+            [],
+            {
+                "num_winners": 0,
+                "num_candidates": 0,
+            },
+            rng_ctr,
+        )
 
     # User requested that no trajectories be generated
     if num_candidates == 0:
@@ -421,6 +428,16 @@ def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_w
         }
         return itertools.islice(generate_onestep_trajs(), num_candidates), result_stats, rng_ctr
 
+    def schedule_only(epoch, rng_ctr, net):
+        # Inactive epoch, generate no trajectories
+        if epoch < start_epoch or ((epoch - start_epoch) % interval) != 0:
+            return no_gen_traj_func(epoch=epoch, rng_ctr=rng_ctr, net=net)
+        result_stats = {
+            "num_winners": num_candidates,
+            "num_candidates": num_candidates,
+        }
+        return [], result_stats, rng_ctr
+
     match live_gen_mode:
         case "add-hardest":
             logger.info("Live generation %d candidates, %d winners, %d steps", num_candidates, num_winners, (num_steps - num_warmup_steps) // subsample)
@@ -432,6 +449,9 @@ def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_w
         case "network-noise-onestep":
             logger.info("Live generation with net noise of %d using only single step %d", num_candidates, rollout_net_steps)
             return net_noise_gen_onestep_func
+        case "schedule-only":
+            logger.info("Live generation for schedule purposes only")
+            return schedule_only
         case _:
             raise ValueError(f"invalid live generation mode {live_gen_mode}")
 
@@ -780,61 +800,79 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
         )(input_chunk, target_chunk)
         return jnp.mean(losses)
 
-    def do_batch(batch_pair, batch_split_point, state, rng_ctr):
-        rng, rng_ctr = jax.random.split(rng_ctr, 2)
+    def do_batch(batch_pair, batch_split_point, state, rng_ctr, clean_vs_noise_spec_counts):
         batch_1, batch_2 = batch_pair
-        if batch_2 is None:
-            # Simple: single batch
-            input_chunk = make_chunk_from_batch(
+
+        target_chunk1 = make_chunk_from_batch(
+            channels=output_channels,
+            batch=batch_1,
+            model_params=model_params,
+            processing_size=output_size,
+        )
+        if noise_spec:
+            rng1, rng2, rng_ctr = jax.random.split(rng_ctr, 3)
+            n_clean, n_noise = clean_vs_noise_spec_counts
+            prob_clean = n_clean / (n_clean + n_noise)
+            batch_size = jax.tree_util.tree_leaves(batch_1)[0].shape[0]
+            num_clean = jnp.count_nonzero(jax.random.uniform(rng1, shape=(batch_size,), dtype=jnp.float32) <= prob_clean)
+
+            input_chunk_noisy1 = make_chunk_from_batch(
                 channels=input_channels,
                 batch=batch_1,
                 model_params=model_params,
                 processing_size=processing_size,
                 noise_spec=noise_spec,
-                key=rng,
+                key=rng2,
             )
-            target_chunk = make_chunk_from_batch(
-                channels=output_channels,
+            input_chunk_clean1 = make_chunk_from_batch(
+                channels=input_channels,
                 batch=batch_1,
                 model_params=model_params,
-                processing_size=output_size,
+                processing_size=processing_size,
             )
+            # Pick how many to apply noise to
+            indices = jnp.arange(batch_size, dtype=jnp.uint32)
+            select_indices = (indices >= num_clean).astype(jnp.uint8)
+            input_chunk1 = jnp.stack([input_chunk_clean1, input_chunk_noisy1], axis=0)[select_indices, indices]
+        else:
+            input_chunk1 = make_chunk_from_batch(
+                channels=input_channels,
+                batch=batch_1,
+                model_params=model_params,
+                processing_size=processing_size,
+            )
+
+
+        if batch_2 is None:
+            # Simple: single batch
+            input_chunk = input_chunk1
+            target_chunk = target_chunk1
         else:
             # More complicated: must mix and join the two separately
-            input_chunks = []
-            target_chunks = []
-            rngs = jax.random.split(rng, 2)
-            for use_rng, batch in zip(rngs, [batch_1, batch_2]):
-                input_chunks.append(
-                    make_chunk_from_batch(
-                        channels=input_channels,
-                        batch=batch,
-                        model_params=model_params,
-                        processing_size=processing_size,
-                        noise_spec=noise_spec,
-                        key=use_rng,
-                    )
+            input_chunks = [input_chunk1]
+            target_chunks = [target_chunk1]
+            input_chunks.append(
+                make_chunk_from_batch(
+                    channels=input_channels,
+                    batch=batch_2,
+                    model_params=model_params,
+                    processing_size=processing_size,
                 )
-                target_chunks.append(
-                    make_chunk_from_batch(
-                        channels=output_channels,
-                        batch=batch,
-                        model_params=model_params,
-                        processing_size=output_size,
-                    )
+            )
+            target_chunks.append(
+                make_chunk_from_batch(
+                    channels=output_channels,
+                    batch=batch_2,
+                    model_params=model_params,
+                    processing_size=output_size,
                 )
+            )
             # Do the selection and concatenation
             batch_size = jax.tree_util.tree_leaves(batch_1)[0].shape[0]
             indices = jnp.arange(batch_size, dtype=jnp.uint32)
             select_indices = (indices >= batch_split_point).astype(jnp.uint8)
-            input_chunk = jax.tree_util.tree_map(
-                lambda chunk1, chunk2: jnp.stack([chunk1, chunk2], axis=0)[select_indices, indices],
-                *input_chunks
-            )
-            target_chunk = jax.tree_util.tree_map(
-                lambda chunk1, chunk2: jnp.stack([chunk1, chunk2], axis=0)[select_indices, indices],
-                *target_chunks
-            )
+            input_chunk = jnp.stack(input_chunks, axis=0)[select_indices, indices]
+            target_chunk = jnp.stack(target_chunks, axis=0)[select_indices, indices]
         # Compute losses
         loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, input_chunk, target_chunk)
         # Update parameters
@@ -844,7 +882,9 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
     return do_batch
 
 
-def do_epoch(train_state, batch_iter, batch_fn, rng_ctr, logger=None):
+def do_epoch(train_state, batch_iter, batch_fn, rng_ctr, clean_vs_noise_spec_counts, logger=None):
+    n_clean, n_noisy = clean_vs_noise_spec_counts
+    logger.info("Epoch with virtual noise samples clean=%d, noisy=%d", n_clean, n_noisy)
     if logger is None:
         logger = logging.getLogger("train_epoch")
     epoch_start = time.perf_counter()
@@ -852,7 +892,7 @@ def do_epoch(train_state, batch_iter, batch_fn, rng_ctr, logger=None):
     for batch in batch_iter:
         (batch_1, batch_2), split_point = batch
         split_point = jax.device_put(jnp.int32(split_point))
-        train_state, batch_loss, rng_ctr = batch_fn((batch_1, batch_2), split_point, train_state, rng_ctr)
+        train_state, batch_loss, rng_ctr = batch_fn((batch_1, batch_2), split_point, train_state, rng_ctr, (jnp.uint32(n_clean), jnp.uint32(n_noisy)))
         losses.append(batch_loss)
     epoch_end = time.perf_counter()
     mean_loss = jax.device_get(jnp.mean(jnp.stack(losses)))
@@ -1223,6 +1263,9 @@ def main(args):
             )
         )
 
+        num_clean_samples = train_loader.num_samples()
+        num_dirty_samples = 0
+
         # Training functions
         train_batch_fn = eqx.filter_jit(
             make_batch_computer(
@@ -1258,6 +1301,7 @@ def main(args):
                     batch_fn=train_batch_fn,
                     logger=logger.getChild(f"{epoch:05d}_train"),
                     rng_ctr=rng_ctr,
+                    clean_vs_noise_spec_counts=(num_clean_samples, num_dirty_samples),
                 )
             mean_loss = epoch_stats["mean_loss"]
 
@@ -1297,6 +1341,7 @@ def main(args):
                 rng_ctr=rng_ctr,
                 net=state.net,
             )
+            num_dirty_samples += new_traj_info["num_winners"]
             added_trajs = 0
             for live_traj in new_live_trajs:
                 fillable_loader.add_data(live_traj)
