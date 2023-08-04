@@ -690,10 +690,10 @@ def make_noisy_channel_from_batch(channel, batch, model_params, alt_source=None,
         alt_source=alt_source
     )
     if np.any(noise_var != 0):
-        noise_var = jnp.sqrt(noise_var).astype(chan.dtype)
+        noise_var = jnp.asarray(noise_var).astype(chan.dtype)
         if noise_var.ndim > 0:
             noise_var = jnp.expand_dims(noise_var, (-1, -2))
-        noise_mask = noise_var * jax.random.normal(key=key, shape=chan.shape, dtype=chan.dtype)
+        noise_mask = jnp.sqrt(noise_var) * jax.random.normal(key=key, shape=chan.shape, dtype=chan.dtype)
         return chan + noise_mask
     else:
         return chan
