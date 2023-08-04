@@ -21,7 +21,7 @@ TEST_HELDOUT_FILE=SCRATCH / "closure/data-rand-eddytojet/factor-1_0/test/op1/dat
 assert all(p.is_file() for p in [TRAIN_FILE, LIVE_DATA_FILE, VAL_FILE, TEST_TRAIN_FILE, TEST_HELDOUT_FILE])
 
 LAUNCH_TIME = time.strftime("%Y%m%d-%H%M%S")
-OUT_DIR=SCRATCH / "closure" / "run_outputs"/ f"continue-runs-noisy-{LAUNCH_TIME}"
+OUT_DIR=SCRATCH / "closure" / "run_outputs"/ f"continue-noise-matched-nn-{LAUNCH_TIME}"
 ORIG_NETS = [
     SCRATCH / "closure/run_outputs/run-varied-data-size-20230626-174855/rand-eddytojet/size100-scale64/net2/weights/epoch0025.eqx",
     SCRATCH / "closure/run_outputs/run-varied-data-size-20230705-174209/rand-eddytojet/size100-scale64/net0/weights/best_loss.eqx",
