@@ -59,7 +59,7 @@ parser.add_argument("--live_gen_interval", type=int, default=1, help="")
 parser.add_argument("--live_gen_sampler", type=str, default="rand-eddy-to-jet-1.0", help="")
 parser.add_argument("--live_gen_candidates", type=int, default=0, help="")
 parser.add_argument("--live_gen_winners", type=int, default=0, help="")
-parser.add_argument("--live_gen_mode", type=str, default="add-hardest", choices=["add-hardest", "network-noise"], help="")
+parser.add_argument("--live_gen_mode", type=str, default="add-hardest", choices=["add-hardest", "network-noise", "network-noise-onestep"], help="")
 parser.add_argument("--live_gen_net_steps", type=int, default=5, help="")
 parser.add_argument("--live_gen_base_data", type=str, default=None, help="")
 
@@ -332,6 +332,95 @@ def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_w
         }
         return itertools.islice(generate_trajs(), num_candidates), result_stats, rng_ctr
 
+    def generate_network_finalstep(net, init_q_batch, sys_params_batch, num_steps):
+        qg_model_params = qg_utils.qg_model_to_args(processing_model)
+        param_step_func = make_parameterized_stepped_model(
+            nets=[net],
+            net_data=[net_data],
+            model_params=model_params,
+            qg_model_args=qg_model_params,
+            dt=dt,
+        )
+        ps_func = lambda iq, sp: param_step_func(
+            initial_q=iq,
+            num_steps=num_steps,
+            subsampling=1,
+            sys_params=sp,
+            skip_steps=num_steps - 1,
+        )
+        states = jax.vmap(ps_func)(init_q_batch, sys_params_batch)
+        return states.q
+
+    net_num_steps = rollout_net_steps * subsample
+    generate_net_finalstep_fn = eqx.filter_jit(functools.partial(generate_network_finalstep, num_steps=net_num_steps))
+
+    def net_noise_gen_onestep_func(epoch, rng_ctr, net):
+        # Inactive epoch, generate no trajectories
+        if epoch < start_epoch or ((epoch - start_epoch) % interval) != 0:
+            return no_gen_traj_func(epoch=epoch, rng_ctr=rng_ctr, net=net)
+        # Active epoch, continue with generation
+        # Open a basic loader on the training set
+        fields = determine_required_fields(
+            itertools.chain(
+                net_info["input_channels"],
+                net_info["output_channels"],
+            )
+        )
+        fields.update(["rek", "beta", "delta"])
+        fixed_train_path = pathlib.Path(train_path)
+        train_name = fixed_train_path.parts[-3]
+        assert train_name.startswith("train")
+        if m := re.match(r"^train(?P<size>\d+)$", train_name):
+            traj_limit = int(m.group("size"))
+        else:
+            traj_limit = None
+        fixed_train_path = fixed_train_path.parent.parent.parent / "train" / fixed_train_path.parent.name / "data.hdf5"
+
+        def generate_onestep_trajs():
+            with SimpleQGLoader(file_path=fixed_train_path, fields=fields) as ref_loader:
+                if traj_limit is not None:
+                    select_trajs = min(ref_loader.num_trajs, traj_limit)
+                else:
+                    select_trajs = ref_loader.num_trajs
+                while True:
+                    BATCH_SIZE = 5
+                    # Assemble batch
+                    batch = []
+                    for _ in range(BATCH_SIZE):
+                        traj = np_rng.integers(select_trajs).item()
+                        step = np_rng.integers(low=0, high=ref_loader.num_steps - rollout_net_steps).item()
+                        traj_data = ref_loader.get_trajectory(traj, step, step + rollout_net_steps)
+                        traj_sys_params = jax.tree_map(lambda d: jnp.asarray(d[0, 0, 0, 0]), traj_data.sys_params)
+                        batch.append((traj_data, traj_sys_params))
+                    traj_data, traj_sys_params = jax.tree_util.tree_map(lambda *args: jnp.stack(args, axis=0), *batch)
+                    init_q = traj_data.q[:, 0]
+                    net_qs = np.asarray(generate_net_finalstep_fn(net, init_q, traj_sys_params))
+                    assert net_qs.shape[0] == BATCH_SIZE
+                    assert net_qs.shape[1] == 1
+                    # Split into batches
+                    for batch_idx in range(net_qs.shape[0]):
+                        net_q = net_qs[batch_idx]
+                        if not np.all(np.isfinite(net_q)):
+                            logger.warning("Dropping one trajectory for NaNs")
+                            continue
+                        yield SnapshotStates(
+                            q=net_q,
+                            q_total_forcings={
+                                k: np.expand_dims(np.asarray(v[batch_idx, -1]), 0) for k, v in traj_data.q_total_forcings.items()
+                            },
+                            sys_params={
+                                k: np.asarray(v)[batch_idx]
+                                for k, v in traj_sys_params.items()
+                            },
+                        )
+
+        # Return results
+        result_stats = {
+            "num_winners": num_candidates,
+            "num_candidates": num_candidates,
+        }
+        return itertools.islice(generate_onestep_trajs(), num_candidates), result_stats, rng_ctr
+
     match live_gen_mode:
         case "add-hardest":
             logger.info("Live generation %d candidates, %d winners, %d steps", num_candidates, num_winners, (num_steps - num_warmup_steps) // subsample)
@@ -340,6 +429,9 @@ def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_w
         case "network-noise":
             logger.info("Live generation with net noise of %d trajectories %d steps", num_candidates, rollout_net_steps)
             return net_noise_gen_func
+        case "network-noise-onestep":
+            logger.info("Live generation with net noise of %d using only single step %d", num_candidates, rollout_net_steps)
+            return net_noise_gen_onestep_func
         case _:
             raise ValueError(f"invalid live generation mode {live_gen_mode}")
 
