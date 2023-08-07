@@ -57,7 +57,7 @@ for repeat in range(NUM_REPEATS):
     if not DRY_RUN:
         run_dir.mkdir(exist_ok=False, parents=True)
     job_id = sbatch_launch(["run-unet-basictrain.sh", str(run_dir), str(TRAIN_FILE.parent), str(VAL_FILE.parent)])
-    eval_weights.append(run_dir / "weights" / "epoch0100.eqx")
+    eval_weights.append(run_dir / "weights" / "epoch0050.eqx")
     eval_job_ids.append(job_id)
 # Launch evaluation jobs
 for eval_file in [TEST_TRAIN_FILE, TEST_HELDOUT_FILE]:
