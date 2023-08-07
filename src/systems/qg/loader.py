@@ -340,7 +340,6 @@ class ThreadedPreShuffledSnapshotLoader:
 class AggregateLoader:
     def __init__(self, loaders, batch_size, seed=None):
         self.loaders = tuple(loaders)
-        assert len(self.loaders) <= 2
         self.batch_size = batch_size
         self._closed = False
         if seed is None:
@@ -355,21 +354,26 @@ class AggregateLoader:
     def next_batch(self):
         if self._closed:
             raise ValueError("Closed loader, cannot load batches")
-        active_loaders = [loader for loader in self.loaders if loader.num_samples() > 0]
+        active_loaders = []
+        weights = []
+        for loader in self.loaders:
+            num_samps = loader.num_samples()
+            if num_samps > 0:
+                active_loaders.append(loader)
+                weights.append(num_samps)
         weights = np.asarray([loader.num_samples() for loader in active_loaders])
         weights = weights / weights.sum()
         samples_per_loader = self._np_rng.multinomial(self.batch_size, weights)
-        split_point = samples_per_loader[0]
         batches = [loader.next_batch() for loader in active_loaders]
-        if len(batches) < 2:
-            batches.append(None)
-        return batches, split_point
+        extension = len(self.loaders) - len(batches)
+        batches.extend([None] * extension)
+        samples_per_loader = np.concatenate([samples_per_loader, np.zeros(extension, dtype=samples_per_loader.dtype)], axis=0)
+        return batches, samples_per_loader
 
     @staticmethod
     def _slice_batch(batch, num_samples):
         assert batch.shape[0] >= num_samples
         return batch[:num_samples]
-
 
     def iter_batches(self):
         # A generator over the batches

@@ -800,25 +800,31 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
         )(input_chunk, target_chunk)
         return jnp.mean(losses)
 
-    def do_batch(batch_pair, batch_split_point, state, rng_ctr, clean_vs_noise_spec_counts):
-        batch_1, batch_2 = batch_pair
+    def do_batch(batches, samples_per_batch, state, rng_ctr, clean_vs_noise_spec_counts):
+        input_chunks = []
+        target_chunks = []
+        batch_sizes = {leaf.shape[0] for leaf in jax.tree_util.tree_leaves(batches)}
+        if len(batch_sizes) != 1:
+            raise ValueError(f"inconsistent batch sizes {batch_sizes}")
+        batch_size = batch_sizes.pop()
 
+        # Special processing for the first chunk (gaussian noise, if needed)
+        batch = batches[0]
         target_chunk1 = make_chunk_from_batch(
             channels=output_channels,
-            batch=batch_1,
+            batch=batch,
             model_params=model_params,
             processing_size=output_size,
         )
         if noise_spec:
+            # Need to do noise processing and selection
             rng1, rng2, rng_ctr = jax.random.split(rng_ctr, 3)
             n_clean, n_noise = clean_vs_noise_spec_counts
             prob_clean = n_clean / (n_clean + n_noise)
-            batch_size = jax.tree_util.tree_leaves(batch_1)[0].shape[0]
             num_clean = jnp.count_nonzero(jax.random.uniform(rng1, shape=(batch_size,), dtype=jnp.float32) <= prob_clean)
-
             input_chunk_noisy1 = make_chunk_from_batch(
                 channels=input_channels,
-                batch=batch_1,
+                batch=batch,
                 model_params=model_params,
                 processing_size=processing_size,
                 noise_spec=noise_spec,
@@ -826,7 +832,7 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
             )
             input_chunk_clean1 = make_chunk_from_batch(
                 channels=input_channels,
-                batch=batch_1,
+                batch=batch,
                 model_params=model_params,
                 processing_size=processing_size,
             )
@@ -837,24 +843,22 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
         else:
             input_chunk1 = make_chunk_from_batch(
                 channels=input_channels,
-                batch=batch_1,
+                batch=batch,
                 model_params=model_params,
                 processing_size=processing_size,
             )
+        # Store chunks
+        input_chunks.append(input_chunk1)
+        target_chunks.append(target_chunk1)
 
-
-        if batch_2 is None:
-            # Simple: single batch
-            input_chunk = input_chunk1
-            target_chunk = target_chunk1
-        else:
-            # More complicated: must mix and join the two separately
-            input_chunks = [input_chunk1]
-            target_chunks = [target_chunk1]
+        # Continue with remaining batches
+        for batch in itertools.islice(batches, 1, None):
+            if batch is None:
+                continue
             input_chunks.append(
                 make_chunk_from_batch(
                     channels=input_channels,
-                    batch=batch_2,
+                    batch=batch,
                     model_params=model_params,
                     processing_size=processing_size,
                 )
@@ -862,17 +866,16 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
             target_chunks.append(
                 make_chunk_from_batch(
                     channels=output_channels,
-                    batch=batch_2,
+                    batch=batch,
                     model_params=model_params,
                     processing_size=output_size,
                 )
             )
-            # Do the selection and concatenation
-            batch_size = jax.tree_util.tree_leaves(batch_1)[0].shape[0]
-            indices = jnp.arange(batch_size, dtype=jnp.uint32)
-            select_indices = (indices >= batch_split_point).astype(jnp.uint8)
-            input_chunk = jnp.stack(input_chunks, axis=0)[select_indices, indices]
-            target_chunk = jnp.stack(target_chunks, axis=0)[select_indices, indices]
+        # Do selection slicing
+        indices = jnp.arange(batch_size, dtype=jnp.uint32)
+        select_indices = jnp.sum((jnp.expand_dims(indices, 0) >= jnp.expand_dims(jnp.cumsum(samples_per_batch, axis=0), -1)).astype(jnp.uint8), axis=0)
+        input_chunk = jnp.stack(input_chunks, axis=0)[select_indices, indices]
+        target_chunk = jnp.stack(target_chunks, axis=0)[select_indices, indices]
         # Compute losses
         loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, input_chunk, target_chunk)
         # Update parameters
@@ -890,9 +893,10 @@ def do_epoch(train_state, batch_iter, batch_fn, rng_ctr, clean_vs_noise_spec_cou
     epoch_start = time.perf_counter()
     losses = []
     for batch in batch_iter:
-        (batch_1, batch_2), split_point = batch
-        split_point = jax.device_put(jnp.int32(split_point))
-        train_state, batch_loss, rng_ctr = batch_fn((batch_1, batch_2), split_point, train_state, rng_ctr, (jnp.uint32(n_clean), jnp.uint32(n_noisy)))
+        batches, samples_per_batch = batch
+        train_state, batch_loss, rng_ctr = batch_fn(batches, samples_per_batch, train_state, rng_ctr, (jnp.uint32(n_clean), jnp.uint32(n_noisy)))
+        batches = None
+        samples_per_batch = None
         losses.append(batch_loss)
     epoch_end = time.perf_counter()
     mean_loss = jax.device_get(jnp.mean(jnp.stack(losses)))
@@ -1245,6 +1249,11 @@ def main(args):
                         seed=np_rng.integers(2**32).item(),
                         base_logger=logger.getChild("train_loader"),
                         fields=required_fields,
+                    ),
+                    FillableDataLoader(
+                        batch_size=args.batch_size,
+                        fields=required_fields,
+                        seed=np_rng.integers(2**32).item(),
                     ),
                     FillableDataLoader(
                         batch_size=args.batch_size,
