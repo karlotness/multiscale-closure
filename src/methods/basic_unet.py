@@ -171,7 +171,7 @@ class BasicUNetV1(eqx.Module):
         key_down, key_up = key_split_or_none(key, 2)
         ret = x
         # Downward process
-        down_keys = key_split_or_none(key, len(self.layers_down))
+        down_keys = key_split_or_none(key_down, len(self.layers_down))
         skip_connections = []
         for i, (layer, key) in enumerate(zip(self.layers_down, down_keys, strict=True)):
             ret = layer(ret, key=key)
@@ -180,7 +180,7 @@ class BasicUNetV1(eqx.Module):
                 ret = self.pool_down(ret, key=None)
         ret = None
         # Upward process
-        up_keys = key_split_or_none(key, len(self.layers_down))
+        up_keys = key_split_or_none(key_up, len(self.layers_up))
         for layer, key in zip(self.layers_up, up_keys, strict=True):
             skip_value = skip_connections.pop()
             if ret is not None:
