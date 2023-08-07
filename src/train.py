@@ -62,6 +62,7 @@ parser.add_argument("--live_gen_winners", type=int, default=0, help="")
 parser.add_argument("--live_gen_mode", type=str, default="add-hardest", choices=["add-hardest", "network-noise", "network-noise-onestep", "schedule-only"], help="")
 parser.add_argument("--live_gen_net_steps", type=int, default=5, help="")
 parser.add_argument("--live_gen_base_data", type=str, default=None, help="")
+parser.add_argument("--live_gen_switch_set_interval", type=int, default=None, help="")
 
 
 def live_sample_get_args(train_path, required_fields):
@@ -1345,8 +1346,20 @@ def main(args):
 
             # Add live-generated trajectories, if required
             logger.info("Starting live trajectory generation")
-            fillable_loader = train_loader.loaders[-1]
-            assert isinstance(fillable_loader, FillableDataLoader)
+
+            if args.live_gen_switch_set_interval is not None:
+                set_switch_count = (epoch - args.live_gen_start_epoch) // args.live_gen_switch_set_interval
+                fillable_idx = 1 + (set_switch_count % 2)
+                just_switched = ((epoch - args.live_gen_start_epoch) % args.live_gen_switch_set_interval) == 0
+                fillable_loader = train_loader.loaders[fillable_idx]
+                assert isinstance(fillable_loader, FillableDataLoader)
+                if just_switched:
+                    logger.info("Clearing new data loader %d", fillable_idx)
+                    num_dirty_samples = max(0, num_dirty_samples - fillable_loader.num_samples())
+                    fillable_loader.clear()
+            else:
+                fillable_loader = train_loader.loaders[1]
+                assert isinstance(fillable_loader, FillableDataLoader)
             new_live_trajs, new_traj_info, rng_ctr = live_gen_func(
                 epoch=epoch,
                 rng_ctr=rng_ctr,
@@ -1358,6 +1371,7 @@ def main(args):
                 fillable_loader.add_data(live_traj)
                 added_trajs += 1
             logger.info("Added %d live-generated trajectories", added_trajs)
+            logger.info("Loader samples: %s", [l.num_samples() for l in train_loader.loaders])
             new_live_trajs = None
 
             epoch_reports.append(
