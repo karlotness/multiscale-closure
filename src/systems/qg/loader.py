@@ -13,6 +13,7 @@ import random
 import h5py
 import zarr
 import re
+import shutil
 from . import kernel
 from . import utils as qg_utils
 from .qg_model import QGModel
@@ -454,6 +455,11 @@ class FillableDataLoader:
                 compressor=None,
             )
         self._data.append(self._combine_array(sample, self._data.dtype), axis=0)
+
+    def clear(self):
+        if self._data is not None:
+            self._data = None
+            shutil.rmtree(pathlib.Path(self._temp_dir.name) / "data.zarr")
 
     def num_samples(self):
         if self._data is None:
