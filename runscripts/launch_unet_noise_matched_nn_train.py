@@ -21,28 +21,26 @@ TEST_HELDOUT_FILE=SCRATCH / "closure/data-rand-eddytojet/factor-1_0/test/op1/dat
 assert all(p.is_file() for p in [TRAIN_FILE, LIVE_DATA_FILE, VAL_FILE, TEST_TRAIN_FILE, TEST_HELDOUT_FILE])
 
 LAUNCH_TIME = time.strftime("%Y%m%d-%H%M%S")
-OUT_DIR=SCRATCH / "closure" / "run_outputs"/ f"continue-noise-matched-nn-{LAUNCH_TIME}"
+OUT_DIR=SCRATCH / "closure" / "run_outputs"/ f"continue-unet-noise-matched-nn-{LAUNCH_TIME}"
 ORIG_NETS = [
-    SCRATCH / "closure/run_outputs/run-varied-data-size-20230626-174855/rand-eddytojet/size100-scale64/net2/weights/epoch0025.eqx",
-    SCRATCH / "closure/run_outputs/run-varied-data-size-20230705-174209/rand-eddytojet/size100-scale64/net0/weights/best_loss.eqx",
-    SCRATCH / "closure/run_outputs/run-varied-data-size-20230705-174209/rand-eddytojet/size100-scale64/net2/weights/best_loss.eqx",
-    SCRATCH / "closure/run_outputs/run-varied-data-size-20230705-174209/rand-eddytojet/size100-scale64/net3/weights/best_loss.eqx",
-    SCRATCH / "closure/run_outputs/run-varied-data-size-20230705-174209/rand-eddytojet/size100-scale64/net3/weights/epoch0045.eqx",
-    SCRATCH / "closure/run_outputs/run-varied-data-size-20230705-174209/rand-eddytojet/size100-scale64/net4/weights/best_loss.eqx",
-    SCRATCH / "closure/run_outputs/run-varied-data-size-20230705-174209/rand-eddytojet/size100-scale64/net4/weights/epoch0035.eqx",
-    SCRATCH / "closure/run_outputs/run-varied-data-size-20230705-174209/rand-eddytojet/size100-scale64/net4/weights/epoch0045.eqx",
+    SCRATCH / "closure/run_outputs/test-unet-basictrain-20230804-172603/net0/weights/epoch0050.eqx",
+    SCRATCH / "closure/run_outputs/test-unet-basictrain-20230804-172603/net1/weights/epoch0050.eqx",
+    SCRATCH / "closure/run_outputs/test-unet-basictrain-20230804-172603/net2/weights/epoch0050.eqx",
+    SCRATCH / "closure/run_outputs/test-unet-basictrain-20230804-172603/net3/weights/epoch0050.eqx",
+    SCRATCH / "closure/run_outputs/test-unet-basictrain-20230804-172603/net4/weights/epoch0050.eqx",
 ]
 STEP_LAYER_VARS = [
-    (1, [0.00797639, 0.0038702]),
-    (5, [0.01694924, 0.00856806]),
-    (10, [0.03143954, 0.01700634]),
-    (20, [0.07309306, 0.04431301]),
-    (30, [0.12395001, 0.07433827]),
-    (50, [0.22673633, 0.15860094]),
-    (75, [0.36116423, 0.28159175]),
+    (1, [0.00798389, 0.00387389]),
+    (5, [0.01714426, 0.00859316]),
+    (10, [0.01714426, 0.00859316]),
+    (20, [0.07328796, 0.04462764]),
+    (30, [0.1270281, 0.07669523]),
+    (50, [0.23283872, 0.15958133]),
+    (75, [0.36997646, 0.28753303]),
 ]
 dry_run_counter = 1000
 
+assert all(p.is_file() for p in ORIG_NETS)
 
 def sbatch_launch(args, dependency_ids=None):
     global dry_run_counter
@@ -85,7 +83,7 @@ for config_i, (num_steps, var_values) in enumerate(STEP_LAYER_VARS):
                 if not DRY_RUN:
                     run_dir.mkdir(exist_ok=False, parents=True)
                 # Launch job
-                job_id = sbatch_launch(["run-noise-match-net-roll-train.sh", str(run_dir), str(TRAIN_FILE.parent), str(VAL_FILE.parent), str(LIVE_DATA_FILE.parent), str(orig_net), gen_mode, spec_str, str(num_steps), str(NUM_SNAPSHOTS), "gz-fcnn-v1"])
+                job_id = sbatch_launch(["run-noise-match-net-roll-train.sh", str(run_dir), str(TRAIN_FILE.parent), str(VAL_FILE.parent), str(LIVE_DATA_FILE.parent), str(orig_net), gen_mode, spec_str, str(num_steps), str(NUM_SNAPSHOTS), "unet-v1"])
                 eval_weights.append(run_dir / "weights" / "epoch0100.eqx")
                 eval_job_ids.append(job_id)
         # Launch evaluation jobs

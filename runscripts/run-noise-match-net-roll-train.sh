@@ -10,9 +10,9 @@
 set -euo pipefail
 shopt -s failglob
 
-if [[ $# -lt 9 ]]; then
+if [[ $# -lt 10 ]]; then
     echo 'ERROR: Insufficient parameters for training'
-    echo 'Usage run-noise-match-net-roll-train.sh OUT_DIR TRAIN_DIR VAL_DIR LIVE_DATA_DIR ORIG_WEIGHT GEN_MODE SPEC_STR NUM_STEPS NUM_STEPS'
+    echo 'Usage run-noise-match-net-roll-train.sh OUT_DIR TRAIN_DIR VAL_DIR LIVE_DATA_DIR ORIG_WEIGHT GEN_MODE SPEC_STR NUM_STEPS NUM_STEPS ARCHITECTURE'
     exit 1
 fi
 
@@ -25,6 +25,7 @@ readonly GEN_MODE="$6"
 readonly SPEC_STR="$7"
 readonly NUM_ROLLOUT_STEPS="$8"
 readonly NUM_CANDIDATES="$9"
+readonly ARCHITECTURE="${10}"
 
 readonly LR='0.001'
 readonly SCALE='64'
@@ -61,7 +62,7 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --lr="$LR" \
             --end_lr="$LR" \
             --lr_schedule=ross22 \
-            --architecture='gz-fcnn-v1' \
+            --architecture="$ARCHITECTURE" \
             --input_channels "q_${SCALE}" "rek_${SCALE}" "delta_${SCALE}" "beta_${SCALE}" \
             --output_channels "q_total_forcing_${SCALE}" \
             --net_weight_continue="$WEIGHT_FILE" \
