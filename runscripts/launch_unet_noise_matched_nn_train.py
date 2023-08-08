@@ -83,7 +83,7 @@ for config_i, (num_steps, var_values) in enumerate(STEP_LAYER_VARS):
                 if not DRY_RUN:
                     run_dir.mkdir(exist_ok=False, parents=True)
                 # Launch job
-                job_id = sbatch_launch(["run-noise-match-net-roll-train.sh", str(run_dir), str(TRAIN_FILE.parent), str(VAL_FILE.parent), str(LIVE_DATA_FILE.parent), str(orig_net), gen_mode, spec_str, str(num_steps), str(NUM_SNAPSHOTS), "unet-v1"])
+                job_id = sbatch_launch(["run-noise-match-net-roll-train.sh", str(run_dir), str(TRAIN_FILE.parent), str(VAL_FILE.parent), str(LIVE_DATA_FILE.parent), str(orig_net), gen_mode, spec_str, str(num_steps), str(NUM_SNAPSHOTS), "unet-v1", ""])
                 eval_weights.append(run_dir / "weights" / "epoch0100.eqx")
                 eval_job_ids.append(job_id)
         # Launch evaluation jobs

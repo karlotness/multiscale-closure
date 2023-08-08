@@ -10,9 +10,9 @@
 set -euo pipefail
 shopt -s failglob
 
-if [[ $# -lt 10 ]]; then
+if [[ $# -lt 11 ]]; then
     echo 'ERROR: Insufficient parameters for training'
-    echo 'Usage run-noise-match-net-roll-train.sh OUT_DIR TRAIN_DIR VAL_DIR LIVE_DATA_DIR ORIG_WEIGHT GEN_MODE SPEC_STR NUM_STEPS NUM_STEPS ARCHITECTURE'
+    echo 'Usage run-noise-match-net-roll-train.sh OUT_DIR TRAIN_DIR VAL_DIR LIVE_DATA_DIR ORIG_WEIGHT GEN_MODE SPEC_STR NUM_STEPS NUM_STEPS ARCHITECTURE SWITCH_LIVE_SET_INTERVAL'
     exit 1
 fi
 
@@ -26,6 +26,7 @@ readonly SPEC_STR="$7"
 readonly NUM_ROLLOUT_STEPS="$8"
 readonly NUM_CANDIDATES="$9"
 readonly ARCHITECTURE="${10}"
+readonly SWITCH_LIVE_SET_INTERVAL="${11}"
 
 readonly LR='0.001'
 readonly SCALE='64'
@@ -34,6 +35,12 @@ if [[ -n "$SPEC_STR" ]]; then
     noise_args=('--noise_specs' "$SPEC_STR")
 else
     noise_args=()
+fi
+
+if [[ -n "$SWITCH_LIVE_SET_INTERVAL" ]]; then
+    switch_interval_args=('--live_gen_switch_set_interval' "$SWITCH_LIVE_SET_INTERVAL")
+else
+    switch_interval_args=()
 fi
 
 # Constants
@@ -73,4 +80,5 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --live_gen_mode="$GEN_MODE" \
             --live_gen_net_steps="$NUM_ROLLOUT_STEPS" \
             --live_gen_base_data="$LIVE_DATA_DIR" \
-            "${noise_args[@]}"
+            "${noise_args[@]}" \
+            "${switch_interval_args[@]}"
