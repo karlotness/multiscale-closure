@@ -391,7 +391,7 @@ def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_w
                 else:
                     select_trajs = ref_loader.num_trajs
                 while True:
-                    BATCH_SIZE = 5
+                    BATCH_SIZE = min(64, num_candidates)
                     # Assemble batch
                     batch = []
                     for _ in range(BATCH_SIZE):
