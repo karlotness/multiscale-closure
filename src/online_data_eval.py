@@ -10,14 +10,17 @@ import jax.numpy as jnp
 import jax
 import equinox as eqx
 import numpy as np
+import operator
 import utils
 import jax_utils
 from eval import load_network
 import cascaded_eval
-from systems.qg import loader, spectral
+from systems.qg import loader, spectral, utils as qg_utils
 from online_ke_data import model_rollout
 from train import determine_required_fields, determine_channel_size, load_model_params
 from online_ensemble_compare import make_ke_time_computer, LoadedNetwork, ke_spec, SYS_INFO_CHANNELS
+from cascaded_online_eval import make_net_param_func
+import pyqg_jax
 
 HORIZONS = [250, 1000, 2500, 5400, 10800]
 
@@ -27,7 +30,17 @@ parser.add_argument("eval_file", type=str, help="File to use for evaluation refe
 parser.add_argument("net_weights", type=str, nargs="+", help="Network weights to evaluate")
 parser.add_argument("--log_level", type=str, help="Level for logger", default="info", choices=["debug", "info", "warning", "error", "critical"])
 parser.add_argument("--corr_seed", type=int, default=123, help="RNG seed for correlation coefficient noise")
-parser.add_argument("--corr_num_samples", type=int, default=3, help="Number of correlation samples to draw")
+parser.add_argument("--corr_num_samples", type=int, default=3, help="Number of correlation samples to draw (UNUSED)")
+parser.add_argument("--trajectory_batch_size", type=int, default=16, help="Number of trajectories to batch together")
+
+
+def batched(iterable, n):
+    # Following recipe from itertools documentation
+    if n < 1:
+        raise ValueError('n must be at least one')
+    it = iter(iterable)
+    while batch := tuple(itertools.islice(it, n)):
+        yield batch
 
 
 def pearsonr(x, y):
@@ -84,20 +97,102 @@ def compute_traj_losses(traj_q, ref_q):
     }
 
 
-def compute_traj_values(init_q, loaded_net, sys_params, dt, subsampling, num_steps):
-    net_num_steps = num_steps * subsampling
-    traj_q = model_rollout(
-        loaded_net=loaded_net,
-        initial_q=init_q,
-        sys_params=sys_params,
-        dt=dt,
-        num_steps=net_num_steps + 1,
-        subsampling=subsampling,
-        skip_steps=1,
-    )
-    assert traj_q.shape[0] == num_steps
-    return traj_q
 
+def make_parameterized_stepped_model(nets, net_data, model_params, qg_model_args, dt):
+
+    def model_stepper(initial_q, subsampling=1, sys_params={}, skip_steps=0):
+        assert all(v.ndim == 0 for v in sys_params.values())
+        new_model_params = qg_model_args.copy()
+        new_model_params.update(sys_params)
+        fixed_sys_params = {k: jnp.full((1, 1, 1), fill_value=v) for k, v in sys_params.items()}
+        model = pyqg_jax.steppers.SteppedModel(
+            pyqg_jax.parameterizations.ParameterizedModel(
+                pyqg_jax.qg_model.QGModel(
+                    **new_model_params,
+                ),
+                param_func=functools.partial(
+                    make_net_param_func(
+                        nets=nets,
+                        net_data=net_data,
+                        model_params=model_params,
+                    ),
+                    sys_params=fixed_sys_params,
+                )
+            ),
+            pyqg_jax.steppers.AB3Stepper(dt=dt),
+        )
+
+        # Wrap in model states
+        inner_state = model.model.model.create_initial_state(jax.random.PRNGKey(0))
+        inner_state = inner_state.update(q=initial_q)
+        state = model.initialize_stepper_state(
+            model.model.initialize_param_state(inner_state)
+        )
+
+        # Step through time
+        def one_step_state(carry, _x):
+            old_state = carry
+            new_state = model.step_model(old_state)
+            out_value = old_state.state.model_state
+            return new_state, out_value
+
+        def subsample_step_state(state):
+            new_state, _ys = jax.lax.scan(
+                one_step_state,
+                state,
+                None,
+                length=subsampling,
+            )
+            return new_state
+
+        # Step through time
+        def step_state(carry, _x):
+            old_state = carry
+            new_state = model.step_model(old_state)
+            out_value = old_state.state.model_state
+            return new_state, out_value
+
+        def skip_states(carry, _x):
+            new_state, _y = step_state(carry, _x)
+            return new_state, None
+
+        # Skip the warmup steps, if any
+        if skip_steps > 0:
+            state, _states = jax.lax.scan(
+                skip_states,
+                state,
+                None,
+                length=skip_steps,
+            )
+
+        return state, subsample_step_state
+
+    return model_stepper
+
+
+def values_from_step(i, carry, step_state, qg_model, horizons):
+    state, results = carry
+    results = results.copy()
+    # Process the current state into results
+    step_ke = compute_step_ke(jnp.expand_dims(state.state.model_state.q, 0), qg_model=qg_model)
+    results["ke_times"] = jax.lax.dynamic_update_index_in_dim(
+        results["ke_times"],
+        step_ke,
+        index=i,
+        axis=0,
+    )
+    # Spectrum
+    ke_spec_val = ke_spec(state.state.model_state.q, small_model=qg_model)
+    # Include specrum in averages as needed
+    for horizon in horizons:
+        results["ke_spec"][horizon] = results["ke_spec"][horizon] + jax.lax.select(
+            i < horizon,
+            ke_spec_val,
+            jnp.zeros_like(ke_spec_val),
+        )
+    # Step time forward
+    new_state = step_state(state)
+    return new_state, results
 
 
 def make_traj_evaluator(dt, subsampling, num_steps, small_model, ke_horizons, corr_num_samples):
@@ -106,55 +201,64 @@ def make_traj_evaluator(dt, subsampling, num_steps, small_model, ke_horizons, co
         ref_q = batch.q
         init_q = ref_q[0]
         sys_params = jax.tree_map(lambda d: jnp.asarray(d[0, 0, 0, 0]), batch.sys_params)
-        # Compute base net_trajectory
-        net_traj = compute_traj_values(
-            init_q=init_q,
-            loaded_net=loaded_net,
-            sys_params=sys_params,
+        # Prepare state
+        phase1 = make_parameterized_stepped_model(
+            nets=[loaded_net.net],
+            net_data=[loaded_net.net_data],
+            model_params=loaded_net.model_params,
+            qg_model_args=qg_utils.qg_model_to_args(small_model),
             dt=dt,
+        )
+        state, step_state = phase1(
+            initial_q=init_q,
             subsampling=subsampling,
-            num_steps=num_steps,
+            sys_params=sys_params,
+            skip_steps=1,
         )
-        # Compute losses
-        losses = compute_traj_losses(
-            traj_q=net_traj,
-            ref_q=ref_q,
-        )
-        # KE Spec
-        kr, ke_specs = compute_traj_ke_spec(
-            traj_q=net_traj,
-            qg_model=small_model,
-            horizons=ke_horizons,
-        )
-        # KE Times
-        ke_times = compute_step_ke(traj_q=net_traj, qg_model=small_model)
-        res = {
-            "losses": losses,
-            "ke_spec": {
-                "kr": kr,
-                "specs": ke_specs,
+        # Loop over the states
+        init_carry = (
+            state,
+            {
+                "ke_times": jnp.zeros((num_steps,), dtype=jnp.float64),
+                "ke_spec": {
+                    horizon: jnp.zeros((small_model.nz, small_model.nl, small_model.nk), dtype=jnp.float64)
+                    for horizon in HORIZONS
+                },
             },
-            "ke_times": ke_times,
+        )
+        final_state, result = jax.lax.fori_loop(
+            0,
+            num_steps,
+            functools.partial(values_from_step, step_state=step_state, qg_model=small_model, horizons=HORIZONS),
+            init_carry,
+        )
+        out_result = {
+            "ke_times": result["ke_times"],
+            "ke_spec": {"specs": {}}
         }
-        # Compute noise correlations
-        if corr_num_samples > 0:
-            noise_mask = jax.random.normal(corr_rng, shape=((corr_num_samples,) + init_q.shape), dtype=init_q.dtype) * 1e-10
-            noise_init_q = jnp.expand_dims(init_q, 0) + noise_mask
-            noise_net_traj = jax.vmap(
-                functools.partial(
-                    compute_traj_values,
-                    loaded_net=loaded_net,
-                    sys_params=sys_params,
-                    dt=dt,
-                    subsampling=subsampling,
-                    num_steps=num_steps,
-                )
-            )(noise_init_q)
-            corr_values = jax.vmap(lambda net_q: jax.vmap(pearson_step)(ref_q, net_q))(noise_net_traj)
-            res["corr_values"] = corr_values
-        return res
+        for k in result["ke_spec"].keys():
+            mean_ke = result["ke_spec"][k] / k
+            kr, ke_spec_vals = jax.vmap(spectral.calc_ispec, in_axes=[None, 0], out_axes=(None, 0))(small_model, mean_ke)
+            out_result["ke_spec"]["specs"][k] = ke_spec_vals
+        out_result["ke_spec"]["kr"] = kr
+        return out_result
 
     return eval_traj
+
+
+def batch_traj_evaluator(traj_eval_fn):
+
+    def eval_traj(batch_of_batches, loaded_net, corr_rng):
+        batch_size = set(jnp.shape(leaf)[0] for leaf in jax.tree_util.tree_leaves(batch_of_batches))
+        return jax.vmap(lambda batch: traj_eval_fn(batch, loaded_net, corr_rng))(batch_of_batches)
+
+    return eval_traj
+
+
+
+@jax.jit
+def traj_stack(traj_batches):
+    return jax.tree_util.tree_map(lambda *args: jnp.stack(args), *traj_batches)
 
 
 def load_networks(net_paths, eval_file, logger=None):
@@ -221,7 +325,7 @@ def main():
         logger.error("Eval file %s does not exist", eval_file)
         sys.exit(2)
     if out_file.is_file():
-        logger.error("Output file %s already exists", eval_file)
+        logger.error("Output file %s already exists", out_file)
         sys.exit(3)
 
     # Load networks
@@ -259,16 +363,18 @@ def main():
 
     # Args: batch, loaded_net, corr_rng
     traj_eval_fn = eqx.filter_jit(
-        make_traj_evaluator(
-            dt=dt,
-            subsampling=subsample,
-            num_steps=num_steps,
-            small_model=loaded_nets[0].model_params.qg_models[small_size],
-            ke_horizons=HORIZONS,
-            corr_num_samples=args.corr_num_samples,
+        batch_traj_evaluator(
+            make_traj_evaluator(
+                dt=dt,
+                subsampling=subsample,
+                num_steps=num_steps,
+                small_model=loaded_nets[0].model_params.qg_models[small_size],
+                ke_horizons=HORIZONS,
+                corr_num_samples=args.corr_num_samples,
+            )
         )
     )
-    corr_rng_ctr = jax.random.PRNGKey(args.corr_seed)
+    corr_rng = jax.random.PRNGKey(args.corr_seed)
 
     # Open output file
     with h5py.File(out_file, "w") as out_file:
@@ -283,31 +389,35 @@ def main():
         with loader.SimpleQGLoader(eval_file, fields=required_fields) as data_set:
             results_group = out_file.create_group("results")
             assert data_set.num_steps == num_steps
+
             for traj_num in range(data_set.num_trajs):
-                traj_group = results_group.create_group(f"traj{traj_num:05d}")
-                logger.info("Starting trajectory %d", traj_num)
-                corr_rng_ctr, corr_rng = jax.random.split(corr_rng_ctr, 2)
-                traj_data = data_set.get_trajectory(traj_num)
-                for net_id, ln in zip(net_ids, loaded_nets, strict=True):
-                    net_group = traj_group.create_group(net_id)
-                    logger.info("Processing trajectory %d and net %s", traj_num, net_id)
-                    results = traj_eval_fn(traj_data, ln, corr_rng)
+                results_group.create_group(f"traj{traj_num:05d}")
+
+            for net_id, ln in zip(net_ids, loaded_nets, strict=True):
+                for traj_batch in batched(range(data_set.num_trajs), args.trajectory_batch_size):
+                    # Load data
+                    logger.info("Loading trajectories %d - %d", min(traj_batch), max(traj_batch))
+                    traj_data = []
+                    for traj_num in traj_batch:
+                        traj_data.append(data_set.get_trajectory(traj_num, 0, 1))
+                    traj_data = traj_stack(traj_data)
+                    # Compute results
+                    logger.info("Processing trajectories %d - %d and net %s", min(traj_batch), max(traj_batch), net_id)
+                    batch_results = traj_eval_fn(traj_data, ln, corr_rng)
                     # Store results
-                    # losses
-                    loss_group = net_group.create_group("losses")
-                    for loss_k, loss_v in results["losses"].items():
-                        loss_group.create_dataset(loss_k, data=np.asarray(loss_v))
-                    # ke times
-                    net_group.create_dataset("ke_times", data=np.asarray(results["ke_times"]))
-                    # corr values
-                    if "corr_values" in results:
-                        net_group.create_dataset("corr_values", data=np.asarray(results["corr_values"]))
-                    # ke specta
-                    spectra_group = net_group.create_group("spectra")
-                    spectra_group.create_dataset("kr", data=np.asarray(results["ke_spec"]["kr"]))
-                    for horizon, spectrum in results["ke_spec"]["specs"].items():
-                        spectra_group.create_dataset(f"horiz{horizon:05d}", data=np.asarray(spectrum))
-                    results = None
+                    for idx, traj_num in enumerate(traj_batch):
+                        results = jax.tree_util.tree_map(operator.itemgetter(idx), batch_results)
+                        traj_group = results_group[f"traj{traj_num:05d}"]
+                        net_group = traj_group.create_group(net_id)
+                        # ke times
+                        net_group.create_dataset("ke_times", data=np.asarray(results["ke_times"]))
+                        # ke specta
+                        spectra_group = net_group.create_group("spectra")
+                        spectra_group.create_dataset("kr", data=np.asarray(results["ke_spec"]["kr"]))
+                        for horizon, spectrum in results["ke_spec"]["specs"].items():
+                            spectra_group.create_dataset(f"horiz{horizon:05d}", data=np.asarray(spectrum))
+                        results = None
+                    batch_results = None
 
     logger.info("Finished computing stats")
 
