@@ -83,10 +83,11 @@ def make_net_param_func(nets, net_data, model_params):
     return net_param_func
 
 
-def make_parameterized_stepped_model(nets, net_data, model_params, qg_model_args, dt):
+def make_parameterized_stepped_model(nets, net_data, model_params, qg_model_args, dt, state_map_fn=None):
 
     @functools.partial(jax.jit, static_argnums=(1, 2, 4))
     def model_stepper(initial_q, num_steps, subsampling=1, sys_params={}, skip_steps=0):
+        nonlocal state_map_fn
         assert all(v.ndim == 0 for v in sys_params.values())
         assert num_steps > skip_steps
         new_model_params = qg_model_args.copy()
@@ -119,7 +120,11 @@ def make_parameterized_stepped_model(nets, net_data, model_params, qg_model_args
         def step_state(carry, _x):
             old_state = carry
             new_state = model.step_model(old_state)
-            return new_state, old_state.state.model_state
+            if state_map_fn is None:
+                out_value = old_state.state.model_state
+            else:
+                out_value = state_map_fn(old_state.state.model_state)
+            return new_state, out_value
 
         def skip_states(carry, _x):
             new_state, _y = step_state(carry, _x)
@@ -134,7 +139,7 @@ def make_parameterized_stepped_model(nets, net_data, model_params, qg_model_args
                 length=skip_steps,
             )
 
-        _last_state, states = jax_utils.strided_scan(
+        _last_state, out_results = jax_utils.strided_scan(
             step_state,
             state,
             None,
@@ -142,7 +147,7 @@ def make_parameterized_stepped_model(nets, net_data, model_params, qg_model_args
             stride=subsampling,
         )
 
-        return states
+        return out_results
 
     return model_stepper
 

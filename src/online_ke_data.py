@@ -29,7 +29,7 @@ parser.add_argument("--traj_limit", type=int, help="Max trajectories to run", de
 
 
 @eqx.filter_jit
-def model_rollout(loaded_net, initial_q, sys_params, dt, num_steps, subsampling, skip_steps):
+def model_rollout(loaded_net, initial_q, sys_params, dt, num_steps, subsampling, skip_steps, state_map_fn=None):
     ln = loaded_net
     small_size = int(ln.net_info["output_channels"][0][-2:])
     net_rollout_fn = make_parameterized_stepped_model(
@@ -38,15 +38,19 @@ def model_rollout(loaded_net, initial_q, sys_params, dt, num_steps, subsampling,
         model_params=ln.model_params,
         qg_model_args=qg_utils.qg_model_to_args(ln.model_params.qg_models[small_size]),
         dt=dt,
+        state_map_fn=state_map_fn,
     )
     rolled_out_traj = net_rollout_fn(
         initial_q,
         num_steps=num_steps,
         subsampling=subsampling,
         sys_params=sys_params,
-        skip_steps=skip_steps
+        skip_steps=skip_steps,
     )
-    return rolled_out_traj.q
+    if state_map_fn is None:
+        return rolled_out_traj.q
+    else:
+        return rolled_out_traj
 
 
 def main():
