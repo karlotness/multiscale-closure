@@ -97,10 +97,10 @@ def strided_scan(f, init, xs, length=None, reverse=False, unroll=1, stride=1):
         return (new_carry, y), None
 
     def outer_scan(carry, x):
-        (last_carry, y), _ = jax.lax.scan(inner_scan, (carry, dummy_y_init), x, length=stride, reverse=reverse, unroll=unroll)
+        (last_carry, y), _ = jax.lax.scan(inner_scan, (carry, dummy_y_init), x, length=stride, reverse=reverse, unroll=min(unroll, stride))
         return last_carry, y
 
-    carry, ys = jax.lax.scan(outer_scan, init, chunked_xs, length=chunks, reverse=reverse, unroll=unroll)
+    carry, ys = jax.lax.scan(outer_scan, init, chunked_xs, length=chunks, reverse=reverse, unroll=max(unroll // stride, 1))
     # Do remainder scan
     def remainder_scan(carry, x):
         new_carry, _y = f(carry, x)
