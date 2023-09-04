@@ -5,6 +5,7 @@ import dataclasses
 import jax
 import jax.numpy as jnp
 import equinox as eqx
+import powerpax as ppx
 
 
 @jax.tree_util.register_pytree_node_class
@@ -61,102 +62,21 @@ def register_pytree_dataclass(cls):
 
 
 def strided_scan(f, init, xs, length=None, reverse=False, unroll=1, stride=1):
-    if reverse:
-        raise ValueError(f"reversed scan is not supported")
-    stride = operator.index(stride)
-    if stride < 1:
-        raise ValueError(f"illegal stride value {stride}")
-    elif stride == 1:
-        # Trivial case: stride=1 -> do normal scan
-        return jax.lax.scan(f, init, xs, length=length, reverse=reverse, unroll=unroll)
-    # Continue with full processing
-    target_length = _get_target_length(xs, length)
-    chunks, remainder = divmod(target_length, stride)
-    array_head = chunks * stride
-    # Process xs into chunks and remainder
-    if xs is None:
-        chunked_xs = None
-        remainder_xs = None
-        dummy_in_tree = None
-    else:
-        chunked_xs = jax.tree_util.tree_map(lambda l: l[:array_head].reshape((chunks, stride) + xs.shape[1:]), xs)
-        remainder_xs = jax.tree_util.tree_map(operator.itemgetter(slice(-remainder, None)), xs)
-        dummy_in_tree = jax.tree_util.tree_map(operator.itemgetter(0), xs)
-
-    def map_dummy_tree(l):
-        return jnp.zeros(shape=l.shape, dtype=l.dtype)
-
-    # Compute dummy_y_init
-    out_treedef = jax.eval_shape(f, init, dummy_in_tree)
-    dummy_y_init = jax.tree_util.tree_map(map_dummy_tree, out_treedef[1])
-
-    # Do main chunked scan
-    def inner_scan(carry, x):
-        f_carry, _y = carry
-        new_carry, y = f(f_carry, x)
-        return (new_carry, y), None
-
-    def outer_scan(carry, x):
-        (last_carry, y), _ = jax.lax.scan(inner_scan, (carry, dummy_y_init), x, length=stride, reverse=reverse, unroll=min(unroll, stride))
-        return last_carry, y
-
-    carry, ys = jax.lax.scan(outer_scan, init, chunked_xs, length=chunks, reverse=reverse, unroll=max(unroll // stride, 1))
-    # Do remainder scan
-    def remainder_scan(carry, x):
-        new_carry, _y = f(carry, x)
-        return new_carry, None
-
-    if remainder > 0:
-        carry, _remys = jax.lax.scan(remainder_scan, carry, remainder_xs, length=remainder, reverse=reverse, unroll=unroll)
-    # Return stacks from the chunk, and final state from the remainder
-    return carry, ys
+    return ppx.sliced_scan(
+        f,
+        init,
+        xs,
+        length=length,
+        reverse=reverse,
+        unroll=unroll,
+        start=stride - 1,
+        stop=None,
+        step=stride,
+    )
 
 
 def chunked_vmap(fun, chunk_size):
-
-    def split_args(args, kwargs, num_chunks, remainder):
-        leading_args, leading_kwargs = jax.tree_util.tree_map(
-            (lambda arr: arr[:num_chunks * chunk_size].reshape((num_chunks, chunk_size) + arr.shape[1:])),
-            (args, kwargs),
-        )
-        # Remainder
-        if remainder < 1:
-            rem_args = None
-            rem_kwargs = None
-        else:
-            rem_args, rem_kwargs = jax.tree_util.tree_map(
-                operator.itemgetter(slice(-remainder, None)),
-                (args, kwargs)
-            )
-        return (leading_args, leading_kwargs), (rem_args, rem_kwargs)
-
-    def outer_scan(_carry, x):
-        args, kwargs = x
-        ret = jax.vmap(fun)(*args, **kwargs)
-        return None, ret
-
-    @functools.wraps(fun)
-    def wrapped_fun(*args, **kwargs):
-        # Compute leading axis size
-        size = jax.tree_util.tree_leaves((args, list(kwargs.values())))[0].shape[0]
-        num_chunks, remainder = divmod(size, operator.index(chunk_size))
-        if num_chunks < 1:
-            # Trivial case: small input. we only need one chunk
-            return jax.vmap(fun)(*args, **kwargs)
-        # Divide into an outer scan and an inner vmap
-        (leading_args, leading_kwargs), (rem_args, rem_kwargs) = split_args(args, kwargs, num_chunks, remainder)
-        _carry, ret = jax.lax.scan(outer_scan, None, (leading_args, leading_kwargs), length=num_chunks)
-        # Restore size of ret
-        ret = jax.tree_util.tree_map(lambda arr: arr.reshape((-1, ) + arr.shape[2:]), ret)
-        # Next, do the remainder if needed
-        if remainder > 0:
-            ret = jax.tree_util.tree_map(
-                lambda a, b: jnp.concatenate([a, b]),
-                ret, jax.vmap(fun)(*rem_args, **rem_kwargs),
-            )
-        return ret
-
-    return wrapped_fun
+    return ppx.chunked_vmap(fun, chunk_size)
 
 
 @jax.tree_util.register_pytree_node_class
@@ -253,133 +173,7 @@ def trace_jac_hutch(f, x, rng, num_samples=10):
     return jnp.mean(hutch_est)
 
 
-def _get_target_length(xs, length):
-    if xs is not None:
-        leaf_lengths = set(operator.index(x.shape[0]) for x in jax.tree_util.tree_leaves(xs))
-        if len(leaf_lengths) != 1:
-            raise ValueError(f"inconsistent lengths for tree input: {set(leaf_lengths)}")
-        leaf_lengths = next(iter(leaf_lengths))
-    else:
-        leaf_lengths = None
-    if length is not None:
-        length = operator.index(length)
-        if length < 0:
-            raise ValueError(f"invalid length {length}, must not be negative")
-    match (leaf_lengths, length):
-        case (None, None):
-            raise ValueError("invalid target length for None inputs")
-        case (l, None) | (None, l):
-            return l
-        case (la, lb) if la == lb:
-            return la
-        case _:
-            raise ValueError(f"ambiguous lengths for scan {leaf_lengths} vs {length}")
-
-
 def checkpoint_chunked_scan(f, init, xs, length=None, chunk_size=5):
-    chunk_size = operator.index(chunk_size)
-    target_length = _get_target_length(xs, length)
-    num_chunks = target_length // chunk_size
-    if target_length <= chunk_size:
-        # Trivial, just do a normal scan
-        return jax.lax.scan(f, init, xs, length=length)
-    return easy_nested_scan(
-        f,
-        init,
-        xs,
-        length=length,
-        nested_lengths=[num_chunks, chunk_size],
-        continue_scan_fn=jax.lax.scan,
+    return ppx.checkpoint_chunked_scan(
+        f, init, xs, length=length, chunk_size=chunk_size
     )
-
-
-def easy_nested_scan(f, init, xs, length, *, nested_lengths, continue_scan_fn=jax.lax.scan):
-    target_length = _get_target_length(xs, length)
-    if target_length <= 1:
-        return jax.lax.scan(f, init, xs, length=length)
-    pre_length = math.prod(nested_lengths)
-    remainder = target_length - pre_length
-    pre_xs = jax.tree_util.tree_map(operator.itemgetter(slice(None, pre_length)), xs)
-    post_xs = jax.tree_util.tree_map(operator.itemgetter(slice(pre_length, None)), xs)
-    pre_carry, pre_out = nested_checkpoint_scan(
-        f,
-        init,
-        pre_xs,
-        pre_length,
-        nested_lengths=nested_lengths,
-        scan_fn=jax.lax.scan,
-        checkpoint_fn=functools.partial(jax.checkpoint, prevent_cse=False),
-    )
-    if remainder > 0:
-        post_carry, post_out = continue_scan_fn(
-            f,
-            pre_carry,
-            post_xs,
-            length=remainder,
-        )
-        result = jax.tree_util.tree_map(lambda a, b: jnp.concatenate([a, b]), pre_out, post_out)
-    else:
-        post_carry = pre_carry
-        result = pre_out
-    return post_carry, result
-
-
-def nested_checkpoint_scan(f, init, xs, length, *, nested_lengths, scan_fn=jax.lax.scan, checkpoint_fn=jax.checkpoint):
-  """A version of lax.scan that supports recursive gradient checkpointing.
-
-  The interface of `nested_checkpoint_scan` exactly matches lax.scan, except for
-  the required `nested_lengths` argument.
-
-  The key feature of `nested_checkpoint_scan` is that gradient calculations
-  require O(max(nested_lengths)) memory, vs O(prod(nested_lengths)) for unnested
-  scans, which it achieves by re-evaluating the forward pass
-  `len(nested_lengths) - 1` times.
-
-  `nested_checkpoint_scan` reduces to `lax.scan` when `nested_lengths` has a
-  single element.
-
-  Args:
-    f: function to scan over.
-    init: initial value.
-    xs: scanned over values.
-    length: leading length of all dimensions
-    nested_lengths: required list of lengths to scan over for each level of
-      checkpointing. The product of nested_lengths must match length (if
-      provided) and the size of the leading axis for all arrays in ``xs``.
-    scan_fn: function matching the API of lax.scan
-    checkpoint_fn: function matching the API of jax.checkpoint.
-
-  Returns:
-    Carry and output values.
-  """
-  # Copyright 2022 Google LLC.
-  # SPDX-License-Identifier: Apache-2.0
-  # THIS CODE BY shoyer ON GITHUB: https://github.com/google/jax/issues/2139
-  if length is not None and length != math.prod(nested_lengths):
-    raise ValueError(f'inconsistent {length=} and {nested_lengths=}')
-
-  def nested_reshape(x):
-    x = jnp.asarray(x)
-    new_shape = tuple(nested_lengths) + x.shape[1:]
-    return x.reshape(new_shape)
-
-  sub_xs = jax.tree_util.tree_map(nested_reshape, xs)
-  return _inner_nested_scan(f, init, sub_xs, nested_lengths, scan_fn,
-                            checkpoint_fn)
-
-
-def _inner_nested_scan(f, init, xs, lengths, scan_fn, checkpoint_fn):
-  """Recursively applied scan function."""
-  # Copyright 2022 Google LLC.
-  # SPDX-License-Identifier: Apache-2.0
-  # THIS CODE BY shoyer ON GITHUB: https://github.com/google/jax/issues/2139
-  if len(lengths) == 1:
-    return scan_fn(f, init, xs, lengths[0])
-
-  @checkpoint_fn
-  def sub_scans(carry, xs):
-    return _inner_nested_scan(f, carry, xs, lengths[1:], scan_fn, checkpoint_fn)
-
-  carry, out = scan_fn(sub_scans, init, xs, lengths[0])
-  stacked_out = jax.tree_util.tree_map(jnp.concatenate, out)
-  return carry, stacked_out

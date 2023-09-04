@@ -26,3 +26,4 @@ einops
 jaxtyping
 gcm_filters
 pyqg-jax
+powerpax
