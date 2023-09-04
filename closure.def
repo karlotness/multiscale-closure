@@ -3,10 +3,12 @@ From: nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
 %files
 requirements.txt /opt/requirements.txt
+constraints.txt /opt/constraints.txt
 
 %post
 export DEBIAN_FRONTEND=noninteractive
 chmod 444 /opt/requirements.txt
+chmod 444 /opt/constraints.txt
 apt -y update
 apt -y install software-properties-common
 add-apt-repository ppa:deadsnakes/ppa
@@ -21,7 +23,7 @@ mkdir -p /opt/closure_venv/
 python3.11 -m venv --prompt=closure /opt/closure_venv/
 cat /opt/closure_venv/bin/activate >> $SINGULARITY_ENVIRONMENT
 /opt/closure_venv/bin/python -m pip install --compile --upgrade pip
-/opt/closure_venv/bin/python -m pip install --compile --requirement /opt/requirements.txt
+PIP_CONSTRAINT=/opt/constraints.txt /opt/closure_venv/bin/python -m pip install --compile --requirement /opt/requirements.txt
 /opt/closure_venv/bin/python -m pip cache purge
 
 %runscript

@@ -28,6 +28,7 @@ __pycache__/
 .ipynb_checkpoints/
 !LICENSE.txt
 !requirements.txt
+!constraints.txt
 
 # Ignore analysis outputs
 *.pdf
