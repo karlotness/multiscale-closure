@@ -62,6 +62,9 @@ def register_pytree_dataclass(cls):
 
 
 def strided_scan(f, init, xs, length=None, reverse=False, unroll=1, stride=1):
+    stride = operator.index(stride)
+    if stride < 1:
+        raise ValueError(f"illegal stride value {stride}")
     return ppx.sliced_scan(
         f,
         init,
