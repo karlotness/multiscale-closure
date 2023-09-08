@@ -62,6 +62,8 @@ def register_pytree_dataclass(cls):
 
 
 def strided_scan(f, init, xs, length=None, reverse=False, unroll=1, stride=1):
+    if reverse:
+        raise ValueError("reversed scan is not supported")
     stride = operator.index(stride)
     if stride < 1:
         raise ValueError(f"illegal stride value {stride}")
