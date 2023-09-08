@@ -2,7 +2,7 @@ from collections.abc import Sequence
 import typing
 import types
 import functools
-from jaxtyping import Array
+import jax
 import jax.numpy as jnp
 import equinox as eqx
 
@@ -10,8 +10,8 @@ import equinox as eqx
 class TrainableWeightBias(eqx.Module):
     num_spatial_dims: int = eqx.field(static=True)
     num_layers: int = eqx.field(static=True)
-    weight: Array
-    bias: Array
+    weight: jax.Array
+    bias: jax.Array
 
     def __init__(self, num_spatial_dims, num_layers, weight=True, bias=True):
         self.num_spatial_dims = num_spatial_dims
@@ -20,7 +20,7 @@ class TrainableWeightBias(eqx.Module):
         self.weight = jnp.ones(shape) if weight else None
         self.bias = jnp.zeros(shape) if bias else None
 
-    def __call__(self, x: Array, *, key: typing.Optional["jax.random.PRNGKey"] = None):
+    def __call__(self, x: jax.Array, *, key: typing.Optional["jax.random.PRNGKey"] = None):
         if self.weight is not None:
             x = self.weight * x
         if self.bias is not None:
@@ -119,7 +119,7 @@ class EasyPadConv(eqx.Module):
             key=key,
         )
 
-    def __call__(self, x: Array, *, key: Array|None = None):
+    def __call__(self, x: jax.Array, *, key: jax.Array|None = None):
         # Do pre-padding if needed
         padded = _do_pad_input(
             x,

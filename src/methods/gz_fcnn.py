@@ -3,7 +3,6 @@
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
 import equinox as eqx
 from .eqx_modules import EasyPadConv, TrainableWeightBias
 
@@ -59,7 +58,7 @@ class BaseGZFCNN(eqx.Module):
         normalization: str | None = None,
         zero_mean: bool = False,
         *,
-        key: Array
+        key: jax.Array
     ):
         self.img_size = img_size
         self.n_layers_in = n_layers_in
@@ -111,7 +110,7 @@ class BaseGZFCNN(eqx.Module):
         # Remove final activation and normalization
         self.conv_seq = eqx.nn.Sequential(ops[:-2])
 
-    def __call__(self, x: Array, *, key: Array|None = None):
+    def __call__(self, x: jax.Array, *, key: jax.Array|None = None):
         assert x.ndim == 3
         assert x.shape[-2:] == (self.img_size, self.img_size)
         assert x.shape[-3] == self.n_layers_in

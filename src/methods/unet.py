@@ -1,7 +1,6 @@
 from collections.abc import Sequence
 import typing
 import math
-from jaxtyping import Array, Float
 import jax
 import jax.numpy as jnp
 from ._defs import ACTIVATIONS
@@ -28,7 +27,7 @@ class LearnedTimeConv(eqx.Module):
         width: int = 64,
         depth: int = 3,
         *,
-        key: Array,
+        key: jax.Array,
     ):
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -74,7 +73,7 @@ class LearnedTimeConv(eqx.Module):
             key=jax.random.PRNGKey(0),
         )
 
-    def __call__(self, x: Array, t: Float, *, key: Array|None = None):
+    def __call__(self, x: jax.Array, t: float, *, key: jax.Array|None = None):
         kernel_bias = self.kernel_bias_basis(self.kernel_bias_mlp(t))
         # Create dummy convolution object
         dummy_conv = self._get_dummy_conv()
@@ -117,7 +116,7 @@ class PartiallyLearnedTimeConv(eqx.Module):
         width: int = 64,
         depth: int = 3,
         *,
-        key: Array,
+        key: jax.Array,
     ):
         rng_1, rng_2 = jax.random.split(key)
         self.static_conv = EasyPadConv(
@@ -143,7 +142,7 @@ class PartiallyLearnedTimeConv(eqx.Module):
             key=rng_2,
         )
 
-    def __call__(self, x: Array, t: Float, *, key: Array|None = None):
+    def __call__(self, x: jax.Array, t: float, *, key: jax.Array|None = None):
         static_out = self.static_conv(x)
         time_out = self.time_conv(x, t)
         return jnp.concatenate([static_out, time_out], axis=-self.static_conv.conv_op.num_spatial_dims - 1)
@@ -152,7 +151,7 @@ class PartiallyLearnedTimeConv(eqx.Module):
 class XTSequential(eqx.Module):
     modules: Sequence[eqx.Module]
 
-    def __init__(self, modules, *, key: Array = None):
+    def __init__(self, modules, *, key: jax.Array = None):
         self.modules = modules
 
     def __len__(self):
@@ -161,7 +160,7 @@ class XTSequential(eqx.Module):
     def __getitem__(self, idx):
         return self.modules[idx]
 
-    def __call__(self, x: Array, t: Float, *, key: Array = None):
+    def __call__(self, x: jax.Array, t: float, *, key: jax.Array = None):
         if key is None:
             rngs = [None] * len(self.modules)
         else:
@@ -299,7 +298,7 @@ class UNet(eqx.Module):
         self.sample_downward = self.sample_downward
         self.sample_upward = self.sample_upward
 
-    def __call__(self, q: Array, t: Float, *, key: Array|None = None):
+    def __call__(self, q: jax.Array, t: float, *, key: jax.Array|None = None):
         # Check that we don't have a native batch (require vmap)
         assert q.ndim == 3
         assert q.shape[-1] == q.shape[-2]
