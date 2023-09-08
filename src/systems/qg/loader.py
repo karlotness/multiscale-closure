@@ -14,7 +14,7 @@ import h5py
 import zarr
 import re
 import shutil
-from . import kernel
+import pyqg_jax
 from . import utils as qg_utils
 
 
@@ -28,7 +28,7 @@ class CoreTrajData:
     ablevel: np.ndarray
 
 
-@kernel.register_dataclass_pytree
+@qg_utils.register_pytree_dataclass
 @dataclasses.dataclass
 class PartialState:
     q: jnp.ndarray
@@ -61,7 +61,6 @@ class SimpleQGLoader:
         self._non_core_fields = [f for f in self._fields if f not in {"t", "tc", "ablevel"}]
         self._h5_file = h5py.File(file_path, "r")
         self._trajs_group = self._h5_file["trajs"]
-        self._data_fields = frozenset(f.name for f in dataclasses.fields(kernel.PseudoSpectralKernelState))
         num_traj = 0
         for k in self._trajs_group.keys():
             if k.startswith("traj") and k.endswith("_q"):
@@ -119,7 +118,7 @@ class SimpleQGLoader:
         return jax.device_put(PartialState(**result_fields))
 
 
-@kernel.register_dataclass_pytree
+@qg_utils.register_pytree_dataclass
 @dataclasses.dataclass
 class SnapshotStates:
     q: jnp.ndarray = None

@@ -4,10 +4,10 @@ import dataclasses
 import jax.numpy as jnp
 import jax
 from .spectral import make_spectrum_computer
-from .kernel import register_dataclass_pytree
+from . import utils as qg_utils
 
 
-@register_dataclass_pytree
+@qg_utils.register_pytree_dataclass
 @dataclasses.dataclass
 class SubgridScoreResult:
     l2_mean: jnp.ndarray
