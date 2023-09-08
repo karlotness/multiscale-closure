@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import jax
 import numpy as np
 import functools
-from .qg_model import QGModel
+import pyqg_jax
 
 
 def make_spectrum_computer(type='power', averaging=False, truncate=False):
@@ -17,7 +17,7 @@ def make_spectrum_computer(type='power', averaging=False, truncate=False):
         # TODO: check computation of nx
         with jax.ensure_compile_time_eval():
             nx = x[0].shape[-1]
-            m = QGModel(nx=nx)
+            m = pyqg_jax.qg_model.QGModel(nx=nx)
 
         if type == "cross_layer":
             raise ValueError("unsupported spectrum type 'cross_layer'")

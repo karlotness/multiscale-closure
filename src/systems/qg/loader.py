@@ -16,7 +16,6 @@ import re
 import shutil
 from . import kernel
 from . import utils as qg_utils
-from .qg_model import QGModel
 
 
 __all__ = ["ThreadedQGLoader", "qg_model_from_hdf5"]
