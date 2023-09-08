@@ -4,8 +4,8 @@
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=25GB
-#SBATCH --gres=gpu:1
-#SBATCH --partition=rtx8000,v100
+#SBATCH --gpus=1
+#SBATCH --partition=gpu
 
 set -euo pipefail
 
@@ -20,10 +20,6 @@ readonly ARCHITECTURE="$2"
 readonly INPUT_CHANNELS="$3"
 readonly PROC_SIZE="$4"
 readonly OUTPUT_CHANNELS="$5"
-
-# Begin execution
-module purge
-module load git/2.31.0
 
 # Make Bash more strict
 shopt -s failglob

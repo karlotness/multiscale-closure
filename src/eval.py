@@ -6,6 +6,7 @@ import logging
 import json
 import sys
 import random
+import re
 import operator
 import jax
 import jax.numpy as jnp
@@ -15,7 +16,8 @@ from systems.qg.loader import SimpleQGLoader
 import h5py
 import utils
 from methods import ARCHITECTURES
-from train import load_model_params, determine_required_fields, make_validation_stats_function
+from train import load_model_params, determine_required_fields, make_validation_stats_function, make_basic_coarsener, determine_output_size, make_chunk_from_batch, remove_residual_from_output_chunk
+from cascaded_train import split_chunk_into_channels, name_remove_residual
 
 
 parser = argparse.ArgumentParser(description="Evaluate neural networks for closure")
@@ -54,6 +56,57 @@ def check_coarse_op(eval_file, coarse_op_name):
         return True
     with h5py.File(eval_file, "r") as data_file:
         return data_file["params"]["coarsen_op"].asstr()[()] == coarse_op_name
+
+
+def make_network_evaluator(net, net_info, model_params, scale_results_from_standard=True):
+
+    def eval_net(batch, alt_source=None):
+        in_chunk = make_chunk_from_batch(
+            channels=net_info["input_channels"],
+            batch=batch,
+            model_params=model_params,
+            processing_size=net_info["processing_size"],
+            alt_source=alt_source,
+            noise_spec=None,
+            key=None)
+        net_result = jax.vmap(net)(in_chunk)
+        net_result = jax.vmap(
+            make_basic_coarsener(
+                net_info["processing_size"],
+                determine_output_size(net_info["output_channels"]),
+                model_params=model_params,
+            )
+        )(net_result)
+        # Remove residuals, split into channels, and unscale network result
+        net_result = remove_residual_from_output_chunk(
+            output_channels=net_info["output_channels"],
+            output_chunk=net_result,
+            batch=batch,
+            model_params=model_params,
+            processing_size=net_info["processing_size"],
+            alt_source=alt_source,
+        )
+        # Split into channels
+        net_result = split_chunk_into_channels(
+            channels=net_info["output_channels"],
+            chunk=net_result,
+        )
+        # Unscale network results
+        if scale_results_from_standard:
+            result_dict = {}
+            for chan, res in net_result.items():
+                if "q_total_forcing" in chan:
+                    result_dict[name_remove_residual(chan)] = jax.vmap(model_params.scalers.q_total_forcing_scalers[res.shape[-1]].scale_from_standard)(res)
+                elif "q" in chan:
+                    result_dict[name_remove_residual(chan)] = jax.vmap(model_params.scalers.q_scalers[res.shape[-1]].scale_from_standard)(res)
+                else:
+                    raise ValueError(f"invalid channel {chan}")
+        else:
+            result_dict = net_result
+
+        return result_dict
+
+    return eval_net
 
 
 def run_cnn_offline_stats(net, eval_file, num_samples, sample_seed, base_logger, model_params, input_channels, output_channels, processing_size, required_fields, min_sample_step):

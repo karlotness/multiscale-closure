@@ -172,9 +172,13 @@ def main():
             if key.startswith(forcing_prefix):
                 small_sizes.add(int(key[len(forcing_prefix):]))
         small_sizes = sorted(small_sizes)
+        # Base q data
         data_dtype_fields = [
             ("q", in_data["trajs"]["traj00000_q"].dtype, in_data["trajs"]["traj00000_q"].shape[1:])
         ]
+        # System parameters
+        for field in ["rek", "delta", "beta"]:
+            data_dtype_fields.append((field, in_data["trajs"]["traj00000_sysparams"][field].dtype, (1, 1, 1)))
         for size in small_sizes:
             data_dtype_fields.append(
                 (f"q_total_forcing_{size}", in_data["trajs"][f"traj00000_q_total_forcing_{size}"].dtype, in_data["trajs"][f"traj00000_q_total_forcing_{size}"].shape[1:])

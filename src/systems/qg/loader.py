@@ -3,11 +3,17 @@ import dataclasses
 import logging
 import queue
 import operator
+import contextlib
+import tempfile
+import pathlib
 import jax
 import jax.numpy as jnp
 import numpy as np
 import random
 import h5py
+import zarr
+import re
+import shutil
 from . import kernel
 from . import utils as qg_utils
 from .qg_model import QGModel
@@ -32,6 +38,7 @@ class PartialState:
     tc: jnp.ndarray
     ablevel: jnp.ndarray
     q_total_forcings: dict[int, jnp.ndarray]
+    sys_params: dict[str, object] = dataclasses.field(default_factory=dict)
 
 
 def qg_model_from_hdf5(file_path, model="small"):
@@ -74,6 +81,9 @@ class SimpleQGLoader:
     def __del__(self):
         self.close()
 
+    def num_samples(self):
+        return self.num_steps * self.num_trajs
+
     def close(self):
         if self._trajs_group is not None:
             self._trajs_group = None
@@ -84,8 +94,11 @@ class SimpleQGLoader:
         if end is not None:
             end = operator.index(end)
         slicer = slice(start, end)
+        idx_start, idx_stop, _ = slicer.indices(self.num_steps)
+        num_steps = idx_stop - idx_start
         result_fields = {k: None for k in ("q", "dqhdt_seq", "t", "tc", "ablevel")}
         result_fields["q_total_forcings"] = {}
+        result_fields["sys_params"] = {}
         for field in self._core_fields:
             result_fields[field] = getattr(self._core_traj_data, field)[slicer]
         for field in self._non_core_fields:
@@ -93,6 +106,13 @@ class SimpleQGLoader:
                 # Handle forcings specially
                 size = int(field[len("q_total_forcing_"):])
                 result_fields["q_total_forcings"][size] = self._trajs_group[f"traj{traj:05d}_{field}"][slicer]
+            elif field in {"rek", "delta", "beta"}:
+                # This is a system parameter field
+                result_fields["sys_params"][field] = np.full(
+                    shape=(num_steps, 1, 1, 1),
+                    fill_value=self._trajs_group[f"traj{traj:05d}_sysparams"][field][()].item(),
+                    dtype=np.float32
+                )
             else:
                 result_fields[field if field != "dqhdt" else "dqhdt_seq"] = jax.device_put(
                     self._trajs_group[f"traj{traj:05d}_{field}"][slicer]
@@ -103,8 +123,9 @@ class SimpleQGLoader:
 @kernel.register_dataclass_pytree
 @dataclasses.dataclass
 class SnapshotStates:
-    q: jnp.ndarray
-    q_total_forcings: dict[int, jnp.ndarray]
+    q: jnp.ndarray = None
+    q_total_forcings: dict[int, jnp.ndarray] = dataclasses.field(default_factory=dict)
+    sys_params: dict[str, jnp.ndarray] = dataclasses.field(default_factory=dict)
 
 
 class ThreadedPreShuffledSnapshotLoader:
@@ -122,8 +143,9 @@ class ThreadedPreShuffledSnapshotLoader:
             base_logger = logging.getLogger("preshuffle_loader")
         # Note: Loads only q and q_total_forcing
         self.fields = sorted(set(fields))
-        if not all(f.startswith("q_total_forcing_") or f == "q" for f in self.fields):
-            raise ValueError("invalid field, can only load q and q_total_forcing")
+        self.batch_size = batch_size
+        if not all(f.startswith("q_total_forcing_") or f in {"q", "rek", "delta", "beta"} for f in self.fields):
+            raise ValueError("invalid field, can only load q, q_total_forcing, and system parameters")
         if seed is None:
             seed = random.SystemRandom().randint(0, 2**32)
         # Create queues
@@ -156,6 +178,9 @@ class ThreadedPreShuffledSnapshotLoader:
                 "logger": base_logger.getChild("batcher"),
             },
         )
+        # Compute number of samples
+        with h5py.File(file_path, "r") as in_file:
+            self._num_samples = operator.index(in_file["shuffled"].shape[0])
         self._chunk_load_thread.start()
         self._batch_thread.start()
 
@@ -166,16 +191,24 @@ class ThreadedPreShuffledSnapshotLoader:
         def load_chunk(dataset, start, end):
             chunk = dataset[start:end]
             rng.shuffle(chunk, axis=0)
-            return tuple(chunk[field].copy() for field in fields)
+            return tuple(
+                (
+                    chunk[field].copy().astype(np.float32)
+                    if field in {"rek", "delta", "beta"}
+                    else chunk[field].copy()
+                )
+                for field in fields
+            )
 
         try:
             rng = np.random.default_rng(seed=seed)
             with h5py.File(file_path, "r") as in_file:
                 dataset = in_file["shuffled"]
                 num_steps = dataset.shape[0]
+                chunk_size = min(chunk_size, num_steps)
                 valid_range = num_steps - chunk_size
                 while not stop_event.is_set():
-                    start = int(rng.integers(valid_range, dtype=np.uint64).item())
+                    start = int(rng.integers(valid_range, dtype=np.uint64, endpoint=True).item())
                     end = start + chunk_size
                     logger.debug("loading chunk from %d to %d", start, end)
                     chunk_load_queue.put(
@@ -203,15 +236,21 @@ class ThreadedPreShuffledSnapshotLoader:
         def build_snapshot_states(fields, construct_batch):
             q = None
             q_total_forcings = {}
+            sys_params = {}
             for field, field_stack in zip(fields, construct_batch, strict=True):
                 if field.startswith("q_total_forcing_"):
                     q_total_forcings[int(field[len_q_total_forcing:])] = np.concatenate(field_stack, axis=0)
+                elif field in {"rek", "delta", "beta"}:
+                    # This is a system parameter field
+                    sys_params[field] = np.concatenate(field_stack, axis=0)
                 else:
                     # This must be q
                     q = np.concatenate(field_stack, axis=0)
+                field_stack.clear()
             return SnapshotStates(
                 q=q,
                 q_total_forcings=q_total_forcings,
+                sys_params=sys_params,
             )
 
         try:
@@ -262,35 +301,212 @@ class ThreadedPreShuffledSnapshotLoader:
         while True:
             yield self.next_batch()
 
+    def num_samples(self):
+        return self._num_samples
+
     def close(self):
         if self._stop_event.is_set():
             # Already cleaned up
             return
         self._stop_event.set()
         # Stop the chunk load thread first
-        try:
+        with contextlib.suppress(queue.Empty):
             while True:
                 # Clear its queue
                 self._chunk_load_queue.get_nowait()
-        except queue.Empty:
-            pass
         self._chunk_load_thread.join()
         # Now that it is stopped, clear the queue again and place a None
         # This will ensure the batch thread exits if it hasn't already
-        try:
+        with contextlib.suppress(queue.Empty):
             while True:
                 self._chunk_load_queue.get_nowait()
-        except queue.Empty:
-            pass
         self._chunk_load_queue.put(None)
         # Next, stop the batch thread
-        try:
+        with contextlib.suppress(queue.Empty):
             while True:
                 self._batch_queue.get_nowait()
-        except queue.Empty:
-            pass
         # Join the second thread
         self._batch_thread.join()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        self.close()
+
+
+class AggregateLoader:
+    def __init__(self, loaders, batch_size, seed=None):
+        self.loaders = tuple(loaders)
+        self.batch_size = batch_size
+        self._closed = False
+        if seed is None:
+            seed = random.SystemRandom().randint(0, 2**32)
+        self._np_rng = np.random.default_rng(seed=seed)
+        if any(loader.batch_size < self.batch_size for loader in self.loaders):
+            raise ValueError("Batch size too small for aggregation")
+
+    def num_samples(self):
+        return sum(l.num_samples() for l in self.loaders)
+
+    def next_batch(self):
+        if self._closed:
+            raise ValueError("Closed loader, cannot load batches")
+        active_loaders = []
+        weights = []
+        for loader in self.loaders:
+            num_samps = loader.num_samples()
+            if num_samps > 0:
+                active_loaders.append(loader)
+                weights.append(num_samps)
+        weights = np.asarray([loader.num_samples() for loader in active_loaders])
+        weights = weights / weights.sum()
+        samples_per_loader = self._np_rng.multinomial(self.batch_size, weights)
+        batches = [loader.next_batch() for loader in active_loaders]
+        extension = len(self.loaders) - len(batches)
+        batches.extend([None] * extension)
+        samples_per_loader = np.concatenate([samples_per_loader, np.zeros(extension, dtype=samples_per_loader.dtype)], axis=0)
+        return batches, samples_per_loader
+
+    @staticmethod
+    def _slice_batch(batch, num_samples):
+        assert batch.shape[0] >= num_samples
+        return batch[:num_samples]
+
+    def iter_batches(self):
+        # A generator over the batches
+        while True:
+            yield self.next_batch()
+
+    def close(self):
+        if self._closed:
+            return
+        for loader in self.loaders:
+            loader.close()
+        self._closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        self.close()
+
+
+class FillableDataLoader:
+    def __init__(self, batch_size, fields=("q", "q_total_forcing_64"), seed=None):
+        self.batch_size = batch_size
+        self.fields = sorted(set(fields))
+        self._temp_dir = tempfile.TemporaryDirectory(prefix="temp-fill-loader-")
+        self._data = None
+        if seed is None:
+            seed = random.SystemRandom().randint(0, 2**32)
+        self._np_rng = np.random.default_rng(seed=seed)
+
+    def _create_struct_dtype(self, sample):
+        struct_dtype = []
+        for field in self.fields:
+            if field == "q":
+                struct_dtype.append((field, sample.q.dtype, sample.q.shape[1:]))
+            elif m := re.match(r"^q_total_forcing_(?P<size>\d+)$", field):
+                size = int(m.group("size"))
+                struct_dtype.append((field, sample.q_total_forcings[size].dtype, sample.q_total_forcings[size].shape[1:]))
+            elif field in {"rek", "delta", "beta"}:
+                struct_dtype.append((field, sample.sys_params[field].dtype, (1, 1, 1)))
+            else:
+                raise ValueError(f"unsupported field {field}")
+        return np.dtype(struct_dtype)
+
+    def _combine_array(self, sample, dtype):
+        if sample.q is not None:
+            num_steps = sample.q.shape[0]
+        else:
+            num_steps = next(iter(sample.q_total_forcings.values())).shape[0]
+        arr = np.empty(shape=num_steps, dtype=dtype)
+        for field in self.fields:
+            if field == "q":
+                value = sample.q
+            elif m := re.match(r"^q_total_forcing_(?P<size>\d+)$", field):
+                size = int(m.group("size"))
+                value = sample.q_total_forcings[size]
+            elif field in {"rek", "delta", "beta"}:
+                value = np.asarray(sample.sys_params[field]).item()
+            else:
+                raise ValueError(f"unsupported field {field}")
+            arr[field] = value
+        return arr
+
+    def add_data(self, sample):
+        if self._temp_dir is None:
+            raise ValueError("Closed loader, cannot add data")
+        if self._data is None:
+            self._data = zarr.open_array(
+                pathlib.Path(self._temp_dir.name) / "data.zarr",
+                dtype=self._create_struct_dtype(sample),
+                fill_value=None,
+                shape=(0,),
+                chunks=(25,),
+                mode="w-",
+                compressor=None,
+            )
+        self._data.append(self._combine_array(sample, self._data.dtype), axis=0)
+
+    def clear(self):
+        if self._data is not None:
+            self._data = None
+            shutil.rmtree(pathlib.Path(self._temp_dir.name) / "data.zarr")
+
+    def num_samples(self):
+        if self._data is None:
+            return 0
+        return self._data.shape[0]
+
+    def next_batch(self):
+        if self._temp_dir is None:
+            raise ValueError("Closed loader, cannot load batches")
+        num_samps = self.num_samples()
+        if num_samps <= 0:
+            raise ValueError("Empty fillable dataset, insert data first")
+        indices = self._np_rng.integers(0, num_samps, size=self.batch_size)
+        samples = self._data[indices]
+        # Bundle samples into batch
+        q = None
+        q_total_forcings = {}
+        sys_params = {}
+        for field in self.fields:
+            if field in {"rek", "delta", "beta"}:
+                sys_params[field] = samples[field].astype(np.float32)
+            elif field.startswith("q_total_forcing_"):
+                size = int(field[16:])
+                q_total_forcings[size] = samples[field]
+            elif field == "q":
+                q = samples["q"]
+            else:
+                raise ValueError(f"invalid field {field}")
+        return jax.device_put(
+            SnapshotStates(
+                q=q,
+                q_total_forcings=q_total_forcings,
+                sys_params=sys_params,
+            )
+        )
+
+    def iter_batches(self):
+        # A generator over the batches
+        while True:
+            yield self.next_batch()
+
+    def close(self):
+        if self._temp_dir is None:
+            return
+        self._data = None
+        self._temp_dir.cleanup()
+        self._temp_dir = None
 
     def __enter__(self):
         return self

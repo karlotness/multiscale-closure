@@ -1,5 +1,5 @@
 --find-links=https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
-jax[cuda11_local]
+jax[cuda12_local]
 flax
 optax
 numpy
@@ -9,6 +9,7 @@ matplotlib
 seaborn
 jupyterlab
 ipywidgets
+ipympl
 tqdm
 zarr
 h5py
@@ -25,3 +26,4 @@ einops
 jaxtyping
 gcm_filters
 pyqg-jax
+powerpax

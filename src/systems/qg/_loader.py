@@ -1,6 +1,7 @@
 import sys
 import argparse
 import h5py
+import numpy as np
 
 parser = argparse.ArgumentParser(description="Internal worker script for data loader")
 parser.add_argument("file_path", type=str, help="Path to hdf5 data file")
@@ -19,9 +20,14 @@ def main(args):
             step = int(line_parts[1])
             end_step = step + rollout_steps
             field_prefix = f"traj{traj:05d}_"
+            sysparams_group = trajs_group[f"traj{traj:05d}_sysparams"]
             sys.stdout.buffer.write(
                 b"".join(
-                    trajs_group[f"{field_prefix}{field}"][step:end_step].tobytes()
+                    (
+                        np.tile(sysparams_group[field][()].reshape((1, 1, 1, 1)), (rollout_steps, 1, 1, 1)).tobytes()
+                        if field in {"rek", "delta", "beta"}
+                        else trajs_group[f"{field_prefix}{field}"][step:end_step].tobytes()
+                    )
                     for field in fields
                 )
             )

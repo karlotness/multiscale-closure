@@ -1,24 +1,24 @@
 #!/bin/bash
 
-#SBATCH --job-name=sequential-train-cnn
-#SBATCH --time=36:00:00
+#SBATCH --job-name=direct48-train
+#SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=25GB
 #SBATCH --gpus=1
 #SBATCH --partition=gpu
 
+
 set -euo pipefail
 
-if [[ $# -lt 4 ]]; then
+if [[ $# -lt 1 ]]; then
     echo 'ERROR: Insufficient parameters for training'
-    echo 'Usage sequential-train-cnn.sh OUT_DIR ARCH TRAIN_STEP PROCESSING_LEVELS(spaces)'
+    echo 'Usage multi-train-cnn.sh OUT_DIR'
     exit 1
 fi
 
 readonly OUT_DIR="$1"
-readonly ARCHITECTURE="$2"
-readonly TRAIN_STEP="$3"
-readonly PROCESSING_LEVELS="$4"
+
+readonly ARCHITECTURE="gz-fcnn-v1"
 
 # Make Bash more strict
 shopt -s failglob
@@ -49,10 +49,7 @@ mkdir -p "$OUT_DIR"
 export JAX_ENABLE_X64=True
 export JAX_DEFAULT_DTYPE_BITS=32
 singularity run --nv "$SINGULARITY_CONTAINER" \
-            python "${CHECKOUT_DIR}/src/sequential_train.py" "$OUT_DIR" "$TRAIN_DATA_DIR" "$VAL_DATA_DIR" \
-            "$TRAIN_STEP" \
-            $PROCESSING_LEVELS \
-            --architecture="$ARCHITECTURE" \
+            python "${CHECKOUT_DIR}/src/train.py" "$OUT_DIR" "$TRAIN_DATA_DIR" "$VAL_DATA_DIR" \
             --optimizer=adam \
             --batch_size=256 \
             --num_epochs="$NUM_EPOCHS" \
@@ -62,4 +59,8 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --save_interval=1 \
             --lr="$LR" \
             --end_lr=0.0 \
-            --lr_schedule=constant
+            --lr_schedule=constant \
+            --architecture="$ARCHITECTURE" \
+            --processing_size=48 \
+            --input_channels 'q_48' \
+            --output_channels 'q_total_forcing_48'

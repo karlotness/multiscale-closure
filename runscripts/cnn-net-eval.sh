@@ -4,8 +4,8 @@
 #SBATCH --time=0:30:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16GB
-#SBATCH --gres=gpu:1
-#SBATCH --partition=rtx8000,v100
+#SBATCH --gpus=1
+#SBATCH --partition=gpu
 
 if [[ $# -lt 2 ]]; then
     echo "ERROR: Insufficient parameters for evaluation"
@@ -15,10 +15,6 @@ fi
 
 readonly EVAL_TYPE="$1"
 readonly NET_DIR="$2"
-
-# Begin execution
-module purge
-module load git/2.31.0
 
 # Make Bash more strict
 shopt -s failglob

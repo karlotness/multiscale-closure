@@ -24,6 +24,7 @@ function echoing_sbatch() {
     >&2 echo ""
     if [[ "$DRY_RUN" != 'true' ]]; then
         sbatch "$@"
+        sleep 0.5
     else
         echo "Submitted batch job $((DRY_RUN_COUNTER++))"
     fi
