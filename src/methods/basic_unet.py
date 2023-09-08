@@ -20,10 +20,10 @@ def unpool_up(x):
 
 
 class BasicUNetV1(eqx.Module):
-    img_size: int = eqx.static_field()
-    n_layers_in: int = eqx.static_field()
-    n_layers_out: int = eqx.static_field()
-    zero_mean: bool = eqx.static_field()
+    img_size: int = eqx.field(static=True)
+    n_layers_in: int = eqx.field(static=True)
+    n_layers_out: int = eqx.field(static=True)
+    zero_mean: bool = eqx.field(static=True)
     layers_down: collections.abc.Sequence[eqx.Module]
     layers_up: collections.abc.Sequence[eqx.Module]
     pool_down: eqx.Module

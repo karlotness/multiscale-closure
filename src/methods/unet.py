@@ -12,11 +12,11 @@ from .eqx_modules import EasyPadConv
 class LearnedTimeConv(eqx.Module):
     kernel_bias_mlp: eqx.nn.MLP
     kernel_bias_basis: eqx.nn.Linear
-    in_channels: int = eqx.static_field()
-    out_channels: int = eqx.static_field()
-    kernel_size: int = eqx.static_field()
-    use_bias: bool = eqx.static_field()
-    basis_size: int = eqx.static_field()
+    in_channels: int = eqx.field(static=True)
+    out_channels: int = eqx.field(static=True)
+    kernel_size: int = eqx.field(static=True)
+    use_bias: bool = eqx.field(static=True)
+    basis_size: int = eqx.field(static=True)
 
     def __init__(
         self,

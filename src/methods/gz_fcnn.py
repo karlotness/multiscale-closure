@@ -44,10 +44,10 @@ GZFCNN_FEATURES_KERNELS = {
 
 class BaseGZFCNN(eqx.Module):
     conv_seq: eqx.nn.Sequential
-    img_size: int = eqx.static_field()
-    n_layers_in: int = eqx.static_field()
-    n_layers_out: int = eqx.static_field()
-    zero_mean: bool = eqx.static_field()
+    img_size: int = eqx.field(static=True)
+    n_layers_in: int = eqx.field(static=True)
+    n_layers_out: int = eqx.field(static=True)
+    zero_mean: bool = eqx.field(static=True)
 
     def __init__(
         self,

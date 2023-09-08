@@ -8,8 +8,8 @@ import equinox as eqx
 
 
 class TrainableWeightBias(eqx.Module):
-    num_spatial_dims: int = eqx.static_field()
-    num_layers: int = eqx.static_field()
+    num_spatial_dims: int = eqx.field(static=True)
+    num_layers: int = eqx.field(static=True)
     weight: Array
     bias: Array
 
@@ -89,7 +89,7 @@ def make_circular_pooling(pool_cls):
 
 class EasyPadConv(eqx.Module):
     conv_op: eqx.nn.Conv
-    padding_type: str = eqx.static_field()
+    padding_type: str = eqx.field(static=True)
 
     def __init__(
         self,
