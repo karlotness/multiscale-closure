@@ -43,8 +43,8 @@ def load_networks(weight_file):
         )
         net_data.append(
             NetData(
-                input_channels=set(net_params["input_channels"]),
-                output_channels=set(net_params["output_channels"]),
+                input_channels=frozenset(net_params["input_channels"]),
+                output_channels=frozenset(net_params["output_channels"]),
                 processing_size=net_params["processing_size"],
             )
         )

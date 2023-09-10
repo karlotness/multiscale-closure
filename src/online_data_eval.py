@@ -13,11 +13,13 @@ import numpy as np
 import operator
 import utils
 import jax_utils
+import importlib
 from eval import load_network
 import cascaded_eval
-from systems.qg import loader, spectral, utils as qg_utils
+from cascaded_train import name_remove_residual
+from systems.qg import loader, spectral, utils as qg_utils, coarsen
 from online_ke_data import model_rollout
-from train import determine_required_fields, determine_channel_size, load_model_params
+from train import determine_required_fields, determine_channel_size, load_model_params, determine_output_size
 from online_ensemble_compare import make_ke_time_computer, LoadedNetwork, ke_spec, SYS_INFO_CHANNELS
 from cascaded_online_eval import make_net_param_func
 import pyqg_jax
@@ -198,13 +200,21 @@ def values_from_step(i, carry, step_state, qg_model, horizons):
 def make_traj_evaluator(dt, subsampling, num_steps, small_model, ke_horizons, corr_num_samples):
 
     def eval_traj(batch, loaded_net, corr_rng):
+        processing_size = loaded_net.net_info["processing_size"]
+        q_size = batch.q.shape[-1]
         ref_q = batch.q
+        if q_size != processing_size:
+            coarse_op = coarsen.COARSEN_OPERATORS[loaded_net.model_params.scale_operator](
+                big_model=loaded_net.model_params.qg_models[q_size],
+                small_nx=processing_size,
+            )
+            ref_q = jax.vmap(coarse_op.coarsen)(ref_q)
         init_q = ref_q[0]
         sys_params = jax.tree_map(lambda d: jnp.asarray(d[0, 0, 0, 0]), batch.sys_params)
         # Prepare state
         phase1 = make_parameterized_stepped_model(
-            nets=[loaded_net.net],
-            net_data=[loaded_net.net_data],
+            nets=loaded_net.net,
+            net_data=loaded_net.net_data,
             model_params=loaded_net.model_params,
             qg_model_args=qg_utils.qg_model_to_args(small_model),
             dt=dt,
@@ -268,33 +278,53 @@ def load_networks(net_paths, eval_file, logger=None):
     logger.info("Loading networks")
     for net_path in map(pathlib.Path, net_paths):
         logger.info("Loading network %s", net_path)
-        net, net_info = load_network(net_path)
-        loaded_nets.append(
-            LoadedNetwork(
-                net=net,
-                net_info=net_info,
-                net_data=cascaded_eval.NetData(
-                    input_channels=net_info["input_channels"],
-                    output_channels=net_info["output_channels"],
-                    processing_size=net_info["processing_size"]
-                ),
-                net_path=str(net_path.resolve()),
-                model_params=load_model_params(net_info["train_path"], eval_path=eval_file),
+        try:
+            net, net_info = load_network(net_path)
+            loaded_nets.append(
+                LoadedNetwork(
+                    net=[net],
+                    net_info=net_info,
+                    net_data=[
+                        cascaded_eval.NetData(
+                            input_channels=net_info["input_channels"],
+                            output_channels=net_info["output_channels"],
+                            processing_size=net_info["processing_size"]
+                        ),
+                    ],
+                    net_path=str(net_path.resolve()),
+                    model_params=load_model_params(net_info["train_path"], eval_path=eval_file),
+                )
             )
-        )
+        except Exception:
+            # This might be a cascaded network
+            net, net_info, net_data = importlib.import_module("cascaded_eval").load_networks(net_path)
+            # Patch up net_info
+            net_info["input_channels"] = net_info["networks"][0]["input_channels"].copy()
+            net_info["output_channels"] = net_info["networks"][-1]["output_channels"].copy()
+            net_info["processing_size"] = determine_output_size(net_info["output_channels"])
+            loaded_nets.append(
+                LoadedNetwork(
+                    net=net,
+                    net_info=net_info,
+                    net_data=net_data,
+                    net_path=str(net_path.resolve()),
+                    model_params=load_model_params(net_info["train_path"], eval_path=eval_file),
+                )
+            )
         del loaded_nets[-1].model_params.qg_models["big_model"]
     # Add null network
     null_net_info = loaded_nets[0].net_info.copy()
-    null_net_info["input_channels"] = list(filter(lambda c: not re.match(SYS_INFO_CHANNELS, c), loaded_nets[0].net_info["input_channels"]))
+    null_net_info["input_channels"] = list(map(name_remove_residual, filter(lambda c: not re.match(SYS_INFO_CHANNELS, c), loaded_nets[0].net_info["input_channels"])))
+    null_net_info["output_channels"] = list(map(name_remove_residual, filter(lambda c: not re.match(SYS_INFO_CHANNELS, c), loaded_nets[0].net_info["output_channels"])))
     null_net_data = cascaded_eval.NetData(
         input_channels=null_net_info["input_channels"],
         output_channels=null_net_info["output_channels"],
         processing_size=null_net_info["processing_size"],
     )
     null_loaded_network = LoadedNetwork(
-        net=lambda chunk: jnp.zeros_like(chunk),
+        net=[lambda chunk: jnp.zeros_like(chunk)],
         net_info=null_net_info,
-        net_data=null_net_data,
+        net_data=[null_net_data],
         net_path="null net",
         model_params=loaded_nets[0].model_params,
     )
@@ -340,13 +370,13 @@ def main():
             net_ids.append(f"net{counter}")
             counter += 1
     logger.info("Finished loading %d networks", len(loaded_nets) - 1)
-    small_size = determine_channel_size(loaded_nets[0].net_data.output_channels[0])
+    small_size = determine_output_size(loaded_nets[0].net_data[-1].output_channels)
     logger.info("Small size: %d", small_size)
 
     # Determine required fields
     required_fields = determine_required_fields(
         itertools.chain.from_iterable(
-            itertools.chain(ln.net_data.input_channels, ln.net_data.output_channels) for ln in loaded_nets
+            itertools.chain(ln.net_data[0].input_channels, ln.net_data[-1].output_channels) for ln in loaded_nets
         )
     )
     required_fields.update(["rek", "beta", "delta"])
@@ -362,13 +392,21 @@ def main():
         logger.info("Eval set num_steps=%d", num_steps)
 
     # Args: batch, loaded_net, corr_rng
+    if small_size in loaded_nets[0].model_params.qg_models:
+        small_model = loaded_nets[0].model_params.qg_models[small_size]
+    else:
+        small_model = loaded_nets[0].model_params.qg_models[max(filter(lambda v: isinstance(v, int), loaded_nets[0].model_params.qg_models.keys()))]
+        small_model = qg_utils.qg_model_to_args(small_model)
+        small_model["nx"] = small_size
+        small_model["ny"] = small_size
+        small_model = pyqg_jax.qg_model.QGModel(**small_model)
     traj_eval_fn = eqx.filter_jit(
         batch_traj_evaluator(
             make_traj_evaluator(
                 dt=dt,
                 subsampling=subsample,
                 num_steps=num_steps,
-                small_model=loaded_nets[0].model_params.qg_models[small_size],
+                small_model=small_model,
                 ke_horizons=HORIZONS,
                 corr_num_samples=args.corr_num_samples,
             )
