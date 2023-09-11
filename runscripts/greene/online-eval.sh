@@ -3,7 +3,7 @@
 #SBATCH --job-name=online-eval
 #SBATCH --time=15:00:00
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=18GB
+#SBATCH --mem=22GB
 #SBATCH --gres=gpu:1
 #SBATCH --partition=rtx8000,v100
 
