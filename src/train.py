@@ -65,17 +65,26 @@ parser.add_argument("--live_gen_base_data", type=str, default=None, help="")
 parser.add_argument("--live_gen_switch_set_interval", type=int, default=None, help="")
 
 
-def live_sample_get_args(train_path, required_fields):
+def live_sample_get_args(train_path, required_fields, logger=None):
+    if logger is None:
+        logger = logging.getLogger("live-sample-params")
     q_forcing_sizes = set()
     for field in required_fields:
         if m := re.match(r"^q_total_forcing_(?P<size>\d+)$", field):
             q_forcing_sizes.add(int(m.group("size")))
     with h5py.File(train_path, "r") as data_file:
-        dt = data_file["params"]["dt"][()].item()
-        subsample = data_file["params"]["subsample"][()].item()
-        num_warmup_steps = math.ceil(155520000.0 / dt)
-        _traj_store_steps = data_file["source"]["step"][:].max()
-        q_size = data_file["shuffled"][0]["q"].shape[-1]
+        try:
+            dt = data_file["params"]["dt"][()].item()
+            subsample = data_file["params"]["subsample"][()].item()
+            num_warmup_steps = math.ceil(155520000.0 / dt)
+            _traj_store_steps = data_file["source"]["step"][:].max()
+            q_size = data_file["shuffled"][0]["q"].shape[-1]
+        except KeyError:
+            logger.warning("Failed to determine live generation parameters (ok if generating no live trajectories)")
+            return {
+                k: None
+                for k in ["dt", "subsample", "num_warmup_steps", "num_steps", "q_size", "q_forcing_sizes"]
+            }
         num_steps = (_traj_store_steps * subsample) + num_warmup_steps
         return {
             "dt": dt,
@@ -1235,6 +1244,7 @@ def main(args):
         **live_sample_get_args(
             train_path=live_gen_path,
             required_fields=required_fields,
+            logger=logger.getChild("live-sample-params"),
         ),
     )
 
