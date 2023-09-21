@@ -4,6 +4,7 @@ import time
 import subprocess
 import itertools
 import re
+import codecs
 
 start_time = time.strftime("%Y%m%d-%H%M%S")
 
