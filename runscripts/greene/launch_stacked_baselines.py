@@ -44,7 +44,7 @@ def sbatch_launch(args, dependency_ids=None):
 
 
 def dry_run_mkdir(dir_path):
-    print("mkdir", f"'{pathlib.Path(dir_path).resolve()}'")
+    print("mkdir -p", f"'{pathlib.Path(dir_path).resolve()}'")
     if not DRY_RUN:
         pathlib.Path(dir_path).mkdir(parents=True, exist_ok=True)
 
