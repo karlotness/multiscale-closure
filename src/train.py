@@ -883,11 +883,15 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
             )
         # Do selection slicing
         assert len(input_chunks) == len(target_chunks)
-        indices = jnp.arange(batch_size, dtype=jnp.uint32)
-        select_indices = jnp.sum((jnp.expand_dims(indices, 0) >= jnp.expand_dims(jnp.cumsum(samples_per_batch, axis=0), -1)).astype(jnp.uint8), axis=0)
-        select_indices = jnp.minimum(select_indices, jnp.uint8(len(input_chunks) - 1))
-        input_chunk = jnp.stack(input_chunks, axis=0)[select_indices, indices]
-        target_chunk = jnp.stack(target_chunks, axis=0)[select_indices, indices]
+        if len(input_chunks) > 1:
+            indices = jnp.arange(batch_size, dtype=jnp.uint32)
+            select_indices = jnp.sum((jnp.expand_dims(indices, 0) >= jnp.expand_dims(jnp.cumsum(samples_per_batch, axis=0), -1)).astype(jnp.uint8), axis=0)
+            select_indices = jnp.minimum(select_indices, jnp.uint8(len(input_chunks) - 1))
+            input_chunk = jnp.stack(input_chunks, axis=0)[select_indices, indices]
+            target_chunk = jnp.stack(target_chunks, axis=0)[select_indices, indices]
+        else:
+            input_chunk = input_chunks[0]
+            target_chunk = target_chunks[0]
         # Compute losses
         loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, input_chunk, target_chunk)
         # Update parameters
