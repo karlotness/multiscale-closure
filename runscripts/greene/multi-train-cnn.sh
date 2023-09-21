@@ -32,10 +32,10 @@ set -euo pipefail
 # Constants
 source params.sh
 
-if [[ "$ARCHITECTURE" == "gz-fcnn-v1" ]]; then
+if [[ "$ARCHITECTURE" == "gz-fcnn-v1" || "$ARCHITECTURE" == "stacked-gz-fcnn-v1-d2" || "$ARCHITECTURE" == "stacked-gz-fcnn-v1-d3" ]]; then
     LR='0.0005'
     NUM_EPOCHS='132'
-elif [[ "$ARCHITECTURE" == "gz-fcnn-v1-medium" ]]; then
+elif [[ "$ARCHITECTURE" == "gz-fcnn-v1-medium" || "$ARCHITECTURE" == "stacked-gz-fcnn-v1-medium-d2" || "$ARCHITECTURE" == "stacked-gz-fcnn-v1-medium-d3" ]]; then
     LR='0.0002'
     NUM_EPOCHS='96'
 else
