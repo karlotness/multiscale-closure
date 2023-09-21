@@ -47,7 +47,7 @@ class BaseStackedGZFCNN(eqx.Module):
     def __call__(self, x: jax.Array, *, key: jax.Array|None = None):
         inputs = [x]
         for net in self.seq:
-            result = net(jnp.concatenate(inputs, axis=0))
+            result = jax.checkpoint(lambda ips: net(jnp.concatenate(ips, axis=0)))(inputs)
             inputs.append(result)
         return result
 
