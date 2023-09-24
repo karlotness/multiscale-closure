@@ -21,7 +21,7 @@ apt -y clean
 # Configure virtualenv
 mkdir -p /opt/closure_venv/
 python3.11 -m venv --prompt=closure /opt/closure_venv/
-cat /opt/closure_venv/bin/activate >> $SINGULARITY_ENVIRONMENT
+cat /opt/closure_venv/bin/activate >> "$SINGULARITY_ENVIRONMENT"
 /opt/closure_venv/bin/python -m pip install --compile --upgrade pip
 PIP_CONSTRAINT=/opt/constraints.txt /opt/closure_venv/bin/python -m pip install --compile --requirement /opt/requirements.txt
 /opt/closure_venv/bin/python -m pip cache purge
