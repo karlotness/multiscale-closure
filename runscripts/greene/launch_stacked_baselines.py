@@ -104,3 +104,5 @@ for arch, scale in itertools.product(ARCHITECTURES, SCALES):
             net_weights=[p / "weights" / f"{weight_type}.eqx" for p in out_dirs],
             train_job_ids=train_job_ids,
         )
+
+print("# Finished launching")
