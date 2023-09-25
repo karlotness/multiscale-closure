@@ -13,7 +13,7 @@ SCRATCH = pathlib.Path(os.environ["SCRATCH"])
 ONLINE_EVAL_FILE = SCRATCH / "closure" / "data-eddyonly" / "test" / "op1" / "data.hdf5"
 experiment_dir = SCRATCH / "closure" / "run_outputs" / f"stacked-baselines-{start_time}"
 EPOCH_WEIGHTS = ["best_loss", "interval"]
-ARCHITECTURES = ["stacked-gz-fcnn-v1-medium-d2", "stacked-gz-fcnn-v1-medium-d3", "stacked-gz-fcnn-v1-d2", "stacked-gz-fcnn-v1-d3"]
+ARCHITECTURES = ["stacked-gz-fcnn-v2-medium-d2", "stacked-gz-fcnn-v2-medium-d3", "stacked-gz-fcnn-v2-d2", "stacked-gz-fcnn-v2-d3"]
 SCALES = [128, 96, 64]
 NUM_REPEATS = 3
 dry_run_counter = 0
@@ -62,7 +62,7 @@ def dry_run_mkdir(dir_path):
 def launch_net_training(out_dir, arch, scale):
     input_channels = [f"q_{scale}"]
     output_channels = [f"q_total_forcing_{scale}"]
-    if scale == 128 and arch == "stacked-gz-fcnn-v1-medium-d3":
+    if scale == 128 and arch in {"stacked-gz-fcnn-v1-medium-d3", "stacked-gz-fcnn-v2-medium-d3"}:
         time_limit = TIME_LIMITS["long"]
     else:
         time_limit = TIME_LIMITS["short"]
