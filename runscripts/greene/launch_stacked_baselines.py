@@ -13,12 +13,17 @@ SCRATCH = pathlib.Path(os.environ["SCRATCH"])
 ONLINE_EVAL_FILE = SCRATCH / "closure" / "data-eddyonly" / "test" / "op1" / "data.hdf5"
 experiment_dir = SCRATCH / "closure" / "run_outputs" / f"stacked-baselines-{start_time}"
 EPOCH_WEIGHTS = ["best_loss", "interval"]
-ARCHITECTURES = ["stacked-gz-fcnn-v1-d2", "stacked-gz-fcnn-v1-d3"]
+ARCHITECTURES = ["stacked-gz-fcnn-v1-medium-d2", "stacked-gz-fcnn-v1-medium-d3", "stacked-gz-fcnn-v1-d2", "stacked-gz-fcnn-v1-d3"]
 SCALES = [128, 96, 64]
 NUM_REPEATS = 3
 dry_run_counter = 0
 
-def sbatch_launch(args, dependency_ids=None):
+TIME_LIMITS = {
+    "short": "47:30:00",
+    "long": "72:00:00",
+}
+
+def sbatch_launch(args, *, dependency_ids=None, time_limit=None):
     global dry_run_counter
     if dependency_ids is None:
         dependency_ids = []
@@ -27,7 +32,11 @@ def sbatch_launch(args, dependency_ids=None):
         dep_args = ["--dependency", f"afterok:{deps}", "--kill-on-invalid-dep", "yes"]
     else:
         dep_args = []
-    args = ["--parsable"] + dep_args + [str(a) for a in args]
+    if time_limit is not None:
+        time_args = [f"--time={time_limit}"]
+    else:
+        time_args = []
+    args = ["--parsable"] + time_args + dep_args + [str(a) for a in args]
     print("sbatch", " ".join(f"'{a}'" for a in args))
     if not DRY_RUN:
         # Actually launch
@@ -53,7 +62,11 @@ def dry_run_mkdir(dir_path):
 def launch_net_training(out_dir, arch, scale):
     input_channels = [f"q_{scale}"]
     output_channels = [f"q_total_forcing_{scale}"]
-    job_id = sbatch_launch(["multi-train-cnn.sh", out_dir, arch, " ".join(input_channels), scale, " ".join(output_channels)])
+    if scale == 128 and arch == "stacked-gz-fcnn-v1-medium-d3":
+        time_limit = TIME_LIMITS["long"]
+    else:
+        time_limit = TIME_LIMITS["short"]
+    job_id = sbatch_launch(["multi-train-cnn-manualtimelimit.sh", out_dir, arch, " ".join(input_channels), scale, " ".join(output_channels)], time_limit=time_limit)
     return job_id
 
 
