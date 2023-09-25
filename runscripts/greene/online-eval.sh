@@ -5,7 +5,6 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=22GB
 #SBATCH --gres=gpu:1
-#SBATCH --partition=rtx8000,v100
 
 # Make Bash more strict
 shopt -s failglob

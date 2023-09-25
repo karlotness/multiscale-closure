@@ -5,7 +5,6 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=15GB
 #SBATCH --gres=gpu:1
-#SBATCH --partition=rtx8000,v100
 
 # Begin execution
 module purge

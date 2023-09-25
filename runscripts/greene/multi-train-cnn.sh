@@ -5,7 +5,6 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=25GB
 #SBATCH --gres=gpu:1
-#SBATCH --partition=rtx8000,v100
 
 set -euo pipefail
 
