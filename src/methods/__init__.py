@@ -20,4 +20,8 @@ ARCHITECTURES = {
     "stacked-gz-fcnn-v1-d3": make_module_factory("stacked_gz_fcnn", "StackedGZFCNN", fixed_args={"depth": 3}),
     "stacked-gz-fcnn-v1-medium-d2": make_module_factory("stacked_gz_fcnn", "MediumStackedGZFCNN", fixed_args={"depth": 2}),
     "stacked-gz-fcnn-v1-medium-d3": make_module_factory("stacked_gz_fcnn", "MediumStackedGZFCNN", fixed_args={"depth": 3}),
+    "stacked-gz-fcnn-v2-d2": make_module_factory("stacked_gz_fcnn", "StackedGZFCNNV2", fixed_args={"depth": 2}),
+    "stacked-gz-fcnn-v2-d3": make_module_factory("stacked_gz_fcnn", "StackedGZFCNNV2", fixed_args={"depth": 3}),
+    "stacked-gz-fcnn-v2-medium-d2": make_module_factory("stacked_gz_fcnn", "MediumStackedGZFCNNV2", fixed_args={"depth": 2}),
+    "stacked-gz-fcnn-v2-medium-d3": make_module_factory("stacked_gz_fcnn", "MediumStackedGZFCNNV2", fixed_args={"depth": 3}),
 }
