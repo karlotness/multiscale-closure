@@ -23,6 +23,15 @@ def rename_save_file(file, mode, *args, **kwargs):
     os.replace(target_path, final_path)
 
 
+def atomic_symlink(target, link_path):
+    link_path = pathlib.Path(link_path).absolute()
+    target_path = pathlib.Path(target).absolute().relative_to(link_path.parent)
+    rand_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=15))
+    link_temp_path = link_path.with_name(f"{link_path.name}.PART{rand_suffix}")
+    os.symlink(target_path, link_temp_path)
+    os.replace(link_temp_path, link_path)
+
+
 def check_environment_variables(base_logger=None):
     if base_logger:
         logger = base_logger.getChild("jax_env_check")
