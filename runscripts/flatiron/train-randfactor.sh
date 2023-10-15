@@ -49,7 +49,7 @@ singularity run --nv "$SINGULARITY_CONTAINER" \
             --loader_chunk_size=23925 \
             --num_val_samples=100 \
             --val_interval=1 \
-            --save_interval=1 \
+            --save_interval=10 \
             --lr=0.001 \
             --end_lr=0.001 \
             --lr_schedule=ross22 \
