@@ -15,7 +15,7 @@ SCRATCH = pathlib.Path(os.environ["SCRATCH"]).resolve()
 NUM_REPEATS = 7
 NOISE_START_EPOCH = 3
 NOISE_FRESH_STEPS = 10
-SCALE = 96
+SCALE = 64
 if NOISE_FRESH_STEPS is not None:
     CANDIDATES_PER_EPOCH = operator.index(round((87 * 100) / (NOISE_FRESH_STEPS)))
 else:
