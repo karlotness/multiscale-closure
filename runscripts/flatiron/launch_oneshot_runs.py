@@ -13,9 +13,13 @@ SCRATCH = pathlib.Path(os.environ["SCRATCH"]).resolve()
 
 # General parameters
 NUM_REPEATS = 7
-NOISE_START_EPOCH = 10
+NOISE_START_EPOCH = 3
+NOISE_FRESH_STEPS = 10
 SCALE = 96
-CANDIDATES_PER_EPOCH = operator.index(round((2 * 87 * 100) / (50 - NOISE_START_EPOCH)))
+if NOISE_FRESH_STEPS is not None:
+    CANDIDATES_PER_EPOCH = operator.index(round((87 * 100) / (NOISE_FRESH_STEPS)))
+else:
+    CANDIDATES_PER_EPOCH = operator.index(round((2 * 87 * 100) / (NOISE_FRESH_STEPS)))
 NET_STEPS = [5, 10, 30, 75]
 
 # Mapping of steps to layer variances
@@ -31,7 +35,7 @@ STEP_LAYER_VARS = dict([
 
 
 launch_time = time.strftime("%Y%m%d-%H%M%S")
-base_out_dir = SCRATCH / "closure" / "run_outputs"/ f"oneshot-noise-nets-scale{SCALE:d}-{launch_time}"
+base_out_dir = SCRATCH / "closure" / "run_outputs"/ f"oneshot-noise-nets-scale{SCALE:d}-fresh{NOISE_FRESH_STEPS:d}-{launch_time}"
 
 if SCALE == 64:
     train_file = SCRATCH / "closure/data-rand-eddytojet/factor-1_0/train100/op1/shuffled.hdf5"
@@ -102,7 +106,7 @@ def dry_run_mkdir(dir_path):
         pathlib.Path(dir_path).mkdir(parents=True, exist_ok=True)
 
 
-def launch_training(*, out_dir, train_dir, val_dir, scale=SCALE, live_gen_net_steps=5, live_gen_mode="schedule-only", live_gen_candidates=0, live_gen_data_dir=None, architecture="gz-fcnn-v1", noise_vars=None, switch_live_set_interval=None, live_gen_start_epoch=1, live_gen_interval=1, live_gen_winners=None, dependency_ids=None):
+def launch_training(*, out_dir, train_dir, val_dir, scale=SCALE, live_gen_net_steps=5, live_gen_mode="schedule-only", live_gen_candidates=0, live_gen_data_dir=None, architecture="gz-fcnn-v1", noise_vars=None, switch_live_set_interval=None, live_gen_start_epoch=1, live_gen_interval=1, live_gen_winners=None, live_gen_switch_set_interval=None, dependency_ids=None):
     if live_gen_winners is None:
         live_gen_winners = live_gen_candidates
     args = [
@@ -140,6 +144,8 @@ def launch_training(*, out_dir, train_dir, val_dir, scale=SCALE, live_gen_net_st
         args.extend(["--live_gen_switch_set_interval", f"{switch_live_set_interval:d}"])
     if live_gen_data_dir:
         args.extend(["--live_gen_base_data", live_gen_data_dir])
+    if live_gen_switch_set_interval:
+        args.extend(["--live_gen_switch_set_interval", f"{live_gen_switch_set_interval:d}"])
     return container_cmd_launch(args, time_limit="15:00:00", job_name="noise-train", cpus=1, gpus=1, mem_gb=25, dependency_ids=dependency_ids)
 
 
@@ -157,7 +163,7 @@ def launch_online_eval(*, out_file, eval_file, weight_files, dependency_ids=None
 
 dry_run_mkdir(base_out_dir)
 for noise_type, steps in itertools.chain(
-    [("noiseless", 5)],
+    #[("noiseless", 5)],
     itertools.product(
         ["netroll", "gaussian"],
         NET_STEPS,
@@ -175,17 +181,20 @@ for noise_type, steps in itertools.chain(
         spec_vars = None
         gen_start_epoch = 1
         gen_interval = 1
+        switch_set_inverval = None
     elif noise_type == "netroll":
         gen_mode = "network-noise-onestep"
         num_candidates = CANDIDATES_PER_EPOCH
         spec_vars = None
-        gen_start_epoch = 10
+        gen_start_epoch = NOISE_START_EPOCH
+        switch_set_inverval = NOISE_FRESH_STEPS
         gen_interval = 1
     elif noise_type == "gaussian":
         gen_mode = "schedule-only"
         num_candidates = CANDIDATES_PER_EPOCH
         spec_vars = STEP_LAYER_VARS[steps]
-        gen_start_epoch = 10
+        gen_start_epoch = NOISE_START_EPOCH
+        switch_set_inverval = NOISE_FRESH_STEPS
         gen_interval = 1
     else:
         raise ValueError(f"invalid type {noise_type}")
@@ -205,6 +214,7 @@ for noise_type, steps in itertools.chain(
             noise_vars=spec_vars,
             live_gen_start_epoch=gen_start_epoch,
             live_gen_interval=gen_interval,
+            live_gen_switch_set_interval = switch_set_inverval,
         )
         batch_train_ids.append(net_run_id)
         batch_eval_weights.append(out_dir / "weights" / "epoch0050.eqx")
