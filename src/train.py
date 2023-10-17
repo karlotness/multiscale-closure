@@ -1392,6 +1392,7 @@ def main(args):
             if (epoch % args.save_interval == 0) or (epoch == args.num_epochs):
                 save_names_permanent.add(epoch_name)
                 saved_names.append(epoch_name)
+            logger.info("Wrote file and link names: %s", saved_names)
             # Clean up any now unlinked files
             save_names_to_remove = (save_names_written - save_names_permanent) - {v for v in save_names_mapping.values() if v is not None}
             for name_to_remove in save_names_to_remove:
