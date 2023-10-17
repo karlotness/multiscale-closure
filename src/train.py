@@ -43,6 +43,7 @@ parser.add_argument("--batches_per_epoch", type=int, default=100, help="Training
 parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for optimizer")
 parser.add_argument("--end_lr", type=float, default=None, help="Learning rate at end of schedule")
 parser.add_argument("--num_val_samples", type=int, default=10, help="Number of samples to draw in each validation period")
+parser.add_argument("--val_sample_seed", type=int, default=1234, help="RNG seed to select validation samples")
 parser.add_argument("--val_interval", type=int, default=1, help="Number of epochs between validation periods")
 parser.add_argument("--output_channels", type=str, nargs="+", default=["q_total_forcing_64"], help="What output channels to produce")
 parser.add_argument("--input_channels", type=str, nargs="+", default=["q_64"], help="Channels to show the network as input")
@@ -969,17 +970,22 @@ def make_validation_stats_function(input_channels, output_channels, model_params
     return compute_stats
 
 
-def do_validation(train_state, np_rng, loader, sample_stat_fn, num_samples, logger=None):
+def do_validation(train_state, loader, sample_stat_fn, traj, step, logger=None):
     if logger is None:
         logger = logging.getLogger("validation")
     # Sample indices
-    traj = np_rng.integers(low=0, high=loader.num_trajs, size=num_samples)
-    step = np_rng.integers(low=0, high=loader.num_steps, size=num_samples)
+    num_samples = traj.shape[0]
+    if step.shape[0] != num_samples:
+        logger.error("mismatched validation samples")
+        raise ValueError("mismatched number of validation samples")
+    if traj.ndim != 1 or step.ndim != 1:
+        logger.error("validation sample arrays must be one-dimensional")
+        raise ValueError("validation sample arrays must be one-dimensional")
     # Load and stack q components
     logger.info("Loading %d samples of validation data", num_samples)
     batch = jax.tree_util.tree_map(
         lambda *args: jnp.concatenate(args, axis=0),
-        *(loader.get_trajectory(traj=t, start=s, end=s+1) for t, s in zip(traj, step, strict=True))
+        *(loader.get_trajectory(traj=operator.index(t), start=operator.index(s), end=operator.index(s)+1) for t, s in zip(traj, step, strict=True))
     )
     logger.info("Starting validation")
     val_start = time.perf_counter()
@@ -1303,6 +1309,10 @@ def main(args):
             ),
             donate="all",
         )
+        # Determine fixed validation samples
+        val_samp_rng = np.random.default_rng(seed=args.val_sample_seed)
+        val_traj_idxs = val_samp_rng.integers(low=0, high=val_loader.num_trajs, size=args.num_val_samples, dtype=np.uint64)
+        val_step_idxs = val_samp_rng.integers(low=0, high=val_loader.num_steps, size=args.num_val_samples, dtype=np.uint64)
         val_stats_fn = eqx.filter_jit(
             make_validation_stats_function(
                 input_channels=input_channels,
@@ -1333,6 +1343,22 @@ def main(args):
                     clean_vs_noise_spec_counts=(num_clean_samples, num_dirty_samples),
                 )
             mean_loss = epoch_stats["mean_loss"]
+
+            # Validation step
+            val_stat_report = None
+            val_loss = None
+            if epoch % args.val_interval == 0:
+                logger.info("Starting validation for epoch %d", epoch)
+                val_stat_report = do_validation(
+                    train_state=state,
+                    loader=val_loader,
+                    sample_stat_fn=val_stats_fn,
+                    traj=val_traj_idxs,
+                    step=val_step_idxs,
+                    logger=logger.getChild(f"{epoch:05d}_val"),
+                )
+                val_loss = val_stat_report["standard_mse"]
+                logger.info("Finished validation for epoch %d", epoch)
 
             # Save snapshots
             saved_names = []
@@ -1369,20 +1395,6 @@ def main(args):
                     save_names_written.discard(name_to_remove)
                 except FileNotFoundError:
                     logger.warning("Tried to remove missing weights file %s", name_to_remove)
-
-            # Validation step
-            val_stat_report = None
-            if epoch % args.val_interval == 0:
-                logger.info("Starting validation for epoch %d", epoch)
-                val_stat_report = do_validation(
-                    train_state=state,
-                    np_rng=np_rng,
-                    loader=val_loader,
-                    sample_stat_fn=val_stats_fn,
-                    logger=logger.getChild(f"{epoch:05d}_val"),
-                    num_samples=args.num_val_samples,
-                )
-                logger.info("Finished validation for epoch %d", epoch)
 
             # Add live-generated trajectories, if required
             logger.info("Starting live trajectory generation")
