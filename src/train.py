@@ -1324,6 +1324,7 @@ def main(args):
 
         # Running statistics
         min_mean_loss = None
+        min_val_loss = None
 
         # Training loop
         epoch_reports = []
@@ -1377,6 +1378,11 @@ def main(args):
                 utils.atomic_symlink(epoch_file, weights_dir / "best_loss.eqx")
                 save_names_mapping["best_loss"] = epoch_name
                 saved_names.append("best_loss")
+            if val_loss is not None and (min_val_loss is None or (math.isfinite(val_loss) and val_loss <= min_val_loss)):
+                min_val_loss = val_loss
+                utils.atomic_symlink(epoch_file, weights_dir / "best_val_loss.eqx")
+                save_names_mapping["best_val_loss"] = epoch_name
+                saved_names.append("best_val_loss")
             # Save interval
             if epoch % args.save_interval == 0:
                 utils.atomic_symlink(epoch_file, weights_dir / "interval.eqx")
