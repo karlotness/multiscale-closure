@@ -36,4 +36,4 @@ fi
 export JAX_ENABLE_X64=True
 export JAX_DEFAULT_DTYPE_BITS=32
 cd "${CHECKOUT_DIR}/src"
-singularity run "${gpu_args[@]}" "$SINGULARITY_CONTAINER" "${@:2}"
+apptainer run "${gpu_args[@]}" "$SINGULARITY_CONTAINER" "${@:2}"
