@@ -34,6 +34,7 @@ parser.add_argument("--log_level", type=str, help="Level for logger", default="i
 parser.add_argument("--corr_seed", type=int, default=123, help="RNG seed for correlation coefficient noise")
 parser.add_argument("--corr_num_samples", type=int, default=3, help="Number of correlation samples to draw (UNUSED)")
 parser.add_argument("--trajectory_batch_size", type=int, default=16, help="Number of trajectories to batch together")
+parser.add_argument("--param_alpha", type=float, default=1.0, help="Filter factor scaling parameter")
 
 
 def batched(iterable, n):
@@ -100,12 +101,13 @@ def compute_traj_losses(traj_q, ref_q):
 
 
 
-def make_parameterized_stepped_model(nets, net_data, model_params, qg_model_args, dt):
+def make_parameterized_stepped_model(nets, net_data, model_params, qg_model_args, dt, param_alpha=1.0):
 
     def model_stepper(initial_q, subsampling=1, sys_params={}, skip_steps=0):
         assert all(v.ndim == 0 for v in sys_params.values())
         new_model_params = qg_model_args.copy()
         new_model_params.update(sys_params)
+        new_model_params["filterfac"] = new_model_params["filterfac"] * param_alpha
         fixed_sys_params = {k: jnp.full((1, 1, 1), fill_value=v) for k, v in sys_params.items()}
         model = pyqg_jax.steppers.SteppedModel(
             pyqg_jax.parameterizations.ParameterizedModel(
@@ -197,7 +199,7 @@ def values_from_step(i, carry, step_state, qg_model, horizons):
     return new_state, results
 
 
-def make_traj_evaluator(dt, subsampling, num_steps, small_model, ke_horizons, corr_num_samples):
+def make_traj_evaluator(dt, subsampling, num_steps, small_model, ke_horizons, corr_num_samples, param_alpha=1.0):
 
     def eval_traj(batch, loaded_net, corr_rng):
         processing_size = loaded_net.net_info["processing_size"]
@@ -218,6 +220,7 @@ def make_traj_evaluator(dt, subsampling, num_steps, small_model, ke_horizons, co
             model_params=loaded_net.model_params,
             qg_model_args=qg_utils.qg_model_to_args(small_model),
             dt=dt,
+            param_alpha=param_alpha,
         )
         state, step_state = phase1(
             initial_q=init_q,
@@ -409,6 +412,7 @@ def main():
                 small_model=small_model,
                 ke_horizons=HORIZONS,
                 corr_num_samples=args.corr_num_samples,
+                param_alpha=args.param_alpha,
             )
         )
     )
@@ -419,6 +423,7 @@ def main():
         logger.info("Storing basic parameters")
         params_group = out_file.create_group("params")
         params_group.create_dataset("eval_file", data=str(eval_file.resolve()))
+        params_group.create_dataset("param_alpha", data=args.param_alpha)
         paths_group = params_group.create_group("paths")
         for net_id, ln in zip(net_ids, loaded_nets, strict=True):
             paths_group.create_dataset(net_id, data=str(ln.net_path))
