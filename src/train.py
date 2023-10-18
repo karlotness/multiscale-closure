@@ -903,7 +903,9 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
 
 
 def do_epoch(train_state, batch_iter, batch_fn, rng_ctr, clean_vs_noise_spec_counts, logger=None):
-    n_clean, n_noisy = clean_vs_noise_spec_counts
+    clean_vals, noise_vals = clean_vs_noise_spec_counts
+    n_clean = sum(clean_vals)
+    n_noisy = sum(noise_vals)
     logger.info("Epoch with virtual noise samples clean=%d, noisy=%d", n_clean, n_noisy)
     if logger is None:
         logger = logging.getLogger("train_epoch")
@@ -1295,8 +1297,8 @@ def main(args):
             )
         )
 
-        num_clean_samples = train_loader.num_samples()
-        num_dirty_samples = 0
+        num_clean_samples = [train_loader.num_samples(), 0, 0]
+        num_dirty_samples = [0, 0, 0]
 
         # Training functions
         train_batch_fn = eqx.filter_jit(
@@ -1414,17 +1416,18 @@ def main(args):
                 assert isinstance(fillable_loader, FillableDataLoader)
                 if just_switched:
                     logger.info("Clearing new data loader %d", fillable_idx)
-                    num_dirty_samples = max(0, num_dirty_samples - fillable_loader.num_samples())
+                    num_dirty_samples[fillable_idx] = 0
                     fillable_loader.clear()
             else:
-                fillable_loader = train_loader.loaders[1]
+                fillable_idx = 1
+                fillable_loader = train_loader.loaders[fillable_idx]
                 assert isinstance(fillable_loader, FillableDataLoader)
             new_live_trajs, new_traj_info, rng_ctr = live_gen_func(
                 epoch=epoch,
                 rng_ctr=rng_ctr,
                 net=state.net,
             )
-            num_dirty_samples += new_traj_info["num_winners"]
+            num_dirty_samples[fillable_idx] += new_traj_info["num_winners"]
             added_trajs = 0
             for live_traj in new_live_trajs:
                 fillable_loader.add_data(live_traj)
