@@ -21,6 +21,7 @@ if NOISE_FRESH_STEPS is not None:
 else:
     CANDIDATES_PER_EPOCH = operator.index(round((2 * 87 * 100) / (50 - NOISE_START_EPOCH)))
 NET_STEPS = [5, 10, 30, 75]
+ONLINE_ALPHA_PARAMS = [1.0, 5.0, 10.0, 15.0]
 
 # Mapping of steps to layer variances
 STEP_LAYER_VARS = dict([
@@ -149,14 +150,15 @@ def launch_training(*, out_dir, train_dir, val_dir, scale=SCALE, live_gen_net_st
     return container_cmd_launch(args, time_limit="15:00:00", job_name="noise-train", cpus=1, gpus=1, mem_gb=25, dependency_ids=dependency_ids)
 
 
-def launch_online_eval(*, out_file, eval_file, weight_files, dependency_ids=None):
+def launch_online_eval(*, out_file, eval_file, weight_files, dependency_ids=None, param_alpha=None):
     args = [
         "python",
         "online_data_eval.py",
         "--corr_num_samples=0",
-        out_file,
-        eval_file,
     ]
+    if param_alpha is not None:
+        args.extend(["--param_alpha", str(param_alpha)])
+    args.extend([out_file, eval_file])
     args.extend(weight_files)
     return container_cmd_launch(args, time_limit="15:00:00", job_name="eval-plots", cpus=1, gpus=1, mem_gb=20, dependency_ids=dependency_ids)
 
@@ -220,9 +222,12 @@ for noise_type, steps in itertools.chain(
         batch_eval_weights.append(out_dir / "weights" / "epoch0050.eqx")
     # Launch evaluation on this group of networks
     dry_run_mkdir(online_eval_dir)
-    launch_online_eval(
-        out_file=online_eval_dir / "test.hdf5",
-        eval_file=test_heldout_file,
-        weight_files=batch_eval_weights,
-        dependency_ids=batch_train_ids,
-    )
+    for alpha in ONLINE_ALPHA_PARAMS:
+        alpha_underscore = str(alpha).replace(".", "_")
+        launch_online_eval(
+            out_file=online_eval_dir / f"test-alpha{alpha_underscore}.hdf5",
+            eval_file=test_heldout_file,
+            weight_files=batch_eval_weights,
+            dependency_ids=batch_train_ids,
+            param_alpha=alpha,
+        )
