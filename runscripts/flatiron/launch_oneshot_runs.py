@@ -165,7 +165,7 @@ def launch_online_eval(*, out_file, eval_file, weight_files, dependency_ids=None
 
 dry_run_mkdir(base_out_dir)
 for noise_type, steps in itertools.chain(
-    #[("noiseless", 5)],
+    [("noiseless", 5)],
     itertools.product(
         ["netroll", "gaussian"],
         NET_STEPS,
