@@ -20,7 +20,7 @@ if NOISE_FRESH_STEPS is not None:
     CANDIDATES_PER_EPOCH = operator.index(round((87 * 100) / (NOISE_FRESH_STEPS)))
 else:
     CANDIDATES_PER_EPOCH = operator.index(round((2 * 87 * 100) / (50 - NOISE_START_EPOCH)))
-NET_STEPS = [5, 10, 30, 75]
+NET_STEPS = [1, 5, 10, 30, 75]
 ONLINE_ALPHA_PARAMS = [1.0, 5.0, 10.0, 15.0]
 
 # Mapping of steps to layer variances
