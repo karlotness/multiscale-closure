@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 
 DATA_SUBSAMPLE_FACTOR = 8
-SYS_INFO_CHANNELS = r"^(rek|beta|delta)_\d+$"
+SYS_INFO_CHANNELS = r"^(?:ejnorm_)?(rek|beta|delta)_\d+$"
 
 parser = argparse.ArgumentParser(description="Compare offline and online metrics for individual networks vs ensemble")
 parser.add_argument("out_dir", type=str, help="Directory to store evaluation results")
