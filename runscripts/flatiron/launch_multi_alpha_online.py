@@ -90,13 +90,14 @@ def launch_online_eval(*, out_file, eval_file, weight_files, dependency_ids=None
 candidate_dirs = set()
 for root_dir in sys.argv[1:]:
     root_dir = pathlib.Path(root_dir)
-    candidate_dirs.update(p.parent.resolve() for p in root_dir.glob("**/poster-plot-data/test.hdf5"))
+    candidate_dirs.update((p.parent.parent.parent.resolve() / "poster-plot-data") for p in root_dir.glob("**/epoch0050.eqx"))
 
 for candidate in sorted(candidate_dirs):
     # Determine scale
     if m := re.search(r"oneshot-noise-nets-scale(?P<scale>\d+)-", str(candidate)):
         scale = int(m.group("scale"))
         weight_files = sorted(candidate.parent.glob("net*/weights/epoch0050.eqx"))
+        dry_run_mkdir(candidate)
         for alpha in ALPHA_PARAMS:
             alpha_underscore = str(alpha).replace(".", "_")
             out_file = candidate / f"test-alpha{alpha_underscore}.hdf5"
