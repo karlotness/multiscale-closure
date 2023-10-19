@@ -128,7 +128,7 @@ def launch_training(*, out_dir, train_dir, val_dir, scale=SCALE, live_gen_net_st
         "--end_lr=0.001",
         "--lr_schedule=ross22",
         f"--architecture={architecture}",
-        "--input_channels", f"q_{scale:d}", f"rek_{scale:d}", f"delta_{scale:d}", f"beta_{scale:d}",
+        "--input_channels", f"q_{scale:d}", f"ejnorm_rek_{scale:d}", f"ejnorm_delta_{scale:d}", f"ejnorm_beta_{scale:d}",
         "--output_channels", f"q_total_forcing_{scale:d}",
         # Fixed live generation arguments
         f"--live_gen_start_epoch={live_gen_start_epoch:d}",
