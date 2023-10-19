@@ -25,7 +25,7 @@ from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader,
 from systems.qg import coarsen, diagnostics as qg_spec_diag, utils as qg_utils
 import pyqg_jax
 from methods import ARCHITECTURES
-from generate_data import make_parameter_sampler
+from generate_data import make_parameter_sampler, CONFIG_VARS as GEN_CONFIG_VARS
 import jax_utils
 import utils
 
@@ -486,6 +486,8 @@ def determine_required_fields(channels):
             loader_chans.add(chan)
         elif m := re.match(r"^(?P<chan>q|rek|delta|beta)_\d+$", chan):
             loader_chans.add(m.group("chan"))
+        elif m := re.match(r"^ejnorm_(?P<chan>rek|delta|beta)_\d+$", chan):
+            loader_chans.add(m.group("chan"))
         elif m := re.match(r"^q_scaled_forcing_(?P<orig_size>\d+)to\d+$", chan):
             orig_size = m.group("orig_size")
             loader_chans.update(determine_required_fields([f"q_total_forcing_{orig_size}"]))
@@ -501,7 +503,7 @@ def determine_required_fields(channels):
 
 def determine_channel_size(chan):
     """Determine the final scaled size of the channel from its name"""
-    if m := re.match(r"^(q_total_forcing|q|rek|delta|beta)_(?P<size>\d+)$", chan):
+    if m := re.match(r"^(q_total_forcing|q|(?:(?:ejnorm_)?(?:rek|delta|beta)))_(?P<size>\d+)$", chan):
         return int(m.group("size"))
     elif m := re.match(r"^(q_scaled_forcing|q_scaled)_\d+to(?P<size>\d+)$", chan):
         return int(m.group("size"))
@@ -518,7 +520,7 @@ def determine_channel_layers(chan):
     """Determine the number of layers based on the channel name"""
     if re.match(r"^(q|q_total_forcing)_\d+$", chan):
         return 2
-    elif re.match(r"^(rek|delta|beta)_\d+$", chan):
+    elif re.match(r"^(?:ejnorm_)?(?:rek|delta|beta)_\d+$", chan):
         return 1
     elif m := re.match(r"^q_scaled_forcing_(?P<orig_size>\d+)to\d+$", chan):
         orig_size = int(m.group("orig_size"))
@@ -683,8 +685,18 @@ def make_channel_from_batch(channel, batch, model_params, alt_source=None):
         )(make_channel_from_batch(m.group("chan2"), batch, model_params, alt_source=alt_source))
         return chan1 - chan2
     # System parameters
-    elif m := re.match(r"^(?P<chan>rek|delta|beta)_\d+$", channel):
-        data = batch.sys_params[m.group("chan")]
+    elif m := re.match(r"^(?P<norm>ejnorm_)?(?P<chan>rek|delta|beta)_\d+$", channel):
+        norm_name = m.group("norm")[:-1] if m.group("norm") is not None else None
+        chan_name = m.group("chan")
+        base_data = batch.sys_params[chan_name]
+        if norm_name is None:
+            data = base_data
+        elif norm_name == "ejnorm":
+            e_val = GEN_CONFIG_VARS["eddy"][chan_name]
+            j_val = GEN_CONFIG_VARS["jet"][chan_name]
+            data = (base_data - e_val) * (1.0 / (j_val - e_val))
+        else:
+            raise ValueError(f"unsupported norm, chan combination: {norm_name}, {chan_name}")
         size = determine_channel_size(channel)
         assert data.shape[-3:] == (determine_channel_layers(channel), 1, 1)
         tile_shape = ((1, ) * (data.ndim - 2)) + (size, size)
