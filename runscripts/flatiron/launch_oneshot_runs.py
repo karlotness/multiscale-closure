@@ -39,15 +39,15 @@ launch_time = time.strftime("%Y%m%d-%H%M%S")
 base_out_dir = SCRATCH / "closure" / "run_outputs"/ f"oneshot-noise-nets-scale{SCALE:d}-fresh{NOISE_FRESH_STEPS:d}-{launch_time}"
 
 if SCALE == 64:
-    train_file = SCRATCH / "closure/data-rand-eddytojet/factor-1_0/train100/op1/shuffled.hdf5"
-    live_data_file = SCRATCH / "closure/data-smallstep-rand-eddytojet/factor-1_0/train100/op1/shuffled.hdf5"
+    train_file = SCRATCH / "closure/data-rand-eddytojet/factor-1_0/train/op1/shuffled.hdf5"
+    live_data_file = SCRATCH / "closure/data-smallstep-rand-eddytojet/factor-1_0/train/op1/shuffled.hdf5"
     val_file = SCRATCH / "closure/data-rand-eddytojet/factor-1_0/val/op1/data.hdf5"
     test_train_file = SCRATCH / "closure/data-rand-eddytojet/factor-1_0/test-trainset/op1/data.hdf5"
     test_heldout_file = SCRATCH / "closure/data-rand-eddytojet/factor-1_0/test/op1/data.hdf5"
     assert test_train_file.is_file()
 elif SCALE == 96:
-    train_file = SCRATCH / "closure/data-size96-rand-eddytojet/largestep/factor-1_0/train100/op1/shuffled.hdf5"
-    live_data_file = SCRATCH / "closure/data-size96-rand-eddytojet/smallstep/factor-1_0/train100/op1/shuffled.hdf5"
+    train_file = SCRATCH / "closure/data-size96-rand-eddytojet/largestep/factor-1_0/train/op1/shuffled.hdf5"
+    live_data_file = SCRATCH / "closure/data-size96-rand-eddytojet/smallstep/factor-1_0/train/op1/shuffled.hdf5"
     val_file = SCRATCH / "closure/data-size96-rand-eddytojet/largestep/factor-1_0/val/op1/data.hdf5"
     test_heldout_file = SCRATCH / "closure/data-size96-rand-eddytojet/largestep/factor-1_0/test/op1/data.hdf5"
 
