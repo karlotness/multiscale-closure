@@ -13,7 +13,7 @@ DRY_RUN = True
 SCRATCH = pathlib.Path(os.environ["SCRATCH"]).resolve()
 
 # General parameters
-ALPHA_PARAMS = [5.0, 10.0, 15.0]
+ALPHA_PARAMS = [1.0, 5.0, 10.0, 15.0]
 SCALE_TESTSETS = {
     64: SCRATCH / "closure/data-rand-eddytojet/factor-1_0/test/op1/data.hdf5",
     96: SCRATCH / "closure/data-size96-rand-eddytojet/largestep/factor-1_0/test/op1/data.hdf5",
