@@ -33,7 +33,7 @@ DATA_FILES = {
         test=SCRATCH / "closure" / "data-jet-nowarmup" / f"test/{COARSE_OP}/data.hdf5",
     ),
 }
-#assert all(p.is_file() for p in itertools.chain.from_iterable([df.train, df.val, df.test] for df in DATA_FILES.values()))
+assert all(p.is_file() for p in itertools.chain.from_iterable([df.train, df.val, df.test] for df in DATA_FILES.values()))
 
 launch_time = time.strftime("%Y%m%d-%H%M%S")
 base_out_dir = SCRATCH / "closure" / "run_outputs"/ f"short-train-runs-{launch_time}"
