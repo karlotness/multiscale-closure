@@ -11,7 +11,7 @@ import utils
 parser = argparse.ArgumentParser(description="Join sequentially trained networks into a cascaded network")
 parser.add_argument("out_dir", type=str, help="Directory containing sequential nets")
 parser.add_argument("--log_level", type=str, help="Level for logger", default="info", choices=["debug", "info", "warning", "error", "critical"])
-parser.add_argument("--net_load_types", type=str, nargs="+", default=["best_loss", "interval"])
+parser.add_argument("--net_load_types", type=str, nargs="+", default=["best_loss", "interval", "best_val_loss", "checkpoint"])
 
 
 def join_network_info(out_dir, num_nets):
