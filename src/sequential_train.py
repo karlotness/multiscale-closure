@@ -405,6 +405,9 @@ def main():
 
         # Training loop
         epoch_reports = []
+        save_names_written = set()
+        save_names_permanent = set()
+        save_names_mapping = {}
         for epoch in range(1, args.num_epochs + 1):
             logger.info("Starting epoch %d of %d", epoch, args.num_epochs)
             # Training step
@@ -436,15 +439,39 @@ def main():
             # Save snapshots
             saved_names = []
             # Save the network after each epoch
-            save_network(f"epoch{epoch:04d}", output_dir=weights_dir, state=state, base_logger=logger)
-            saved_names.append(f"epoch{epoch:04d}")
+            epoch_name = f"epoch{epoch:04d}"
+            epoch_file = weights_dir / f"{epoch_name}.eqx"
+            save_network(epoch_name, output_dir=weights_dir, state=state, base_logger=logger)
+            save_names_written.add(epoch_name)
+            # Link checkpoint
+            utils.atomic_symlink(epoch_file, weights_dir / "checkpoint.eqx")
+            save_names_mapping["checkpoint"] = epoch_name
+            saved_names.append("checkpoint")
+            # Link best loss (maybe)
             if min_mean_loss is None or (math.isfinite(mean_loss) and mean_loss <= min_mean_loss):
                 min_mean_loss = mean_loss
-                save_network("best_loss", output_dir=weights_dir, state=state, base_logger=logger)
+                utils.atomic_symlink(epoch_file, weights_dir / "best_loss.eqx")
+                save_names_mapping["best_loss"] = epoch_name
                 saved_names.append("best_loss")
+            # Save interval
             if epoch % args.save_interval == 0:
-                save_network("interval", output_dir=weights_dir, state=state, base_logger=logger)
+                utils.atomic_symlink(epoch_file, weights_dir / "interval.eqx")
+                save_names_mapping["interval"] = epoch_name
                 saved_names.append("interval")
+            # Permanently fix epoch (if requested)
+            if (epoch % args.save_interval == 0) or (epoch == args.num_epochs):
+                save_names_permanent.add(epoch_name)
+                saved_names.append(epoch_name)
+            logger.info("Wrote file and link names: %s", saved_names)
+            # Clean up any now unlinked files
+            save_names_to_remove = (save_names_written - save_names_permanent) - {v for v in save_names_mapping.values() if v is not None}
+            for name_to_remove in save_names_to_remove:
+                try:
+                    logger.debug("Removing weights file %s", name_to_remove)
+                    os.remove(weights_dir / f"{name_to_remove}.eqx")
+                    save_names_written.discard(name_to_remove)
+                except FileNotFoundError:
+                    logger.warning("Tried to remove missing weights file %s", name_to_remove)
 
             epoch_reports.append(
                 {
