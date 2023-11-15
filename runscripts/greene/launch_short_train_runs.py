@@ -243,7 +243,7 @@ for run_type in ["eddy", "jet"]:
             base_arch = "gz-fcnn-v1-medium"
             stacked_base = "stacked-gz-fcnn-v2-medium"
         # Launch sequential runs
-        for scale_set in itertools.chain.from_iterable(itertools.combinations(SCALES, sz) for sz in range(2, min(4, len(SCALES)))):
+        for scale_set in itertools.chain.from_iterable(itertools.combinations(SCALES, sz) for sz in range(2, 1 + min(3, len(SCALES)))):
             arch = base_arch
             scale_set = tuple(sorted(scale_set, reverse=True))
             scale_set_underscore = "_".join(map(str, scale_set))
