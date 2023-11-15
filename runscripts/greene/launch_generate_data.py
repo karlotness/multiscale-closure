@@ -22,7 +22,7 @@ COARSE_OP = "op1"
 SAMPLE_CONFIG = "jet"
 
 # TRAIN PARAMETERS
-TRAIN_SLICE_SIZE = 25
+TRAIN_SLICE_SIZE = 10
 TRAIN_NUM_TRAJS = 200
 TRAIN_SUBSAMPLE = 8
 TRAIN_SEED = 0
@@ -122,6 +122,7 @@ def launch_generate_data(
         "--coarse_op", coarse_op,
         "--subsample", str(subsample),
         "--big_size", str(big_size),
+        "--store_as_single",
     ]
     args.append("--small_size")
     args.extend(map(str, sorted(small_sizes)))

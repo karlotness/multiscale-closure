@@ -55,6 +55,7 @@ parser_qg.add_argument("--coarse_op", type=str, default="op1", help="Which coars
 parser_qg.add_argument("--max_gen_tries", type=int, default=25, help="Number of retries to generate a trajectory")
 parser_qg.add_argument("--traj_slice", type=str, default=None, help="Which subset of trajectories to generate")
 parser_qg.add_argument("--precision", type=str, default="single", choices=["single", "double"], help="Precision to use when generating trajectories")
+parser_qg.add_argument("--store_as_single", action="store_true", help="Cast trajectory data to single precision before storing")
 
 # Combine QG slice options
 parser_combine_qg_slice = subparsers.add_parser("combine_qg_slice", help="Combine slices of QG data")
@@ -105,6 +106,18 @@ class CoarseTrajResult:
     ablevel: jax.Array
     dqhdt: jax.Array
     q_total_forcings: dict[int, jax.Array]
+
+
+def array_cast_single(leaf):
+    if leaf.dtype == jnp.dtype(jnp.float64):
+        return leaf.astype(jnp.float32)
+    elif leaf.dtype == jnp.dtype(jnp.complex128):
+        return leaf.astype(jnp.complex64)
+    else:
+        return leaf
+
+def array_cast_identity(leaf):
+    return leaf
 
 
 def make_generate_coarse_traj(big_model, small_sizes, coarse_op_cls, num_warmup_steps, num_steps, subsample):
@@ -331,6 +344,7 @@ def gen_qg(out_dir, args, base_logger):
     logger = base_logger.getChild("qg")
     logger.info("Generating trajectory for QG with seed %d", args.seed)
     # Initialize model and locate coarsening class
+    array_caster = jax.jit(array_cast_single if args.store_as_single else array_cast_identity)
     small_sizes = sorted(set(map(operator.index, args.small_size)))
     main_small_size = max(map(operator.index, small_sizes))
     big_model = pyqg_jax.steppers.SteppedModel(
@@ -435,13 +449,13 @@ def gen_qg(out_dir, args, base_logger):
                 out_file["trajs"].create_dataset("ablevel", data=np.asarray(result.ablevel))
                 out_file.flush()
             # Store q and dqhdt
-            out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q", data=np.asarray(result.q))
+            out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q", data=np.asarray(array_caster(result.q)))
             out_file.flush()
-            out_file["trajs"].create_dataset(f"traj{traj_num:05d}_dqhdt", data=np.asarray(result.dqhdt))
+            out_file["trajs"].create_dataset(f"traj{traj_num:05d}_dqhdt", data=np.asarray(array_caster(result.dqhdt)))
             out_file.flush()
             # Store forcings
             for size in small_sizes:
-                forcing_dataset = out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q_total_forcing_{size}", data=np.asarray(result.q_total_forcings[size]))
+                forcing_dataset = out_file["trajs"].create_dataset(f"traj{traj_num:05d}_q_total_forcing_{size}", data=np.asarray(array_caster(result.q_total_forcings[size])))
                 out_file.flush()
             out_file["trajs"][f"traj{traj_num:05d}_q_total_forcing"] = h5py.SoftLink(f"/trajs/traj{traj_num:05d}_q_total_forcing_{main_small_size}")
             out_file.flush()
