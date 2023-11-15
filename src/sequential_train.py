@@ -385,6 +385,7 @@ def main():
                 alt_source_computer=alt_source_computer,
                 model_params=model_params,
             )
+            donate="all",
         )
         val_stats_fn = eqx.filter_jit(
             make_validation_stats_function(
