@@ -144,7 +144,7 @@ def launch_training(
         args.extend(["--output_channels", f"q_total_forcing_{scale:d}"])
     if processing_size is not None:
         args.extend([f"--processing_size={processing_size:d}"])
-    return container_cmd_launch(args, time_limit="15:00:00", job_name="noise-train", cpus=1, gpus=1, mem_gb=25, dependency_ids=dependency_ids)
+    return container_cmd_launch(args, time_limit="15:00:00", job_name="train", cpus=1, gpus=1, mem_gb=32, dependency_ids=dependency_ids)
 
 
 def launch_sequential_training(
@@ -202,7 +202,7 @@ def launch_sequential_training(
             time_limit="15:00:00",
             job_name="seq-train",
             cpus=1,
-            mem_gb=25,
+            mem_gb=32,
             gpus=1,
             dependency_ids=dependency_ids
         )
@@ -227,7 +227,7 @@ def launch_online_eval(*, out_file, eval_file, weight_files, dependency_ids=None
         args.extend(["--param_alpha", str(param_alpha)])
     args.extend([out_file, eval_file])
     args.extend(weight_files)
-    return container_cmd_launch(args, time_limit="15:00:00", job_name="eval-plots", cpus=1, gpus=1, mem_gb=20, dependency_ids=dependency_ids)
+    return container_cmd_launch(args, time_limit="15:00:00", job_name="eval-plots", cpus=1, gpus=1, mem_gb=25, dependency_ids=dependency_ids)
 
 
 for run_type in ["eddy", "jet"]:
