@@ -7,6 +7,7 @@ import equinox as eqx
 from train import determine_channel_size
 from eval import load_network
 import utils
+import sys
 
 parser = argparse.ArgumentParser(description="Join sequentially trained networks into a cascaded network")
 parser.add_argument("out_dir", type=str, help="Directory containing sequential nets")
@@ -47,6 +48,10 @@ def join_network_info(out_dir, num_nets):
         ]
     }
 
+
+def check_weights_exist(out_dir, num_nets, net_load_type):
+    out_dir = pathlib.Path(out_dir)
+    return all((out_dir / f"net{i}" / "weights" / f"{net_load_type}.eqx").is_file() for i in range(num_nets))
 
 def join_network_weights(out_dir, num_nets, net_load_type):
     out_dir = pathlib.Path(out_dir)
@@ -91,7 +96,11 @@ def main():
         )
     logger.info("Finished combining network info")
     # Store network weights
+    successes = []
     for net_load_type in args.net_load_types:
+        if not check_weights_exist(out_dir, num_nets, net_load_type):
+            logger.warning("Skipping nonexistent weights %s", net_load_type)
+            continue
         logger.info("Combining network %s", net_load_type)
         with utils.rename_save_file(weights_dir / f"{net_load_type}.eqx", "wb") as net_file:
             eqx.tree_serialise_leaves(
@@ -99,6 +108,10 @@ def main():
                 join_network_weights(out_dir, num_nets, net_load_type),
             )
         logger.info("Finished combining network %s", net_load_type)
+        successes.append(net_load_type)
+    if not successes:
+        logger.error("Failed to combine any network weights")
+        raise RuntimeError("Failed to combine any network weights")
     logger.info("Finished conversion run")
 
 
