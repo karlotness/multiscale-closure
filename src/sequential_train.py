@@ -385,7 +385,7 @@ def main():
                 net_data=net_data,
                 alt_source_computer=alt_source_computer,
                 model_params=model_params,
-            )
+            ),
             donate="all",
         )
         # Determine fixed validation samples
