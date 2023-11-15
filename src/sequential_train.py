@@ -45,6 +45,7 @@ parser.add_argument("--lr_schedule", type=str, default="constant", choices=["con
 parser.add_argument("--normalization", type=str, default="none", choices=["none", "layer"], help="What type of normalization to apply in the network")
 parser.add_argument("--net_load_type", type=str, default="best_loss", help="Which saved weights to load for previous networks")
 parser.add_argument("--no_residual", action="store_false", dest="output_residuals", help="Set sequential networks to output non-residual values (they learn to combine the fields)")
+parser.add_argument("--loader_chunk_size", type=int, default=10850, help="Chunk size to read before batching")
 
 
 def load_prev_networks(base_dir, train_step, net_load_type, base_logger=None):
@@ -361,6 +362,7 @@ def main():
             ThreadedPreShuffledSnapshotLoader(
                 file_path=train_path,
                 batch_size=args.batch_size,
+                chunk_size=args.loader_chunk_size,
                 buffer_size=10,
                 seed=np_rng.integers(2**32).item(),
                 base_logger=logger.getChild("train_loader"),
