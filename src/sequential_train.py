@@ -37,6 +37,7 @@ parser.add_argument("--batches_per_epoch", type=int, default=100, help="Training
 parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for optimizer")
 parser.add_argument("--end_lr", type=float, default=None, help="Learning rate at end of schedule")
 parser.add_argument("--num_val_samples", type=int, default=10, help="Number of samples to draw in each validation period")
+parser.add_argument("--val_sample_seed", type=int, default=1234, help="RNG seed to select validation samples")
 parser.add_argument("--val_interval", type=int, default=1, help="Number of epochs between validation periods")
 parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", choices=sorted(ARCHITECTURES.keys()), help="Network architecture to train")
 parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam", "adamw"], help="Which optimizer to use")
@@ -387,6 +388,10 @@ def main():
             )
             donate="all",
         )
+        # Determine fixed validation samples
+        val_samp_rng = np.random.default_rng(seed=args.val_sample_seed)
+        val_traj_idxs = val_samp_rng.integers(low=0, high=val_loader.num_trajs, size=args.num_val_samples, dtype=np.uint64)
+        val_step_idxs = val_samp_rng.integers(low=0, high=val_loader.num_steps, size=args.num_val_samples, dtype=np.uint64)
         val_stats_fn = eqx.filter_jit(
             make_validation_stats_function(
                 net_data=net_data,
@@ -412,6 +417,22 @@ def main():
                 )
             mean_loss = epoch_stats["mean_loss"]
 
+            # Validation step
+            val_stat_report = None
+            val_loss = None
+            if epoch % args.val_interval == 0:
+                logger.info("Starting validation for epoch %d", epoch)
+                val_stat_report = do_validation(
+                    train_state=state,
+                    loader=val_loader,
+                    sample_stat_fn=val_stats_fn,
+                    traj=val_traj_idxs,
+                    step=val_step_idxs,
+                    logger=logger.getChild(f"{epoch:05d}_val"),
+                )
+                val_loss = val_stat_report["standard_mse"]
+                logger.info("Finished validation for epoch %d", epoch)
+
             # Save snapshots
             saved_names = []
             # Save the network after each epoch
@@ -424,20 +445,6 @@ def main():
             if epoch % args.save_interval == 0:
                 save_network("interval", output_dir=weights_dir, state=state, base_logger=logger)
                 saved_names.append("interval")
-
-            # Validation step
-            val_stat_report = None
-            if epoch % args.val_interval == 0:
-                logger.info("Starting validation for epoch %d", epoch)
-                val_stat_report = do_validation(
-                    train_state=state,
-                    np_rng=np_rng,
-                    loader=val_loader,
-                    sample_stat_fn=val_stats_fn,
-                    logger=logger.getChild(f"{epoch:05d}_val"),
-                    num_samples=args.num_val_samples,
-                )
-                logger.info("Finished validation for epoch %d", epoch)
 
             epoch_reports.append(
                 {

@@ -343,17 +343,22 @@ def make_validation_stats_function(net_data, model_params, processing_scales):
     return compute_stats
 
 
-def do_validation(train_state, np_rng, loader, sample_stat_fn, num_samples, logger=None):
+def do_validation(train_state, loader, sample_stat_fn, traj, step, logger=None):
     if logger is None:
         logger = logging.getLogger("validation")
     # Sample indices
-    traj = np_rng.integers(low=0, high=loader.num_trajs, size=num_samples)
-    step = np_rng.integers(low=0, high=loader.num_steps, size=num_samples)
+    num_samples = traj.shape[0]
+    if step.shape[0] != num_samples:
+        logger.error("mismatched validation samples")
+        raise ValueError("mismatched number of validation samples")
+    if traj.ndim != 1 or step.ndim != 1:
+        logger.error("validation sample arrays must be one-dimensional")
+        raise ValueError("validation sample arrays must be one-dimensional")
     # Load and stack q components
     logger.info("Loading %d samples of validation data", num_samples)
     batch = jax.tree_util.tree_map(
         lambda *args: jnp.concatenate(args, axis=0),
-        *(loader.get_trajectory(traj=t, start=s, end=s+1) for t, s in zip(traj, step, strict=True))
+        *(loader.get_trajectory(traj=operator.index(t), start=operator.index(s), end=operator.index(s)+1) for t, s in zip(traj, step, strict=True))
     )
     logger.info("Starting validation")
     val_start = time.perf_counter()
