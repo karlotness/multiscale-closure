@@ -40,7 +40,7 @@ parser.add_argument("--num_val_samples", type=int, default=10, help="Number of s
 parser.add_argument("--val_interval", type=int, default=1, help="Number of epochs between validation periods")
 parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", choices=sorted(ARCHITECTURES.keys()), help="Network architecture to train")
 parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam", "adamw"], help="Which optimizer to use")
-parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine"], help="What learning rate schedule")
+parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine", "ross22"], help="What learning rate schedule")
 parser.add_argument("--normalization", type=str, default="none", choices=["none", "layer"], help="What type of normalization to apply in the network")
 parser.add_argument("--net_load_type", type=str, default="best_loss", help="Which saved weights to load for previous networks")
 parser.add_argument("--no_residual", action="store_false", dest="output_residuals", help="Set sequential networks to output non-residual values (they learn to combine the fields)")
