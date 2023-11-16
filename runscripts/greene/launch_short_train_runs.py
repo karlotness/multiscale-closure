@@ -25,7 +25,7 @@ DATA_FILES = {
     "eddy": TrainFileSet(
         train=SCRATCH / "closure" / "data-nowarmup" / f"train/{COARSE_OP}/shuffled.hdf5",
         val=SCRATCH / "closure" / "data-nowarmup" / f"val/{COARSE_OP}/data.hdf5",
-        test=SCRATCH / "closure" / "data-nowarmup" / f"test/{COARSE_OP}/data.hdf5",
+        test=SCRATCH / "closure" / "data-eddyonly" / f"test/{COARSE_OP}/data.hdf5",
     ),
     "jet": TrainFileSet(
         train=SCRATCH / "closure" / "data-jet-nowarmup" / f"train/{COARSE_OP}/shuffled.hdf5",
