@@ -32,8 +32,10 @@ def qg_model_param_json(model):
     return json.dumps(args)
 
 
-def qg_model_from_param_json(param):
+def qg_model_from_param_json(param, force_single=True):
     args = json.loads(param)
+    if force_single and args.get("precision", "DOUBLE").upper() == "DOUBLE":
+        args["precision"] = "SINGLE"
     if "precision" in args:
         args["precision"] = pyqg_jax.state.Precision[args["precision"]]
     args.pop("dt", None)
