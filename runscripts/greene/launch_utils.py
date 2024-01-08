@@ -1,0 +1,66 @@
+import codecs
+import pathlib
+import re
+import subprocess
+import time
+
+
+DRY_RUN = True
+dry_run_counter = 123000
+
+
+def enable_real_launch():
+    global DRY_RUN
+    DRY_RUN = False
+
+
+def sbatch_launch(args, *, dependency_ids=None, time_limit=None, job_name=None, cpus=1, gpus=0, mem_gb=25):
+    global dry_run_counter
+    extra_sbatch_args = []
+    if dependency_ids:
+        deps = ":".join(f"{did}" for did in dependency_ids)
+        extra_sbatch_args.extend(["--dependency", f"afterok:{deps}", "--kill-on-invalid-dep", "yes"])
+    if time_limit:
+        extra_sbatch_args.append(f"--time={time_limit}")
+    if job_name:
+        extra_sbatch_args.extend(["--job-name", str(job_name)])
+    if cpus < 1:
+        raise ValueError(f"must request at least one cpu (got {cpus})")
+    extra_sbatch_args.append(f"--cpus-per-task={cpus:d}")
+    if gpus < 0:
+        raise ValueError(f"invalid number of gpus {gpus}")
+    elif gpus > 0:
+        extra_sbatch_args.extend([f"--gres=gpu:{gpus:d}"])
+    extra_sbatch_args.append(f"--mem={mem_gb:d}GB")
+    args = ["--parsable"] + extra_sbatch_args + [str(a) for a in args]
+    print("sbatch", " ".join(f"'{a}'" for a in args))
+    if not DRY_RUN:
+        proc = subprocess.run(["sbatch"] + args, check=True, capture_output=True)
+        output = codecs.decode(proc.stdout, encoding="utf8").strip()
+        m = re.match(r"^\s*(?P<jobid>[^;]+)(?:;|$)", output)
+        if m:
+            time.sleep(0.5)
+            return m.group("jobid").strip()
+        else:
+            raise ValueError(f"could not parse {output}")
+    else:
+        dry_run_counter += 1
+        return str(dry_run_counter)
+
+
+def container_cmd_launch(args, *, dependency_ids=None, time_limit=None, job_name=None, cpus=1, gpus=0, mem_gb=25):
+    return sbatch_launch(
+        ["run-container-checkout-cmd.sh", ("cuda" if gpus > 0 else "cpu")] + args,
+        dependency_ids=dependency_ids,
+        time_limit=time_limit,
+        job_name=job_name,
+        cpus=cpus,
+        gpus=gpus,
+        mem_gb=mem_gb,
+    )
+
+
+def dry_run_mkdir(dir_path):
+    print("mkdir -p", f"'{pathlib.Path(dir_path).resolve()}'")
+    if not DRY_RUN:
+        pathlib.Path(dir_path).mkdir(parents=True, exist_ok=True)
