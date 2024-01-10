@@ -40,4 +40,14 @@ def get_net_constructor(arch):
         depth = int(m.group("depth"))
         cls_name = (size or "").capitalize() + "StackedGZFCNN" + (f"V{version:d}" if version != 1 else "")
         return ModuleFactory("stacked_gz_fcnn", cls_name, fixed_args={"depth": depth})
+    elif m := re.fullmatch(r"shallow-gz-fcnn-v(?P<version>\d+)-(?:(?P<size>\w+)-)?l(?P<layers>\d+)", arch, re.ASCII):
+        return ModuleFactory(
+            "fcnn_shallow",
+            "make_shallow_fcnn",
+            fixed_args={
+                "arch_version": int(m.group("version")),
+                "arch_size": (m.group("size") or "small"),
+                "arch_layers": int(m.group("layers")),
+            },
+        )
     raise ValueError(f"unknown architecture {arch}")
