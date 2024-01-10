@@ -1,33 +1,43 @@
 import importlib
+import dataclasses
+import typing
+import re
 
-def make_module_factory(module, class_name, fixed_args=None):
-    if fixed_args is None:
-        fixed_args = {}
 
-    def make_module(*args, **kwargs):
-        mod_name = importlib.import_module(f".{module}", __name__)
-        return getattr(mod_name, class_name)(*args, **kwargs, **fixed_args)
+@dataclasses.dataclass
+class ModuleFactory:
+    module: str
+    class_name: str
+    fixed_args: None | dict[str, typing.Any] = None
 
-    return make_module
+    def __call__(self, *args, **kwargs):
+        fixed_args = {} if self.fixed_args is None else self.fixed_args
+        module = importlib.import_module(f".{self.module}", __name__)
+        return getattr(module, self.class_name)(*args, **kwargs, **fixed_args)
+
+    def __repr__(self):
+        if self.fixed_args is not None:
+            fixed_str = f", fixed_args={self.fixed_args!r}"
+        else:
+            fixed_str = ""
+        return f"ModuleFactory({__name__}.{self.module}:{self.class_name}{fixed_str})"
 
 
 ARCHITECTURES = {
-    "gz-fcnn-v1": make_module_factory("gz_fcnn", "GZFCNN"),
-    "gz-fcnn-v1-large": make_module_factory("gz_fcnn", "LargeGZFCNN"),
-    "gz-fcnn-v1-medium": make_module_factory("gz_fcnn", "MediumGZFCNN"),
-    "unet-v1": make_module_factory("basic_unet", "BasicUNetV1"),
-    "stacked-gz-fcnn-v1-d2": make_module_factory("stacked_gz_fcnn", "StackedGZFCNN", fixed_args={"depth": 2}),
-    "stacked-gz-fcnn-v1-d3": make_module_factory("stacked_gz_fcnn", "StackedGZFCNN", fixed_args={"depth": 3}),
-    "stacked-gz-fcnn-v1-medium-d2": make_module_factory("stacked_gz_fcnn", "MediumStackedGZFCNN", fixed_args={"depth": 2}),
-    "stacked-gz-fcnn-v1-medium-d3": make_module_factory("stacked_gz_fcnn", "MediumStackedGZFCNN", fixed_args={"depth": 3}),
-    "stacked-gz-fcnn-v2-d2": make_module_factory("stacked_gz_fcnn", "StackedGZFCNNV2", fixed_args={"depth": 2}),
-    "stacked-gz-fcnn-v2-d3": make_module_factory("stacked_gz_fcnn", "StackedGZFCNNV2", fixed_args={"depth": 3}),
-    "stacked-gz-fcnn-v2-medium-d2": make_module_factory("stacked_gz_fcnn", "MediumStackedGZFCNNV2", fixed_args={"depth": 2}),
-    "stacked-gz-fcnn-v2-medium-d3": make_module_factory("stacked_gz_fcnn", "MediumStackedGZFCNNV2", fixed_args={"depth": 3}),
+    "gz-fcnn-v1": ModuleFactory("gz_fcnn", "GZFCNN"),
+    "gz-fcnn-v1-large": ModuleFactory("gz_fcnn", "LargeGZFCNN"),
+    "gz-fcnn-v1-medium": ModuleFactory("gz_fcnn", "MediumGZFCNN"),
+    "unet-v1": ModuleFactory("basic_unet", "BasicUNetV1"),
 }
 
 
 def get_net_constructor(arch):
-    constructor = ARCHITECTURES.get(arch)
-    if constructor is not None:
+    if (constructor := ARCHITECTURES.get(arch)) is not None:
         return constructor
+    elif m := re.fullmatch(r"stacked-gz-fcnn-v(?P<version>\d+)-(?:(?P<size>medium)-)?d(?P<depth>\d+)", arch, re.ASCII):
+        version = int(m.group("version"))
+        size = m.group("size")
+        depth = int(m.group("depth"))
+        cls_name = (size or "").capitalize() + "StackedGZFCNN" + (f"V{version:d}" if version != 1 else "")
+        return ModuleFactory("stacked_gz_fcnn", cls_name, fixed_args={"depth": depth})
+    raise ValueError(f"unknown architecture {arch}")
