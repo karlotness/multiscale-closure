@@ -25,3 +25,9 @@ ARCHITECTURES = {
     "stacked-gz-fcnn-v2-medium-d2": make_module_factory("stacked_gz_fcnn", "MediumStackedGZFCNNV2", fixed_args={"depth": 2}),
     "stacked-gz-fcnn-v2-medium-d3": make_module_factory("stacked_gz_fcnn", "MediumStackedGZFCNNV2", fixed_args={"depth": 3}),
 }
+
+
+def get_net_constructor(arch):
+    constructor = ARCHITECTURES.get(arch)
+    if constructor is not None:
+        return constructor

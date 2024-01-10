@@ -10,7 +10,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import equinox as eqx
-from methods import ARCHITECTURES
+from methods import get_net_constructor
 from cascaded_train import NetData, make_validation_stats_function
 from train import determine_required_fields, load_model_params
 from eval import check_coarse_op
@@ -39,7 +39,7 @@ def load_networks(weight_file):
     net_data = []
     for net_params in net_info["networks"]:
         nets.append(
-            ARCHITECTURES[net_params["arch"]](**net_params["args"], key=jax.random.PRNGKey(0))
+            get_net_constructor(net_params["arch"])(**net_params["args"], key=jax.random.PRNGKey(0))
         )
         net_data.append(
             NetData(

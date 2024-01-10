@@ -15,7 +15,7 @@ import numpy as np
 from systems.qg.loader import SimpleQGLoader
 import h5py
 import utils
-from methods import ARCHITECTURES
+from methods import get_net_constructor
 from train import load_model_params, determine_required_fields, make_validation_stats_function, make_basic_coarsener, determine_output_size, make_chunk_from_batch, remove_residual_from_output_chunk
 from cascaded_train import split_chunk_into_channels, name_remove_residual
 
@@ -37,7 +37,7 @@ def load_network(weight_file):
     # Load network info
     with open(weight_file.parent / "network_info.json", "r", encoding="utf8") as net_info_file:
         net_info = json.load(net_info_file)
-    net = ARCHITECTURES[net_info["arch"]](**net_info["args"], key=jax.random.PRNGKey(0))
+    net = get_net_constructor(net_info["arch"])(**net_info["args"], key=jax.random.PRNGKey(0))
     # Ensure all weights are float32
     def leaf_map(leaf):
         if isinstance(leaf, jnp.ndarray):

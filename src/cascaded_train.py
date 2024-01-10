@@ -19,7 +19,7 @@ import jax.numpy as jnp
 import numpy as np
 import equinox as eqx
 import optax
-from methods import ARCHITECTURES
+from methods import get_net_constructor
 from train import determine_processing_size, load_model_params, make_basic_coarsener, determine_output_size, make_chunk_from_batch, determine_required_fields, save_network, make_non_residual_chunk_from_batch, remove_residual_from_output_chunk, determine_channel_layers
 from systems.qg import diagnostics as qg_spec_diag
 from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader
@@ -41,7 +41,7 @@ parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for op
 parser.add_argument("--end_lr", type=float, default=None, help="Learning rate at end of schedule")
 parser.add_argument("--num_val_samples", type=int, default=10, help="Number of samples to draw in each validation period")
 parser.add_argument("--val_interval", type=int, default=1, help="Number of epochs between validation periods")
-parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", choices=sorted(ARCHITECTURES.keys()), help="Network architecture to train")
+parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", help="Network architecture to train")
 parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam", "adamw"], help="Which optimizer to use")
 parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine"], help="What learning rate schedule")
 parser.add_argument("--normalization", type=str, default="none", choices=["none", "layer"], help="What type of normalization to apply in the network")
@@ -105,7 +105,7 @@ def init_networks(architecture, lr, rng, train_path, optim_type, num_epochs, bat
     }
     args.append(arg)
     nets.append(
-        ARCHITECTURES[architecture](**arg, key=rng)
+        get_net_constructor(architecture)(**arg, key=rng)
     )
     net_data.append(
         NetData(
@@ -132,7 +132,7 @@ def init_networks(architecture, lr, rng, train_path, optim_type, num_epochs, bat
         }
         args.append(arg)
         nets.append(
-            ARCHITECTURES[architecture](**arg, key=rng)
+            get_net_constructor(architecture)(**arg, key=rng)
         )
         net_data.append(
             NetData(

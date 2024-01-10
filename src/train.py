@@ -24,7 +24,7 @@ import importlib
 from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader, AggregateLoader, FillableDataLoader, SnapshotStates
 from systems.qg import coarsen, diagnostics as qg_spec_diag, utils as qg_utils
 import pyqg_jax
-from methods import ARCHITECTURES
+from methods import get_net_constructor
 from generate_data import make_parameter_sampler, CONFIG_VARS as GEN_CONFIG_VARS
 import jax_utils
 import utils
@@ -49,7 +49,7 @@ parser.add_argument("--output_channels", type=str, nargs="+", default=["q_total_
 parser.add_argument("--input_channels", type=str, nargs="+", default=["q_64"], help="Channels to show the network as input")
 parser.add_argument("--noise_specs", type=str, nargs="+", default=[], help="Channels with noise variances (format 'channel=var0,var1')")
 parser.add_argument("--processing_size", type=int, default=None, help="Size to user for internal network evaluation (default: select automatically)")
-parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", choices=sorted(ARCHITECTURES.keys()), help="Network architecture to train")
+parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", help="Network architecture to train")
 parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam", "adamw"], help="Which optimizer to use")
 parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine", "ross22"], help="What learning rate schedule")
 parser.add_argument("--network_zero_mean", action="store_true", help="Constrain the network to zero mean outputs")
@@ -1035,7 +1035,7 @@ def init_network(architecture, lr, rng, input_channels, output_channels, process
         "n_layers_out": n_layers_out,
         **arch_args,
     }
-    net_cls = ARCHITECTURES[architecture]
+    net_cls = get_net_constructor(architecture)
     net = net_cls(
         **args,
         key=rng,

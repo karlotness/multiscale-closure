@@ -14,7 +14,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import equinox as eqx
-from methods import ARCHITECTURES
+from methods import get_net_constructor
 from train import init_network as train_init_network, save_network, determine_processing_size, load_model_params, make_basic_coarsener, determine_output_size, make_chunk_from_batch, determine_required_fields, make_non_residual_chunk_from_batch, remove_residual_from_output_chunk
 import utils
 from systems.qg import diagnostics as qg_spec_diag
@@ -39,7 +39,7 @@ parser.add_argument("--end_lr", type=float, default=None, help="Learning rate at
 parser.add_argument("--num_val_samples", type=int, default=10, help="Number of samples to draw in each validation period")
 parser.add_argument("--val_sample_seed", type=int, default=1234, help="RNG seed to select validation samples")
 parser.add_argument("--val_interval", type=int, default=1, help="Number of epochs between validation periods")
-parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", choices=sorted(ARCHITECTURES.keys()), help="Network architecture to train")
+parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", help="Network architecture to train")
 parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam", "adamw"], help="Which optimizer to use")
 parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine", "ross22"], help="What learning rate schedule")
 parser.add_argument("--normalization", type=str, default="none", choices=["none", "layer"], help="What type of normalization to apply in the network")
