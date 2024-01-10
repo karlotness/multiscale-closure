@@ -8,6 +8,7 @@ import os
 import itertools
 import operator
 import dataclasses
+import typing
 import launch_utils as lu
 
 TrainFileSet = dataclasses.make_dataclass("TrainFileSet", ["train", "val", "test"])
@@ -18,10 +19,27 @@ SCRATCH = pathlib.Path(os.environ["SCRATCH"]).resolve()
 
 # General parameters
 NUM_REPEATS = 4
-PEAK_LRS = sorted(set([0.001, 0.0002, 0.00005]))
-SCHEDULE_TYPES = ["ross22", "warmup1-cosine"]
-NUM_EPOCHS = sorted(set([50, 25, 15]))
+SCHEDULE_TYPES = ["warmup1-cosine"]
 DATA_TYPES = ["eddy"]
+
+
+@dataclasses.dataclass
+class SweepParams:
+    peak_lrs: typing.List[float]
+    num_epochs: typing.List[int]
+
+
+params = {
+    "small": SweepParams(
+        peak_lrs=[0.002, 0.005, 0.01],
+        num_epochs=[15, 25, 50],
+    ),
+    "medium": SweepParams(
+        peak_lrs=sorted(set([0.0004, 0.0008])),
+        num_epochs=[15, 25, 50],
+    ),
+}
+
 
 # Training and eval sets
 COARSE_OP = "op1"
@@ -110,7 +128,8 @@ for data_type in DATA_TYPES:
             base_arch = "gz-fcnn-v1"
         elif arch_size == "medium":
             base_arch = "gz-fcnn-v1-medium"
-        for peak_lr, schedule_type, num_epochs in itertools.product(PEAK_LRS, SCHEDULE_TYPES, NUM_EPOCHS):
+        arch_params = params[arch_size]
+        for peak_lr, schedule_type, num_epochs in itertools.product(arch_params.peak_lrs, SCHEDULE_TYPES, arch_params.num_epochs):
             run_type_dir = data_type_dir / f"s-{schedule_type}_lr-{str(peak_lr).replace('.', '-')}_ne-{num_epochs}"
             lu.dry_run_mkdir(run_type_dir)
             for repeat in range(NUM_REPEATS):
