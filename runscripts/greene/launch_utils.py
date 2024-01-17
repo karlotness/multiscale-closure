@@ -14,6 +14,16 @@ def enable_real_launch():
     DRY_RUN = False
 
 
+global_delays = {}
+def global_delay(delay, key):
+    global global_delays
+    now = time.monotonic()
+    prev = global_delays.get(key)
+    global_delays[key] = now
+    if prev is not None:
+        time.sleep(max(0, delay - (now - prev)))
+
+
 def sbatch_launch(args, *, dependency_ids=None, time_limit=None, job_name=None, cpus=1, gpus=0, mem_gb=25):
     global dry_run_counter
     extra_sbatch_args = []
@@ -35,11 +45,11 @@ def sbatch_launch(args, *, dependency_ids=None, time_limit=None, job_name=None, 
     args = ["--parsable"] + extra_sbatch_args + [str(a) for a in args]
     print("sbatch", " ".join(f"'{a}'" for a in args))
     if not DRY_RUN:
+        global_delay(0.5, "sbatch")
         proc = subprocess.run(["sbatch"] + args, check=True, capture_output=True)
         output = codecs.decode(proc.stdout, encoding="utf8").strip()
         m = re.match(r"^\s*(?P<jobid>[^;]+)(?:;|$)", output)
         if m:
-            time.sleep(0.5)
             return m.group("jobid").strip()
         else:
             raise ValueError(f"could not parse {output}")
