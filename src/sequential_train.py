@@ -470,6 +470,11 @@ def main():
             if (epoch % args.save_interval == 0) or (epoch == args.num_epochs):
                 save_names_permanent.add(epoch_name)
                 saved_names.append(epoch_name)
+            # Save the final epoch with a special name
+            if epoch == args.num_epochs:
+                utils.atomic_symlink(epoch_file, weights_dir / "final_snapshot.eqx")
+                save_names_mapping["final_snapshot"] = epoch_name
+                saved_names.append("final_snapshot")
             logger.info("Wrote file and link names: %s", saved_names)
             # Clean up any now unlinked files
             save_names_to_remove = (save_names_written - save_names_permanent) - {v for v in save_names_mapping.values() if v is not None}
