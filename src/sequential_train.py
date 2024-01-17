@@ -39,7 +39,7 @@ parser.add_argument("--end_lr", type=float, default=None, help="Learning rate at
 parser.add_argument("--num_val_samples", type=int, default=10, help="Number of samples to draw in each validation period")
 parser.add_argument("--val_sample_seed", type=int, default=1234, help="RNG seed to select validation samples")
 parser.add_argument("--val_interval", type=int, default=1, help="Number of epochs between validation periods")
-parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", help="Network architecture to train")
+parser.add_argument("--architecture", type=str, nargs="+", default=["gz-fcnn-v1"], help="Network architecture to train")
 parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam", "adamw"], help="Which optimizer to use")
 parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine", "ross22"], help="What learning rate schedule")
 parser.add_argument("--normalization", type=str, default="none", choices=["none", "layer"], help="What type of normalization to apply in the network")
@@ -75,8 +75,18 @@ def load_prev_networks(base_dir, train_step, net_load_type, base_logger=None):
     return loaded_nets, loaded_net_data, loaded_net_info
 
 
-def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name, processing_scales, normalization, train_step, output_residuals=True):
+def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name, processing_scales, normalization, train_step, output_residuals=True, logger=None):
+    if logger is None:
+        logger = logging.getLogger("seq_net_init")
     processing_scales = set(processing_scales)
+    if isinstance(architecture, str):
+        architectures = [architecture]
+    else:
+        architectures = architecture
+    if len(architectures) == 1:
+        architectures = architecture * len(processing_scales)
+    if len(architectures) != len(processing_scales):
+        raise ValueError(f"must specify either 1 or {len(processing_scales)} architectures")
 
     # Determine input and output channels
     if train_step == 0:
@@ -104,8 +114,10 @@ def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batc
         processing_size=processing_size,
     )
     # Initialize network, etc.
+    arch = architectures[train_step]
+    logger.info("Training network: %s", arch)
     state, network_info = train_init_network(
-        architecture=architecture,
+        architecture=arch,
         lr=lr,
         rng=rng,
         input_channels=in_channels,
@@ -298,7 +310,6 @@ def main():
 
     # Construct neural net
     rng, rng_ctr = jax.random.split(rng_ctr, 2)
-    logger.info("Training network: %s", args.architecture)
     state, network_info, net_data = init_network(
         architecture=args.architecture,
         lr=args.lr,
@@ -314,6 +325,7 @@ def main():
         normalization=args.normalization,
         train_step=args.train_step,
         output_residuals=args.output_residuals,
+        logger=logger.getChild("init_net"),
     )
     logger.info("Input channels: %s", net_data.input_channels)
     logger.info("Output channels: %s", net_data.output_channels)
