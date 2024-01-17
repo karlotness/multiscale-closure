@@ -63,7 +63,7 @@ def raw_cmd_launch(args, *, dependency_ids=None, time_limit=None, job_name=None,
     if "\"" in cmd_str:
         raise ValueError(f"command must not contain double quotes: {cmd_str}")
     return sbatch_launch(
-        [f"--wrap=\"cmd_str\""],
+        [f"--wrap=\"{cmd_str}\""],
         dependency_ids=dependency_ids,
         time_limit=time_limit,
         job_name=job_name,
