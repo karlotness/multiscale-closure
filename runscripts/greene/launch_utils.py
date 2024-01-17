@@ -48,6 +48,35 @@ def sbatch_launch(args, *, dependency_ids=None, time_limit=None, job_name=None, 
         return str(dry_run_counter)
 
 
+def raw_cmd_launch(args, *, dependency_ids=None, time_limit=None, job_name=None, cpus=1, gpus=0, mem_gb=2):
+    cmd_str = " ".join(str(a) for a in args)
+    if "\"" in cmd_str:
+        raise ValueError(f"command must not contain double quotes: {cmd_str}")
+    return sbatch_launch(
+        [f"--wrap=\"cmd_str\""],
+        dependency_ids=dependency_ids,
+        time_limit=time_limit,
+        job_name=job_name,
+        cpus=cpus,
+        gpus=gpus,
+        mem_gb=mem_gb,
+    )
+
+
+def copy_dir_launch(src, dst, *, dependency_ids=None, job_name=None):
+    src = pathlib.Path(src).absolute()
+    dst = pathlib.Path(dst).absolute()
+    return raw_cmd_launch(
+        [f"cp -a '{src}' '{dst}'"],
+        dependency_ids=dependency_ids,
+        time_limit="00:30:00",
+        job_name=job_name,
+        cpus=1,
+        gpus=0,
+        mem_gb=2,
+    )
+
+
 def container_cmd_launch(args, *, dependency_ids=None, time_limit=None, job_name=None, cpus=1, gpus=0, mem_gb=25):
     return sbatch_launch(
         ["run-container-checkout-cmd.sh", ("cuda" if gpus > 0 else "cpu")] + args,
