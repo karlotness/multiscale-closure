@@ -50,12 +50,14 @@ def sbatch_launch(args, *, dependency_ids=None, time_limit=None, job_name=None, 
         output = codecs.decode(proc.stdout, encoding="utf8").strip()
         m = re.match(r"^\s*(?P<jobid>[^;]+)(?:;|$)", output)
         if m:
-            return m.group("jobid").strip()
+            job_id = m.group("jobid").strip()
         else:
             raise ValueError(f"could not parse {output}")
     else:
         dry_run_counter += 1
-        return str(dry_run_counter)
+        job_id = str(dry_run_counter)
+    print(f"# Launched with id: '{job_id}'")
+    return job_id
 
 
 def raw_cmd_launch(args, *, dependency_ids=None, time_limit=None, job_name=None, cpus=1, gpus=0, mem_gb=2):
