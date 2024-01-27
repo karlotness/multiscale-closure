@@ -28,7 +28,7 @@ git clone "$ORIGIN_REPO_DIR" "$CHECKOUT_DIR"
 if [[ "$use_gpu" == "cuda" ]]; then
     gpu_args=('--nv')
 else
-    export JAX_PLATFORM_NAME=cpu
+    export JAX_PLATFORMS=cpu
     gpu_args=()
 fi
 export JAX_ENABLE_X64=True
