@@ -1,6 +1,9 @@
 Bootstrap: docker
 From: nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
+%environment
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+
 %files
 requirements.txt /opt/requirements.txt
 constraints.txt /opt/constraints.txt
