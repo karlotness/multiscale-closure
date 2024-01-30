@@ -65,7 +65,7 @@ def KE_time(state, model):
 
 def make_ke_time_computer(model):
     def ke_computer(steps):
-        packed_steps = pyqg_jax.state.PseudoSpectralState(qh=pyqg_jax.state._generic_rfftn(steps))
+        packed_steps = jax.vmap(lambda s: model.create_initial_state(jax.random.key(0)).update(q=s))(steps)
         return jax_utils.chunked_vmap(lambda step: KE_time(step, model), 100)(packed_steps)
     return ke_computer
 
@@ -113,7 +113,7 @@ def compute_ens(state, model):
 
 def make_ens_computer(model):
     def ens_computer(steps):
-        packed_steps = pyqg_jax.state.PseudoSpectralState(qh=pyqg_jax.state._generic_rfftn(steps))
+        packed_steps = jax.vmap(lambda s: model.create_initial_state(jax.random.key(0)).update(q=s))(steps)
         return jax.vmap(lambda step: compute_ens(step, model))(packed_steps)
     return ens_computer
 
@@ -151,7 +151,7 @@ def make_pdf_var(var_name, level, model):
                 return getattr(model.get_full_state(state), var_name)
 
     def compute_pdf(steps):
-        state = pyqg_jax.state.PseudoSpectralState(qh=pyqg_jax.state._generic_rfftn(steps))
+        state = jax.vmap(lambda s: model.create_initial_state(jax.random.key(0)).update(q=s))(steps)
         values = make_var(state)
         xmin = 0 if var_name in {"KE", "Ens"} else None
         xmax = xmax_values.get(var_name, (None, None))[level]
