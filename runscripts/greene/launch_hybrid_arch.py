@@ -14,6 +14,7 @@ import launch_utils as lu
 TrainFileSet = dataclasses.make_dataclass("TrainFileSet", ["train", "val", "test"])
 
 SCRATCH = pathlib.Path(os.environ["SCRATCH"]).resolve()
+VAST = pathlib.Path(os.environ["VAST"]).resolve()
 
 # lu.enable_real_launch()
 
@@ -70,9 +71,9 @@ LR_ASSIGNMENTS = {
 COARSE_OP = "op1"
 DATA_FILES = {
     "eddy": TrainFileSet(
-        train=SCRATCH / "closure" / "data-nowarmup" / f"train/{COARSE_OP}/shuffled.hdf5",
-        val=SCRATCH / "closure" / "data-nowarmup" / f"val/{COARSE_OP}/data.hdf5",
-        test=SCRATCH / "closure" / "data-eddyonly" / f"test/{COARSE_OP}/data.hdf5",
+        train=VAST / "closure" / "data-nowarmup" / f"train/{COARSE_OP}/shuffled.hdf5",
+        val=VAST / "closure" / "data-nowarmup" / f"val/{COARSE_OP}/data.hdf5",
+        test=VAST / "closure" / "data-eddyonly" / f"test/{COARSE_OP}/data.hdf5",
     ),
     "jet": TrainFileSet(
         train=SCRATCH / "closure" / "data-jet-nowarmup" / f"train/{COARSE_OP}/shuffled.hdf5",
