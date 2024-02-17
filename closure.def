@@ -12,14 +12,14 @@ constraints.txt /opt/constraints.txt
 export DEBIAN_FRONTEND=noninteractive
 chmod 444 /opt/requirements.txt
 chmod 444 /opt/constraints.txt
-apt -y update
-apt -y install software-properties-common
+apt-get -y update
+apt-get -y install software-properties-common
 add-apt-repository ppa:deadsnakes/ppa
-apt -y update
-apt -y upgrade
-apt -y install python3.11 python3.11-venv python3.11-dev git bash
-apt -y autoremove
-apt -y clean
+apt-get -y update
+apt-get -y upgrade
+apt-get -y install python3.11 python3.11-venv python3.11-dev git bash
+apt-get -y autoremove
+apt-get -y clean
 
 # Configure virtualenv
 mkdir -p /opt/closure_venv/
