@@ -50,4 +50,13 @@ def get_net_constructor(arch):
                 "arch_layers": int(m.group("layers")),
             },
         )
+    elif m := re.fullmatch(r"stacked-noscale-net-v(?P<version>\d+)-(?P<arch_str>.+)", arch, re.ASCII):
+        return ModuleFactory(
+            "stacked_noscale_nets",
+            "make_stacked_noscale_net",
+            fixed_args={
+                "arch_version": int(m.group("version")),
+                "arch_str": m.group("arch_str"),
+            },
+        )
     raise ValueError(f"unknown architecture {arch}")
