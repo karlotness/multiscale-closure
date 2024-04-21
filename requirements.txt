@@ -28,3 +28,6 @@ jaxtyping
 gcm_filters
 pyqg-jax
 powerpax
+jax-cfd[complete]
+gin-config
+dm-haiku
