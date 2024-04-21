@@ -11,9 +11,12 @@ requirements.txt /opt/requirements.txt
 export DEBIAN_FRONTEND=noninteractive
 chmod 444 /opt/requirements.txt
 apt-get -y update
-apt-get -y install software-properties-common
+apt-get -y install software-properties-common apt-transport-https ca-certificates gnupg curl
 add-apt-repository ppa:deadsnakes/ppa
+curl 'https://packages.cloud.google.com/apt/doc/apt-key.gpg' | gpg --dearmor -o '/usr/share/keyrings/cloud.google.gpg'
+echo 'deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main' | tee -a '/etc/apt/sources.list.d/google-cloud-sdk.list'
 apt-get -y update
+apt-get -y install google-cloud-cli
 apt-get -y upgrade
 apt-get -y install python3.12 python3.12-venv python3.12-dev git bash
 apt-get -y autoremove
