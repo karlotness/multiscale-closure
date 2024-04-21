@@ -1,2 +1,0 @@
-Cython<3
-ml-dtypes<0.3.0
