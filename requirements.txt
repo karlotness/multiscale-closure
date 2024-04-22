@@ -31,3 +31,6 @@ powerpax
 jax-cfd[complete]
 gin-config
 dm-haiku
+penzai
+orbax-checkpoint
+clu
