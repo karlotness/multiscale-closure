@@ -28,7 +28,7 @@ jaxtyping
 gcm_filters
 pyqg-jax
 powerpax
-jax-cfd[complete]
+jax-cfd[complete] @ git+https://github.com/google/jax-cfd.git@214b8313f20e8c72d50ff2ff537ff8f0c3190c40
 gin-config
 dm-haiku
 penzai
