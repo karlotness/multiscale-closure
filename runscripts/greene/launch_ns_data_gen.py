@@ -18,7 +18,7 @@ VAST = pathlib.Path(os.environ["VAST"]).resolve()
 
 BATCH_TRAJS = 2
 SIMULTANEOUS_TRAJS = 2
-GEN_TIME = "3:00:00"
+GEN_TIME = "12:00:00"
 BIG_SIZE = 2048
 SMALL_SIZES = {64, 128}
 
