@@ -1,0 +1,74 @@
+import jax_cfd
+import math
+import operator
+import textwrap
+
+
+def make_grid(size):
+    return jax_cfd.base.grids.Grid(((operator.index(size),)*2), domain=([(0, 2*math.pi)]*2))
+
+
+def make_generation_config(viscosity=0.001):
+    return textwrap.dedent(f"""\
+    # Macros:
+    # ==============================================================================
+    C_INTERPOLATION_MODULE = @interpolations.transformed
+    CONVECTION_MODULE = @advections.self_advection
+    DENSITY = 1.0
+    DIFFUSION_MODULE = @diffusions.solve_fast_diag
+    FORCING_MODULE = @forcings.kolmogorov_forcing
+    NS_MODULE = @equations.modular_navier_stokes_model
+    PRESSURE_MODULE = @pressures.fast_diagonalization
+    U_INTERPOLATION_MODULE = @interpolations.linear
+
+    # Parameters for get_model_cls:
+    # ==============================================================================
+    get_model_cls.model_cls = @ModularStepModel
+
+    # Parameters for get_physics_specs:
+    # ==============================================================================
+    get_physics_specs.physics_specs_cls = @NavierStokesPhysicsSpecs
+
+    # Parameters for implicit_diffusion_navier_stokes:
+    # ==============================================================================
+    implicit_diffusion_navier_stokes.diffusion_module = %DIFFUSION_MODULE
+
+    # Parameters for kolmogorov_forcing:
+    # ==============================================================================
+    kolmogorov_forcing.linear_coefficient = -0.1
+    kolmogorov_forcing.scale = 1.0
+    kolmogorov_forcing.wavenumber = 4
+
+    # Parameters for modular_advection:
+    # ==============================================================================
+    modular_advection.c_interpolation_module = %C_INTERPOLATION_MODULE
+    modular_advection.u_interpolation_module = %U_INTERPOLATION_MODULE
+
+    # Parameters for modular_navier_stokes_model:
+    # ==============================================================================
+    modular_navier_stokes_model.convection_module = %CONVECTION_MODULE
+    modular_navier_stokes_model.equation_solver = \
+        @equations.implicit_diffusion_navier_stokes
+    modular_navier_stokes_model.pressure_module = %PRESSURE_MODULE
+
+    # Parameters for ModularStepModel:
+    # ==============================================================================
+    ModularStepModel.advance_module = %NS_MODULE
+    ModularStepModel.decoder_module = @decoders.aligned_array_decoder
+    ModularStepModel.encoder_module = @encoders.aligned_array_encoder
+
+    # Parameters for NavierStokesPhysicsSpecs:
+    # ==============================================================================
+    NavierStokesPhysicsSpecs.density = %DENSITY
+    NavierStokesPhysicsSpecs.forcing_module = %FORCING_MODULE
+    NavierStokesPhysicsSpecs.viscosity = {viscosity:f}
+
+    # Parameters for self_advection:
+    # ==============================================================================
+    self_advection.advection_module = @advections.modular_advection
+
+    # Parameters for transformed:
+    # ==============================================================================
+    transformed.base_interpolation_module = @interpolations.lax_wendroff
+    transformed.transformation = @interpolations.tvd_limiter_transformation
+    """)
