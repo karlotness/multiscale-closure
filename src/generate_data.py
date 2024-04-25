@@ -13,11 +13,19 @@ import numpy as np
 import h5py
 from systems.qg import coarsen, compute_stats
 from systems.qg import utils as qg_utils
+from systems.ns import config as ns_config
+import xarray
+import haiku as hk
+import gin
+import jax_cfd
+import jax_cfd.ml, jax_cfd.base, jax_cfd.spectral, jax_cfd.base.grids, jax_cfd.data
 import jax_utils
+import powerpax as ppx
 import pyqg_jax
 import itertools
 import collections
 import re
+import functools
 
 
 CONFIG_VARS = {
@@ -60,6 +68,23 @@ parser_qg.add_argument("--store_as_single", action="store_true", help="Cast traj
 # Combine QG slice options
 parser_combine_qg_slice = subparsers.add_parser("combine_qg_slice", help="Combine slices of QG data")
 
+# NS options
+parser_ns = subparsers.add_parser("ns", help="Generate training snapshots for NS learned correction")
+parser_ns.add_argument("seed", type=int, help="RNG seed, must be unique for unique trajectories")
+parser_ns.add_argument("--twarmup", type=float, default=40.0, help="Time at which we should start saving steps")
+parser_ns.add_argument("--tmax", type=float, default=70.0, help="End time for the model")
+parser_ns.add_argument("--tstep", type=float, default=0.006574203376652748, help="Stride at which snapshots should be stored")
+parser_ns.add_argument("--big_size", type=int, default=2048, help="Scale of large model")
+parser_ns.add_argument("--small_size", type=int, nargs="+", default=[128, 64], help="Scale of small models")
+parser_ns.add_argument("--num_trajs", type=int, default=1, help="Number of trajectories to generate")
+parser_ns.add_argument("--traj_slice", type=str, default=None, help="Which subset of trajectories to generate")
+parser_ns.add_argument("--store_as_single", action="store_true", help="Cast trajectory data to single precision before storing")
+parser_ns.add_argument("--viscosity", type=float, default=0.001, help="Setting for model viscosity")
+parser_ns.add_argument("--max_velocity", type=float, default=7.0, help="Setting for maximum velocity")
+parser_ns.add_argument("--cfl_factor", type=float, default=0.5, help="Setting for CFL factor when picking time step")
+parser_ns.add_argument("--simultaneous_trajs", type=int, default=2, help="Number of trajectories to generate at once")
+parser_ns.add_argument("--peak_wavenumber", type=int, default=4, help="Peak wavenumber for initial condition")
+
 
 def make_coarsen_to_size(coarse_op, big_model, small_nx):
 
@@ -95,6 +120,17 @@ def rng_yielder(rng_ctr):
     while True:
         rng, rng_ctr = jax.random.split(rng_ctr, 2)
         yield rng
+
+
+def xarray_concatenate_samples(path, new_dataset):
+    try:
+        base_dataset = xarray.load_dataset(path)
+    except FileNotFoundError:
+        base_dataset = None
+    if base_dataset is not None:
+        new_dataset = xarray.concat((base_dataset, new_dataset), "sample")
+    with utils.safe_replace(path):
+        new_dataset.to_netcdf(path)
 
 
 @jax_utils.register_pytree_dataclass
@@ -511,6 +547,185 @@ def gen_qg(out_dir, args, base_logger):
         logger.info("Finished storing statistics")
 
 
+def gen_ns(out_dir, args, base_logger):
+    out_dir = pathlib.Path(out_dir)
+    logger = base_logger.getChild("ns")
+    logger.info("Generating trajectory for Navier-Stokes with seed %d", args.seed)
+    # Initialize model and locate coarsening class
+    array_caster = jax.jit(array_cast_single if args.store_as_single else array_cast_identity)
+    full_config_str = ns_config.make_generation_config(viscosity=args.viscosity)
+    gin.parse_config(full_config_str)
+    # Set up RNG
+    rng_ctr = jax.random.key(args.seed)
+    np_rng = np.random.default_rng(args.seed)
+    # Construct grids and model classes
+    big_grid = ns_config.make_grid(size=args.big_size)
+    small_grids = {s: ns_config.make_grid(size=s) for s in args.small_size}
+    physics_specs = jax_cfd.ml.physics_specifications.get_physics_specs()
+    dt = jax_cfd.base.equations.stable_time_step(args.max_velocity, args.cfl_factor, args.viscosity, big_grid)
+    stable_steps = {s: jax_cfd.base.equations.stable_time_step(args.max_velocity, args.cfl_factor, args.viscosity, sg) for s, sg in small_grids.items()}
+    logger.info("Generating using dt=%f", dt)
+    big_model_cls = jax_cfd.ml.model_builder.get_model_cls(big_grid, dt, physics_specs)
+    small_model_cls = {s: jax_cfd.ml.model_builder.get_model_cls(g, dt, physics_specs) for s, g in small_grids.items()}
+    # Compute time step counts
+    total_steps = math.ceil(args.tmax / dt)
+    warmup_steps = math.ceil(args.twarmup / dt)
+    stride = max(round(args.tstep / dt), 1)
+    logger.info("Computing %d total steps, skipping %d for warmup and subsampling by factor %d", total_steps, warmup_steps, stride)
+    # Determine output paths
+    if args.traj_slice is None:
+        out_file_paths = {s: (out_dir / f"data-sz{s}.nc") for s in args.small_size}
+        traj_slice_start = 0
+        traj_slice_end = args.num_trajs
+    else:
+        slice_underscore = args.traj_slice.replace(":", "_")
+        out_file_paths = {s: (out_dir / f"data-slice{slice_underscore}-sz{s}.nc") for s in args.small_size}
+        slice_parts = [int(p.strip()) if p.strip() else None for p in args.traj_slice.split(":")]
+        if len(slice_parts) != 2:
+            raise ValueError(f"invalid slice spec!")
+        traj_slice_start = slice_parts[0]
+        traj_slice_end = slice_parts[1]
+
+    # Set up generation functions
+    def downsample(x, source_grid, destination_grid):
+        return jax_cfd.base.resize.downsample_staggered_velocity(
+            source_grid=source_grid,
+            destination_grid=destination_grid,
+            velocity=x,
+        )
+
+    def step_fn(carry, xs, big_model, big_grid, small_models, small_grids, dt):
+        assert xs is None
+
+        t, curr_big_step = carry
+        next_big_step = big_model.advance(curr_big_step)
+        # Compute correction values
+        outputs = {}
+        for size in small_models.keys():
+            small_model = small_models[size]
+            small_grid = small_grids[size]
+            downsampler = functools.partial(
+                downsample,
+                source_grid=big_grid,
+                destination_grid=small_grid,
+            )
+            small_curr_step = downsampler(curr_big_step)
+            small_next_step = small_model.advance(small_curr_step)
+            target_next_step = downsampler(next_big_step)
+            target_val = jax.tree.map(lambda a, b: (a - b) / dt, target_next_step, small_next_step)
+            outputs[f"{size}_x"] = small_model.decode(small_curr_step)
+            outputs[f"{size}_y"] = small_model.decode(target_val)
+
+        return (t + dt, next_big_step), (t, outputs)
+
+    def gen_traj(v0, num_steps, init_skip, subsample):
+        big_model = big_model_cls()
+        small_models = {s: sm() for s, sm in small_model_cls.items()}
+        enc_v0 = big_model.encode(v0)
+        _, (time, res) = ppx.sliced_scan(
+            functools.partial(
+                step_fn,
+                big_model=big_model,
+                big_grid=big_grid,
+                small_models=small_models,
+                small_grids=small_grids,
+                dt=dt,
+            ),
+            (0.0, enc_v0),
+            None,
+            length=num_steps,
+            start=init_skip,
+            step=subsample,
+        )
+        return time, res
+
+    traj_fn = jax.jit(
+        jax.vmap(
+            functools.partial(
+                hk.without_apply_rng(
+                    hk.transform(
+                        functools.partial(
+                            gen_traj,
+                            num_steps=total_steps,
+                            init_skip=warmup_steps,
+                            subsample=stride,
+                        )
+                    )
+                ).apply,
+                {},
+            ),
+            in_axes=0,
+            out_axes=(None, 0),
+        )
+    )
+
+    for param_batches in itertools.batched(
+        itertools.islice(
+            enumerate(rng_yielder(rng_ctr)),
+            traj_slice_start,
+            traj_slice_end,
+        ),
+        args.simultaneous_trajs,
+    ):
+        traj_nums = []
+        rng_ctrs = []
+        for b in param_batches:
+            traj_nums.append(b[0])
+            rng_ctrs.append(b[1])
+        logger.info("Generating trajectories %s", ", ".join(map(str, traj_nums)))
+        sample_ids = np.array(traj_nums)
+        v0 = jax.vmap(
+            lambda r: jax_cfd.base.initial_conditions.filtered_velocity_field(
+                r, big_grid, args.max_velocity, args.peak_wavenumber
+            )
+        )(jnp.stack(rng_ctrs))
+        v0 = tuple(jnp.expand_dims(e.data, 1) for e in v0)
+        logger.info("Starting generation")
+        times, trajs = traj_fn(v0)
+        logger.info("Finished generating %s samples", times.shape[0])
+        # For each small size, produce new dataset and join to datasets on disk
+        for small_size in set(args.small_size):
+            attrs = {
+                "seed": args.seed,
+                "ndim": 2,
+                "domain_size_multiple": 1,
+                "warmup_grid_size": args.big_size,
+                "simulation_grid_size": args.big_size,
+                "save_grid_size": small_size,
+                "warmup_time": args.twarmup,
+                "simulation_time": args.tmax - args.twarmup,
+                "time_subsample_factor": stride,
+                "maximum_velocity": args.max_velocity,
+                "init_peak_wavenumber": args.peak_wavenumber,
+                "init_cfl_safety_factor": args.cfl_factor,
+                "full_config_str": full_config_str,
+                "dt": dt,
+                "stable_time_step": stable_steps[small_size],
+                "viscosity": args.viscosity,
+            }
+            dataset = xarray.merge(
+                [
+                    jax_cfd.data.xarray_utils.velocity_trajectory_to_xarray(
+                        tuple(array_caster(d) for d in trajs[f"{small_size}_x"]),
+                        small_grids[small_size],
+                        time=array_caster(times),
+                        samples=True,
+                        attrs=attrs,
+                    ),
+                    jax_cfd.data.xarray_utils.velocity_trajectory_to_xarray(
+                        tuple(array_caster(d) for d in trajs[f"{small_size}_y"]),
+                        small_grids[small_size],
+                        time=array_caster(times),
+                        samples=True,
+                        attrs=attrs,
+                    ).rename({"u": "u_corr", "v": "v_corr"}),
+                ]
+            ).assign_coords(sample=sample_ids)
+            # Save to file then drop dataset
+            xarray_concatenate_samples(out_file_paths[small_size], dataset)
+            dataset = None
+
+
 if __name__ == "__main__":
     args = parser.parse_args()
     out_dir = pathlib.Path(args.out_dir)
@@ -518,7 +733,7 @@ if __name__ == "__main__":
         raise ValueError(f"Path must be a directory, not a file: {args.out_dir}")
     out_dir.mkdir(exist_ok=True)
     match args.system:
-        case "qg":
+        case "qg" | "ns":
             if args.traj_slice is not None:
                 slice_underscore = args.traj_slice.replace(":", "_")
                 log_name = f"run-slice{slice_underscore}.log"
@@ -545,6 +760,8 @@ if __name__ == "__main__":
             gen_qg(out_dir, args, logger)
         case "combine_qg_slice":
             combine_qg_slice(out_dir, args, logger)
+        case "ns":
+            gen_ns(out_dir, args, logger)
         case _:
             raise ValueError(f"invalid system: {args.system}")
     logger.info("Finished generating data")
