@@ -23,6 +23,23 @@ def rename_save_file(file, mode, *args, **kwargs):
     os.replace(target_path, final_path)
 
 
+@contextlib.contextmanager
+def safe_replace(file):
+    path = pathlib.Path(file)
+    rand_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=15))
+    temp_path = path.with_name(f"{path.name}.TEMP{rand_suffix}")
+    # Move the original file to the temporary path
+    try:
+        os.rename(path, temp_path)
+    except FileNotFoundError:
+        # Nothing to do, just yield
+        yield
+    else:
+        # We renamed the file above, need to remove it after we're done
+        yield
+        os.unlink(temp_path)
+
+
 def atomic_symlink(target, link_path):
     link_path = pathlib.Path(link_path).absolute()
     target_path = pathlib.Path(target).absolute().relative_to(link_path.parent)
