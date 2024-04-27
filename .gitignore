@@ -19,6 +19,7 @@ slurm-*.out
 *.eqx
 *.json
 *.hdf5
+*.nc
 
 # Ignore IPython notebooks
 *.ipynb
