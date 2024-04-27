@@ -13,7 +13,7 @@ import numpy as np
 import h5py
 from systems.qg import coarsen, compute_stats
 from systems.qg import utils as qg_utils
-from systems.ns import config as ns_config
+from systems.ns import config as ns_config, compute_stats as ns_stats
 import xarray
 import haiku as hk
 import gin
@@ -84,6 +84,9 @@ parser_ns.add_argument("--max_velocity", type=float, default=7.0, help="Setting 
 parser_ns.add_argument("--cfl_factor", type=float, default=0.5, help="Setting for CFL factor when picking time step")
 parser_ns.add_argument("--simultaneous_trajs", type=int, default=2, help="Number of trajectories to generate at once")
 parser_ns.add_argument("--peak_wavenumber", type=int, default=4, help="Peak wavenumber for initial condition")
+
+# Combine NS slice options
+parser_combine_ns_slice = subparsers.add_parser("combine_ns_slice", help="Combine slices of NS data")
 
 
 def make_coarsen_to_size(coarse_op, big_model, small_nx):
@@ -726,6 +729,83 @@ def gen_ns(out_dir, args, base_logger):
             dataset = None
 
 
+def combine_ns_slice(out_dir, args, base_logger):
+    out_dir = pathlib.Path(out_dir)
+    logger = base_logger.getChild("combine_ns_slice")
+    # Locate data slice files
+    slice_files = list(out_dir.glob("data-slice*-sz*.nc"))
+    if not slice_files:
+        logger.error("No slice files found")
+        raise ValueError("No slice files found")
+    logger.info("Located %d dataset slice files", len(slice_files))
+    # Pre-scan: determine trajectories with NaNs (discard) and how many different sizes we're merging
+    valid_size_trajs = {}
+    for path in slice_files:
+        with xarray.open_dataset(path) as dataset:
+            size = dataset.sizes["x"]
+            if size not in valid_size_trajs:
+                valid_size_trajs[size] = {}
+            for traj_num, sample_id in enumerate(dataset.sample):
+                sample_id = sample_id.item()
+                for name in ["u", "v", "u_corr", "v_corr"]:
+                    if not np.all(np.isfinite(dataset[name].isel(sample=traj_num))):
+                        logger.warning("Trajectory %d size %d contains NaN/inf, will skip. File %s", sample_id, size, path)
+                        break
+                else:
+                    # Trajectory was ok, include it
+                    if sample_id in valid_size_trajs[size]:
+                        raise ValueError(f"Duplicate entries for %d size %d", sample_id, size)
+                    valid_size_trajs[size][sample_id] = path
+    logger.info("Merging %d sizes: %s", len(valid_size_trajs), ", ".join(map(str, valid_size_trajs)))
+    for k, v in valid_size_trajs.items():
+        logger.info("Size %d has %d valid trajectories", k, len(v))
+    # Do the actual merge operation (computing stats as we go)
+    with h5py.File(out_dir / "data.hdf5", "w", libver="latest") as out_file:
+        # Tag this data file as containing NS data
+        out_file.create_dataset("model_type", data="ns")
+        for size in valid_size_trajs:
+            logger.info("Merging size %d", size)
+            size_group = out_file.create_group(f"sz{size}")
+            # Process parameters
+            param_ref_set = valid_size_trajs[size][min(valid_size_trajs[size])]
+            logger.info("Referencing parameters from %s", param_ref_set)
+            param_group = size_group.create_group("params")
+            trajs_group = size_group.create_group("trajs")
+            ns_names = ("u", "v", "u_corr", "v_corr")
+            stat_accumulators = {
+                name: ns_stats.NSStatAccumulator() for name in ns_names
+            }
+            with xarray.open_dataset(param_ref_set) as dataset:
+                for k, v in dataset.attrs.items():
+                    param_group.create_dataset(k, data=v)
+                # Handle dimension info
+                sample_record = trajs_group.create_dataset("sample", shape=(len(valid_size_trajs[size]),), dtype=np.int32)
+                trajs_group.create_dataset("time", data=dataset.time.data)
+                trajs_group.create_dataset("x", data=dataset.x.data)
+                trajs_group.create_dataset("y", data=dataset.y.data)
+            # Handle trajectories
+            for traj_num, sample_id in enumerate(sorted(valid_size_trajs[size].keys())):
+                data_path = valid_size_trajs[size][sample_id]
+                sample_record[traj_num] = sample_id
+                with xarray.open_dataset(data_path) as dataset:
+                    for name in ns_names:
+                        batch_data = dataset[name].sel(sample=sample_id).data
+                        out_data = trajs_group.create_dataset(f"traj{traj_num:05d}_{name}", data=batch_data)
+                        stat_accumulators[name].add_batch(batch_data)
+                        batch_data = None
+                        for k, v in dataset[name].attrs.items():
+                            out_data.attrs[k] = v
+            # Add statistics
+            stats_group = size_group.create_group("stats")
+            for name, stat_comp in stat_accumulators.items():
+                name_group = stats_group.create_group(name)
+                stats = stat_comp.finalize()
+                name_group.create_dataset("mean", data=stats.mean)
+                name_group.create_dataset("var", data=stats.var)
+                name_group.create_dataset("min", data=stats.min)
+                name_group.create_dataset("max", data=stats.max)
+    logger.info("Finished merging data")
+
 if __name__ == "__main__":
     args = parser.parse_args()
     out_dir = pathlib.Path(args.out_dir)
@@ -739,7 +819,7 @@ if __name__ == "__main__":
                 log_name = f"run-slice{slice_underscore}.log"
             else:
                 log_name = "run.log"
-        case "combine_qg_slice":
+        case "combine_qg_slice" | "combine_ns_slice":
             log_name = "run-combine.log"
         case _:
             log_name = "run.log"
@@ -762,6 +842,8 @@ if __name__ == "__main__":
             combine_qg_slice(out_dir, args, logger)
         case "ns":
             gen_ns(out_dir, args, logger)
+        case "combine_ns_slice":
+            combine_ns_slice(out_dir, args, logger)
         case _:
             raise ValueError(f"invalid system: {args.system}")
     logger.info("Finished generating data")
