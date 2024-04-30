@@ -101,7 +101,7 @@ async def do_work(out_path, in_path, data_dtype, source_record_dtype, num_chunks
                 logger.info("Starting chunk %d of %d", chunk, num_chunks)
                 # Submit jobs to workers
                 batch_size = 0
-                for i, (traj, step) in enumerate(zip(trajs[start:end], steps[start:end], strict="true")):
+                for i, (traj, step) in enumerate(zip(trajs[start:end], steps[start:end], strict=True)):
                     await batch_idx_queue.put((i, traj, step))
                     batch_size += 1
                 batch_results = []
