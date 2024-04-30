@@ -26,6 +26,8 @@ import itertools
 import collections
 import re
 import functools
+import random
+import asyncio
 
 
 CONFIG_VARS = {
@@ -87,6 +89,12 @@ parser_ns.add_argument("--peak_wavenumber", type=int, default=4, help="Peak wave
 
 # Combine NS slice options
 parser_combine_ns_slice = subparsers.add_parser("combine_ns_slice", help="Combine slices of NS data")
+
+# Shuffle NS data options
+parser_shuffle_ns_data = subparsers.add_parser("shuffle_ns_data", help="Pre-shuffle a combined NS dataset")
+parser_shuffle_ns_data.add_argument("--seed", type=int, default=None, help="Seed used for shuffling data (default: auto)")
+parser_shuffle_ns_data.add_argument("--num_workers", type=int, default=32, help="Number of async workers")
+parser_shuffle_ns_data.add_argument("--chunk_size", type=int, default=1000, help="Number of samples per load batch")
 
 
 def make_coarsen_to_size(coarse_op, big_model, small_nx):
@@ -806,6 +814,211 @@ def combine_ns_slice(out_dir, args, base_logger):
                 name_group.create_dataset("max", data=stats.max)
     logger.info("Finished merging data")
 
+
+def shuffle_ns_data(out_dir, args, base_logger):
+    out_dir = pathlib.Path(out_dir)
+    logger = base_logger.getChild("shuffle_ns_data")
+    in_path = out_dir / "data.hdf5"
+    out_path = out_dir / "shuffled.hdf5"
+    if args.seed is None:
+        seed = random.SystemRandom().randint(0, 2**32)
+    else:
+        seed = args.seed
+    logger.info("Using seed %d", seed)
+    rng = np.random.default_rng(seed=seed)
+
+    async def proc_worker(in_queue, out_queue, size, in_path, field_types, logger):
+        try:
+            total_bytes = sum(ft["bytes"] for ft in field_types)
+            logger.debug("Spawning process")
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                str(pathlib.Path(__file__).resolve().parent / "systems" / "ns" / "_background_loader.py"),
+                str(in_path),
+                "1",
+                str(size),
+                "--fields",
+                *(ft["name"] for ft in field_types),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+            )
+            while (job := await in_queue.get()) is not None:
+                job_id, traj, step = job
+                proc.stdin.write(f"{traj:d} {step:d}\n".encode("utf8"))
+                await proc.stdin.drain()
+                data_bytes = await proc.stdout.readexactly(total_bytes)
+                ret = {}
+                byte_cursor = 0
+                for field in field_types:
+                    ret[field["name"]] = np.frombuffer(data_bytes[byte_cursor:byte_cursor + field["bytes"]], dtype=field["dtype"]).reshape(field["shape"])
+                    byte_cursor += field["bytes"]
+                data_bytes = None
+                await out_queue.put((job_id, ret))
+                ret = None
+            logger.debug("Cleaning up")
+            # Clean up the process
+            proc.stdin.write_eof()
+            return_code = await proc.wait()
+            if return_code != 0:
+                logger.error(f"worker process exited abnormally {return_code}")
+                raise RuntimeError(f"worker process exited abnormally {return_code}")
+        finally:
+            logger.debug("Sending termination signal")
+            await out_queue.put(None)
+
+    async def process_size(size, in_path, out_dataset, trajs, steps, chunk_size, num_workers, base_logger, field_types):
+        logger = base_logger.getChild("process_size")
+        # Set up queues
+        ready_batch_queue = asyncio.Queue()
+        batch_idx_queue = asyncio.Queue()
+        batch_size = chunk_size
+        total_steps = trajs.shape[0]
+        # Spawn workers
+        logger.info("Spawning %d workers", num_workers)
+        workers = {
+            asyncio.create_task(
+                proc_worker(
+                    in_queue=batch_idx_queue,
+                    out_queue=ready_batch_queue,
+                    size=size,
+                    in_path=in_path,
+                    field_types=field_types,
+                    logger=logger.getChild(f"worker{worker_id}")
+                )
+            )
+            for worker_id in range(num_workers)
+        }
+        try:
+            iter_range = range(0, total_steps, batch_size)
+            for chunk, (start, end) in enumerate(itertools.pairwise(itertools.chain(iter_range, [None]))):
+                logger.info("Starting chunk %d of %d", chunk, len(iter_range))
+                batch_size = trajs[start:end].shape[0]
+                # Submit jobs to workers
+                for i, (traj, step) in enumerate(zip(trajs[start:end], steps[start:end], strict=True)):
+                    await batch_idx_queue.put((i, traj, step))
+                batch_results = []
+                for _batch in range(batch_size):
+                    result = await ready_batch_queue.get()
+                    if result is None:
+                        raise RuntimeError("worker exited unexpectedly")
+                    batch_results.append(result)
+                batch_results.sort(key=operator.itemgetter(0))
+                # Stack results and sort
+                result_sources = collections.ChainMap(
+                    {
+                        k: np.stack([br[1][k] for br in batch_results])
+                        for k in batch_results[0][1].keys()
+                    },
+                    {
+                        "traj": trajs[start:end],
+                        "step": steps[start:end],
+                    }
+                )
+                out_dataset[start:end] = np.core.records.fromarrays(
+                    [result_sources[name] for name in out_dataset.dtype.fields],
+                    dtype=out_dataset.dtype
+                )
+        finally:
+            # Stop our remaining workers
+            logger.info("Stopping background workers")
+            for _ in workers:
+                await batch_idx_queue.put(None)
+            await asyncio.gather(*workers, return_exceptions=True)
+
+
+    with h5py.File(in_path, "r") as in_file, h5py.File(out_path, "w", libver="latest") as out_file:
+        if (model_tag := in_file["model_type"].asstr()[()]) != "ns":
+            raise ValueError(f"Incorrect model {model_tag} should be 'ns'")
+        out_file.create_dataset("model_type", data="ns")
+        # Determine sizes
+        ns_names = ("u", "v", "u_corr", "v_corr")
+        sizes = set()
+        for name in in_file.keys():
+            if match := re.match(r"^sz(?P<size>\d+)$", name):
+                sizes.add(int(match.group("size")))
+        logger.info("Shuffling sizes %s", ", ".join(map(str, sizes)))
+        for size in sorted(sizes):
+            in_size_group = in_file[f"sz{size}"]
+            out_size_group = out_file.create_group(f"sz{size}")
+            in_trajs_group = in_size_group["trajs"]
+            # Copy params and stats
+            for name in {"params", "stats"}:
+                in_size_group.copy(
+                    source=in_size_group[name],
+                    dest=out_size_group,
+                    shallow=False,
+                    expand_soft=True,
+                    expand_external=True,
+                    expand_refs=True,
+                    without_attrs=False,
+                )
+            # Copy dimension info
+            out_dim_group = out_size_group.create_group("dims")
+            for name in {"sample", "time", "x", "y"}:
+                in_trajs_group.copy(
+                    source=in_trajs_group[name],
+                    dest=out_dim_group,
+                    shallow=False,
+                    expand_soft=True,
+                    expand_external=True,
+                    expand_refs=True,
+                    without_attrs=False,
+                )
+            # Product compound dtype for shuffled step
+            dtype_parts = [
+                ("traj", np.uint32),
+                ("step", np.uint32),
+            ]
+            field_types = []
+            for name in ns_names:
+                sample = in_trajs_group[f"traj00000_{name}"]
+                dtype_parts.append(
+                    (name, in_trajs_group[f"traj00000_{name}"].dtype, in_trajs_group[f"traj00000_{name}"].shape[1:])
+                )
+                field_types.append(
+                    {
+                        "name": name,
+                        "dtype": sample.dtype,
+                        "shape": sample.shape[1:],
+                        "bytes": sample[0:1].nbytes,
+                    },
+                )
+            out_dtype = np.dtype(dtype_parts)
+            # Compute shuffle trajs and steps
+            num_steps = in_trajs_group[f"traj00000_u"].shape[0]
+            num_trajs = sum(1 for name in in_trajs_group.keys() if re.match(r"^traj\d+_u$", name))
+            num_samples = num_steps * num_trajs
+            indices = np.arange(num_samples, dtype=np.uint64)
+            rng.shuffle(indices)
+            trajs, steps = np.divmod(indices, num_steps)
+            # Handle attributes
+            logger.info("Copy attributes")
+            out_attrs_group = out_size_group.create_group("attrs")
+            for name in ns_names:
+                out_attr_name_group = out_attrs_group.create_group(name)
+                for k, v in in_trajs_group[f"traj00000_{name}"].attrs.items():
+                    out_attr_name_group.create_dataset(k, data=v)
+            # Do shuffling
+            logger.info("Creating output dataset")
+            out_dataset = out_size_group.create_dataset("shuffled", shape=(num_samples,), dtype=out_dtype)
+            logger.info("Starting to shuffle size %d", size)
+            asyncio.run(
+                process_size(
+                    size=size,
+                    in_path=in_path,
+                    out_dataset=out_dataset,
+                    trajs=trajs,
+                    steps=steps,
+                    chunk_size=args.chunk_size,
+                    num_workers=args.num_workers,
+                    base_logger=logger,
+                    field_types=field_types,
+                )
+            )
+            logger.info("Finished shuffling size %d", size)
+
+
+
 if __name__ == "__main__":
     args = parser.parse_args()
     out_dir = pathlib.Path(args.out_dir)
@@ -821,6 +1034,8 @@ if __name__ == "__main__":
                 log_name = "run.log"
         case "combine_qg_slice" | "combine_ns_slice":
             log_name = "run-combine.log"
+        case "shuffle_ns_data":
+            log_name = "shuffle_run.log"
         case _:
             log_name = "run.log"
     utils.set_up_logging(level=args.log_level, out_file=out_dir / log_name)
@@ -844,6 +1059,8 @@ if __name__ == "__main__":
             gen_ns(out_dir, args, logger)
         case "combine_ns_slice":
             combine_ns_slice(out_dir, args, logger)
+        case "shuffle_ns_data":
+            shuffle_ns_data(out_dir, args, logger)
         case _:
             raise ValueError(f"invalid system: {args.system}")
     logger.info("Finished generating data")
