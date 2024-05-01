@@ -98,6 +98,8 @@ class NSThreadedPreShuffledSnapshotLoader:
     ):
         if base_logger is None:
             self._logger = logging.getLogger("ns_preshuffle_loader")
+        else:
+            self._logger = base_logger.getChild("ns_preshuffle_loader")
         self.fields = sorted(set(fields))
         self.batch_size = batch_size
         sizes = set()
