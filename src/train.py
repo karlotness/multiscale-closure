@@ -506,7 +506,7 @@ def determine_required_fields(channels):
         elif m := re.match(r"^ns_scaled_(?P<orig_name>(u|v)(_corr)?)_(?P<orig_size>\d+)to\d+$", chan):
             orig_name = m.group("orig_name")
             orig_size = int(m.group("orig_size"))
-            loader_chans.update(determine_required_fields(f"ns_{orig_name}_{orig_size}"))
+            loader_chans.update(determine_required_fields([f"ns_{orig_name}_{orig_size}"]))
         elif re.match(r"^ns_(u|v)(_corr)?_\d+$", chan):
             loader_chans.add(chan)
         elif m := re.match(r"^ns_(vort|uv)_(?P<size>\d+)$", chan):
@@ -518,7 +518,7 @@ def determine_required_fields(channels):
         elif m := re.match(r"^ns_scaled_(?P<orig_name>.+?)_(?P<orig_size>\d+)to\d+$", chan):
             orig_name = m.group("orig_name")
             orig_size = int(m.group("orig_size"))
-            loader_chans.update(determine_required_fields(f"ns_{orig_name}_{orig_size}"))
+            loader_chans.update(determine_required_fields([f"ns_{orig_name}_{orig_size}"]))
         elif m := re.match(r"^residual:(?P<chan1>[^-]+)-(?P<chan2>[^-]+)$", chan):
             loader_chans.update(determine_required_fields([m.group("chan1"), m.group("chan2")]))
         else:
