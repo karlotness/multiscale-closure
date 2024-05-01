@@ -15,10 +15,11 @@ import jax.numpy as jnp
 import numpy as np
 import equinox as eqx
 from methods import get_net_constructor
-from train import init_network as train_init_network, save_network, determine_processing_size, load_model_params, make_basic_coarsener, determine_output_size, make_chunk_from_batch, determine_required_fields, make_non_residual_chunk_from_batch, remove_residual_from_output_chunk
+from train import init_network as train_init_network, save_network, determine_processing_size, load_model_params, make_basic_coarsener, determine_output_size, make_chunk_from_batch, determine_required_fields, make_non_residual_chunk_from_batch, remove_residual_from_output_chunk, sniff_system_type, make_val_loader
 import utils
 from systems.qg import diagnostics as qg_spec_diag
 from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader
+from systems.ns import loader as ns_loader, utils as ns_utils
 from eval import load_network
 from cascaded_train import NetData, split_chunk_into_channels, name_remove_residual, do_epoch, do_validation
 
@@ -75,7 +76,7 @@ def load_prev_networks(base_dir, train_step, net_load_type, base_logger=None):
     return loaded_nets, loaded_net_data, loaded_net_info
 
 
-def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name, processing_scales, normalization, train_step, output_residuals=True, logger=None):
+def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name, processing_scales, normalization, train_step, output_residuals=True, logger=None, system_type="qg"):
     if logger is None:
         logger = logging.getLogger("seq_net_init")
     processing_scales = set(processing_scales)
@@ -90,19 +91,35 @@ def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batc
 
     # Determine input and output channels
     if train_step == 0:
-        in_channels = [f"q_{max(processing_scales)}"]
-        out_channels = [f"q_scaled_forcing_{max(processing_scales)}to{min(processing_scales)}"]
+        if system_type == "qg":
+            in_channels = [f"q_{max(processing_scales)}"]
+            out_channels = [f"q_scaled_forcing_{max(processing_scales)}to{min(processing_scales)}"]
+        elif system_type == "ns":
+            in_channels = [f"ns_uv_{max(processing_scales)}", f"ns_vort_{max(processing_scales)}"]
+            out_channels = [f"ns_scaled_uv_corr_{max(processing_scales)}to{min(processing_scales)}"]
     elif 1 <= train_step < len(processing_scales):
         small, big = next(itertools.islice(itertools.pairwise(sorted(processing_scales)), train_step - 1, None))
         prev_scales = sorted(processing_scales)[:train_step]
         assert small in prev_scales
-        in_channels = [f"q_scaled_{max(processing_scales)}to{big}"] + [f"q_scaled_forcing_{max(processing_scales)}to{sz}" for sz in prev_scales]
+        if system_type == "qg":
+            in_channels = [f"q_scaled_{max(processing_scales)}to{big}"] + [f"q_scaled_forcing_{max(processing_scales)}to{sz}" for sz in prev_scales]
+        elif system_type == "ns":
+            in_channels = [f"ns_scaled_uv_{max(processing_scales)}to{big}", f"ns_scaled_vort_{max(processing_scales)}to{big}"] + [f"ns_scaled_uv_corr_{max(processing_scales)}to{sz}" for sz in prev_scales]
         if big == max(processing_scales):
-            target_chan = f"q_total_forcing_{max(processing_scales)}"
+            if system_type == "qg":
+                target_chan = f"q_total_forcing_{max(processing_scales)}"
+            elif system_type == "ns":
+                target_chan = f"ns_uv_corr_{max(processing_scales)}"
         else:
-            target_chan = f"q_scaled_forcing_{max(processing_scales)}to{big}"
+            if system_type == "qg":
+                target_chan = f"q_scaled_forcing_{max(processing_scales)}to{big}"
+            elif system_type == "ns":
+                target_chan = f"ns_scaled_uv_corr_{max(processing_scales)}to{big}"
         if output_residuals:
-            out_channels = [f"residual:{target_chan}-q_scaled_forcing_{max(processing_scales)}to{small}"]
+            if system_type == "qg":
+                out_channels = [f"residual:{target_chan}-q_scaled_forcing_{max(processing_scales)}to{small}"]
+            elif system_type == "ns":
+                out_channels = [f"residual:{target_chan}-ns_scaled_uv_corr_{max(processing_scales)}to{small}"]
         else:
             out_channels = [target_chan]
     else:
@@ -256,6 +273,40 @@ def make_validation_stats_function(net_data, model_params, alt_source_computer):
     return compute_stats
 
 
+def make_train_loader(
+    *,
+    train_path,
+    system_type,
+    batch_size,
+    loader_chunk_size,
+    base_logger,
+    np_rng,
+    required_fields
+):
+    if system_type == "qg":
+        return ThreadedPreShuffledSnapshotLoader(
+            file_path=train_path,
+            batch_size=batch_size,
+            chunk_size=loader_chunk_size,
+            buffer_size=10,
+            seed=np_rng.integers(2**32).item(),
+            base_logger=base_logger.getChild("train_loader"),
+            fields=required_fields,
+        )
+    elif system_type == "ns":
+        return ns_loader.NSThreadedPreShuffledSnapshotLoader(
+            file_path=train_path,
+            batch_size=batch_size,
+            buffer_size=10,
+            chunk_size=loader_chunk_size,
+            seed=np_rng.integers(2**32).item(),
+            base_logger=base_logger.getChild("train_loader"),
+            fields=required_fields,
+        )
+    else:
+        raise ValueError(f"unsupported system {system_type}")
+
+
 def main():
     args = parser.parse_args()
     base_out_dir = pathlib.Path(args.out_dir)
@@ -288,6 +339,8 @@ def main():
     # Configure required elements for training
     train_path = (pathlib.Path(args.train_set) / "shuffled.hdf5").resolve()
     val_path = (pathlib.Path(args.val_set) / "data.hdf5").resolve()
+    system_type = sniff_system_type(train_path)
+    logger.info("System type %s", system_type)
     weights_dir = out_dir / "weights"
     weights_dir.mkdir(exist_ok=True)
 
@@ -326,6 +379,7 @@ def main():
         train_step=args.train_step,
         output_residuals=args.output_residuals,
         logger=logger.getChild("init_net"),
+        system_type=system_type,
     )
     logger.info("Input channels: %s", net_data.input_channels)
     logger.info("Output channels: %s", net_data.output_channels)
@@ -371,20 +425,21 @@ def main():
     with contextlib.ExitStack() as train_context:
         # Open data files
         train_loader = train_context.enter_context(
-            ThreadedPreShuffledSnapshotLoader(
-                file_path=train_path,
+            make_train_loader(
+                train_path=train_path,
+                system_type=system_type,
                 batch_size=args.batch_size,
-                chunk_size=args.loader_chunk_size,
-                buffer_size=10,
-                seed=np_rng.integers(2**32).item(),
+                loader_chunk_size=args.loader_chunk_size,
                 base_logger=logger.getChild("train_loader"),
-                fields=required_fields,
+                np_rng=np_rng,
+                required_fields=required_fields,
             )
         )
         val_loader = train_context.enter_context(
-            SimpleQGLoader(
+            make_val_loader(
                 file_path=val_path,
-                fields=required_fields,
+                required_fields=required_fields,
+                system_type=system_type,
             )
         )
 
