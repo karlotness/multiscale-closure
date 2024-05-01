@@ -293,3 +293,65 @@ class NSThreadedPreShuffledSnapshotLoader:
 
     def __del__(self):
         self.close()
+
+
+class SimpleNSLoader:
+    def __init__(self, file_path, fields=("ns_u_64", "ns_v_64", "ns_u_corr_64", "ns_v_corr_64")):
+        self.fields = sorted(set(fields))
+        sizes = set()
+        load_fields = set()
+        self._h5_file = h5py.File(file_path, "r")
+        # Check the fields and determine size
+        for field in self.fields:
+            if m := re.fullmatch(r"ns_(?P<basename>.+?)_(?P<size>\d+)", field):
+                sizes.add(int(m.group("size")))
+                base_name = m.group("basename")
+                if base_name not in {"u", "v", "u_corr", "v_corr"}:
+                    raise ValueError(f"Requested invalid field {base_name} not in file")
+                load_fields.add(base_name)
+            else:
+                raise ValueError(f"invalid field {field}")
+        self._load_fields = load_fields
+        self._non_fields = {"u", "v", "u_corr", "v_corr"} - set(self._load_fields)
+        if len(sizes) != 1:
+            raise ValueError(f"Requested loading inconsistent sizes {fields}")
+        self.size = sizes.pop()
+        self._trajs_group = self._h5_file[f"sz{self.size}"]["trajs"]
+        num_traj = 0
+        for k in self._trajs_group.keys():
+            if k.startswith("traj") and k.endswith("_u_corr"):
+                num_traj += 1
+        self.num_trajectories = num_traj
+        self.num_steps = self._trajs_group["traj00000_u"].shape[0]
+        self.num_trajs = self.num_trajectories
+        if "model_type" not in self._h5_file.keys() or self._h5_file["model_type"].asstr()[()] != "ns":
+            raise ValueError("provided dataset is not for NS system")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        self.close()
+
+    def num_samples(self):
+        return self.num_steps * self.num_trajs
+
+    def close(self):
+        if self._trajs_group is not None:
+            self._trajs_group = None
+            self._h5_file.close()
+
+    def get_trajectory(self, traj, start=0, end=None):
+        start = operator.index(start)
+        if end is not None:
+            end = operator.index(end)
+        slicer = slice(start, end)
+        idx_start, idx_stop, _ = slicer.indices(self.num_steps)
+        num_steps = idx_stop - idx_start
+        result_fields = {k: None for k in self._non_fields}
+        for field in self._load_fields:
+            result_fields[field] = self._trajs_group[f"traj{traj:05d}_{field}"][slicer].astype(np.float32)
+        return jax.device_put(LoadedState(**result_fields))
