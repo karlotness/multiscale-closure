@@ -22,18 +22,10 @@ class ParamStat:
     var: float
 
     def scale_to_standard(self, a):
-        if a.dtype == jnp.dtype(jnp.float64):
-            dest_type = jnp.float64
-        else:
-            dest_type = jnp.float32
         std = jnp.sqrt(self.var)
         return (a - self.mean) / std
 
     def scale_from_standard(self, a):
-        if a.dtype == jnp.dtype(jnp.float64):
-            dest_type = jnp.float64
-        else:
-            dest_type = jnp.float32
         std = jnp.sqrt(self.var)
         return (a * std) + self.mean
 
