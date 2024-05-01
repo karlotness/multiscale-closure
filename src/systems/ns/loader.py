@@ -357,3 +357,58 @@ class SimpleNSLoader:
         for field in self._load_fields:
             result_fields[field] = self._trajs_group[f"traj{traj:05d}_{field}"][slicer].astype(np.float32)
         return jax.device_put(LoadedState(**result_fields))
+
+
+class NSAggregateLoader:
+    def __init__(self, loaders, batch_size, seed=None):
+        self.loaders = tuple(loaders)
+        self.batch_size = batch_size
+        self._closed = False
+        if seed is None:
+            seed = random.SystemRandom().randint(0, 2**32)
+        self._np_rng = np.random.default_rng(seed=seed)
+        if any(loader.batch_size < self.batch_size for loader in self.loaders):
+            raise ValueError("Batch size too small for aggregation")
+
+    def num_samples(self):
+        return sum(l.num_samples() for l in self.loaders)
+
+    def next_batch(self):
+        if self._closed:
+            raise ValueError("Closed loader, cannot load batches")
+        active_loaders = []
+        weights = []
+        for loader in self.loaders:
+            num_samps = loader.num_samples()
+            if num_samps > 0:
+                active_loaders.append(loader)
+                weights.append(num_samps)
+        weights = np.asarray([loader.num_samples() for loader in active_loaders])
+        weights = weights / weights.sum()
+        samples_per_loader = self._np_rng.multinomial(self.batch_size, weights)
+        batches = [loader.next_batch() for loader in active_loaders]
+        extension = len(self.loaders) - len(batches)
+        batches.extend([None] * extension)
+        samples_per_loader = np.concatenate([samples_per_loader, np.zeros(extension, dtype=samples_per_loader.dtype)], axis=0)
+        return batches, samples_per_loader
+
+    def iter_batches(self):
+        # A generator over the batches
+        while True:
+            yield self.next_batch()
+
+    def close(self):
+        if self._closed:
+            return
+        for loader in self.loaders:
+            loader.close()
+        self._closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        self.close()
