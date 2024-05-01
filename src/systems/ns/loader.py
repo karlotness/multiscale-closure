@@ -6,6 +6,7 @@ import re
 import operator
 import threading
 import contextlib
+import typing
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -19,6 +20,22 @@ from ..qg.utils import register_pytree_dataclass
 class ParamStat:
     mean: float
     var: float
+
+    def scale_to_standard(self, a):
+        if a.dtype == jnp.dtype(jnp.float64):
+            dest_type = jnp.float64
+        else:
+            dest_type = jnp.float32
+        std = jnp.sqrt(self.var)
+        return (a - self.mean) / std
+
+    def scale_from_standard(self, a):
+        if a.dtype == jnp.dtype(jnp.float64):
+            dest_type = jnp.float64
+        else:
+            dest_type = jnp.float32
+        std = jnp.sqrt(self.var)
+        return (a * std) + self.mean
 
 
 @register_pytree_dataclass
@@ -58,6 +75,40 @@ class CoreSystemParams:
                 return self.v_corr_offset
             case _:
                 raise ValueError(f"Invalid field {field}")
+
+
+@register_pytree_dataclass
+@dataclasses.dataclass
+class NSModelParams:
+    size_stats: dict[int, CoreSystemParams]
+    scale_operator: str
+    system_type: typing.ClassVar[str] = "ns"
+
+
+def load_system_stats(data_path):
+    results = {}
+    with h5py.File(data_path, "r") as in_file:
+        # Determine all sizes
+        sizes = set()
+        for k in in_file:
+            if m := re.fullmatch(r"sz(?P<size>\d+)", k):
+                sizes.add(int(m.group("size")))
+        for size in sizes:
+            sz_group = in_file[f"sz{size}"]
+            params_args = {}
+            for name in ["u", "v", "u_corr", "v_corr"]:
+                # Get stats
+                params_args[f"{name}_stats"] = ParamStat(
+                    mean=sz_group["stats"][name]["mean"][()].item(),
+                    var=sz_group["stats"][name]["var"][()].item(),
+                )
+                # Get offsets
+                params_args[f"{name}_offset"] = sz_group["attrs"][name]["offset"][()]
+            results[size] = CoreSystemParams(**params_args)
+    return NSModelParams(
+        size_stats=results,
+        scale_operator="ns-simple",
+    )
 
 
 @register_pytree_dataclass
