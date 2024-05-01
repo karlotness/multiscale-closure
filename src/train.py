@@ -23,6 +23,7 @@ import operator
 import importlib
 from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader, AggregateLoader, FillableDataLoader, SnapshotStates
 from systems.qg import coarsen, diagnostics as qg_spec_diag, utils as qg_utils
+from systems.ns import loader as ns_loader, utils as ns_utils
 import pyqg_jax
 from methods import get_net_constructor
 from generate_data import make_parameter_sampler, CONFIG_VARS as GEN_CONFIG_VARS
@@ -64,6 +65,14 @@ parser.add_argument("--live_gen_mode", type=str, default="add-hardest", choices=
 parser.add_argument("--live_gen_net_steps", type=int, default=5, help="")
 parser.add_argument("--live_gen_base_data", type=str, default=None, help="")
 parser.add_argument("--live_gen_switch_set_interval", type=int, default=None, help="")
+
+
+def sniff_system_type(data_file):
+    with h5py.File(data_file, "r") as in_file:
+        if "model_type" in in_file.keys():
+            return in_file["model_type"].asstr()[()]
+        else:
+            return "qg"
 
 
 def live_sample_get_args(train_path, required_fields, logger=None):
@@ -494,6 +503,22 @@ def determine_required_fields(channels):
         elif m := re.match(r"^q_scaled_(?P<orig_size>\d+)to\d+$", chan):
             orig_size = m.group("orig_size")
             loader_chans.update(determine_required_fields([f"q_{orig_size}"]))
+        elif m := re.match(r"^ns_scaled_(?P<orig_name>(u|v)(_corr)?)_(?P<orig_size>\d+)to\d+$", chan):
+            orig_name = m.group("orig_name")
+            orig_size = int(m.group("orig_size"))
+            loader_chans.update(determine_required_fields(f"ns_{orig_name}_{orig_size}"))
+        elif re.match(r"^ns_(u|v)(_corr)?_\d+$", chan):
+            loader_chans.add(chan)
+        elif m := re.match(r"^ns_(vort|uv)_(?P<size>\d+)$", chan):
+            size = int(m.group("size"))
+            loader_chans.update(determine_required_fields([f"ns_u_{size}", f"ns_v_{size}"]))
+        elif m := re.match(r"^ns_uv_corr_(?P<size>\d+)$", chan):
+            size = int(m.group("size"))
+            loader_chans.update(determine_required_fields([f"ns_u_corr_{size}", f"ns_v_corr_{size}"]))
+        elif m := re.match(r"^ns_scaled_(?P<orig_name>.+?)_(?P<orig_size>\d+)to\d+$", chan):
+            orig_name = m.group("orig_name")
+            orig_size = int(m.group("orig_size"))
+            loader_chans.update(determine_required_fields(f"ns_{orig_name}_{orig_size}"))
         elif m := re.match(r"^residual:(?P<chan1>[^-]+)-(?P<chan2>[^-]+)$", chan):
             loader_chans.update(determine_required_fields([m.group("chan1"), m.group("chan2")]))
         else:
@@ -506,6 +531,12 @@ def determine_channel_size(chan):
     if m := re.match(r"^(q_total_forcing|q|(?:(?:ejnorm_)?(?:rek|delta|beta)))_(?P<size>\d+)$", chan):
         return int(m.group("size"))
     elif m := re.match(r"^(q_scaled_forcing|q_scaled)_\d+to(?P<size>\d+)$", chan):
+        return int(m.group("size"))
+    elif m := re.match(r"^ns_(u|v)(_corr)?_(?P<size>\d+)$", chan):
+        return int(m.group("size"))
+    elif m := re.match(r"^ns_scaled_.+?_\d+to(?P<size>\d+)$", chan):
+        return int(m.group("size"))
+    elif m := re.match(r"^ns_(vort|uv|uv_corr)_(?P<size>\d+)$", chan):
         return int(m.group("size"))
     elif m := re.match(r"^residual:(?P<chan1>[^-]+)-(?P<chan2>[^-]+)$", chan):
         return max(
@@ -520,6 +551,21 @@ def determine_channel_layers(chan):
     """Determine the number of layers based on the channel name"""
     if re.match(r"^(q|q_total_forcing)_\d+$", chan):
         return 2
+    elif re.match(r"^ns_(u|v)(_corr)?_\d+$", chan):
+        return 1
+    elif m := re.match(r"^ns_vort_(?P<size>\d+)$", chan):
+        size = int(m.group("size"))
+        return determine_channel_layers(f"ns_u_{size}")
+    elif m := re.match(r"^ns_uv_(?P<size>\d+)$", chan):
+        size = int(m.group("size"))
+        return determine_channel_layers(f"ns_u_{size}") + determine_channel_layers(f"ns_v_{size}")
+    elif m := re.match(r"^ns_uv_corr_(?P<size>\d+)$", chan):
+        size = int(m.group("size"))
+        return determine_channel_layers(f"ns_u_corr_{size}") + determine_channel_layers(f"ns_v_corr_{size}")
+    elif m := re.match(r"^ns_scaled_(?P<orig_name>.+?)_(?P<orig_size>\d+)to\d+$", chan):
+        orig_name = m.group("orig_name")
+        orig_size = int(m.group("orig_size"))
+        return determine_channel_layers(f"ns_{orig_name}_{orig_size}")
     elif re.match(r"^(?:ejnorm_)?(?:rek|delta|beta)_\d+$", chan):
         return 1
     elif m := re.match(r"^q_scaled_forcing_(?P<orig_size>\d+)to\d+$", chan):
@@ -592,6 +638,9 @@ class ModelParams:
 
 
 def load_model_params(train_path, eval_path=None):
+    if sniff_system_type(train_path) == "ns":
+        # Load NS params
+        return ns_loader.load_system_stats(train_path)
     if eval_path is None:
         eval_path = train_path
     train_path = pathlib.Path(train_path)
@@ -624,7 +673,16 @@ def load_model_params(train_path, eval_path=None):
 def make_basic_coarsener(from_size, to_size, model_params, coarse_cls=coarsen.BasicSpectralCoarsener):
     model_size = max(from_size, to_size)
     small_size = min(from_size, to_size)
-    big_model = model_params.qg_models[model_size]
+    system_type = getattr(model_params, "system_type", "qg")
+    if system_type == "qg":
+        big_model = model_params.qg_models[model_size]
+    elif system_type == "ns":
+        big_model = pyqg_jax.qg_model.QGModel(
+            nx=model_size,
+            ny=model_size,
+        )
+    else:
+        raise ValueError(f"unsupported system {system_type}")
     if from_size == to_size:
         return coarsen.NoOpCoarsener(big_model=big_model, small_nx=small_size).coarsen
     direct_op = coarse_cls(big_model=big_model, small_nx=small_size)
@@ -667,6 +725,42 @@ def make_channel_from_batch(channel, batch, model_params, alt_source=None):
         orig_size = int(m.group("orig_size"))
         return jax.vmap(make_basic_coarsener(orig_size, end_size, model_params))(
             make_channel_from_batch(f"q_{orig_size}", batch, model_params, alt_source=alt_source)
+        )
+    elif m := re.match(r"^ns_(?P<base>(u|v)(_corr)?)_(?P<size>\d+)$", channel):
+        base_chan = m.group("base")
+        return jax.vmap(model_params.size_stats[int(m.group("size"))].field_stats(base_chan).scale_to_standard)(
+            jnp.expand_dims(getattr(batch, base_chan), -3)
+        ).astype(jnp.float32)
+    elif m := re.match(r"^ns_uv_(?P<size>\d+)$", channel):
+        orig_size = int(m.group("size"))
+        u = make_channel_from_batch(f"ns_u_{orig_size}", batch, model_params, alt_source=alt_source)
+        v = make_channel_from_batch(f"ns_v_{orig_size}", batch, model_params, alt_source=alt_source)
+        # Package/"encode" grid as done by jax_cfd
+        eu, ev = jax.vmap(lambda u, v: ns_utils.make_train_encoder(size=orig_size)((u, v)))(u, v)
+        return jnp.stack([eu.data, ev.data], axis=-3)
+    elif m := re.match(r"^ns_uv_corr_(?P<size>\d+)$", channel):
+        orig_size = int(m.group("size"))
+        u_corr = make_channel_from_batch(f"ns_u_corr_{orig_size}", batch, model_params, alt_source=alt_source)
+        v_corr = make_channel_from_batch(f"ns_v_corr_{orig_size}", batch, model_params, alt_source=alt_source)
+        # Package/"encode" grid as done by jax_cfd
+        euc, evc = jax.vmap(lambda u, v: ns_utils.make_train_encoder(size=orig_size)((u, v)))(u_corr, v_corr)
+        return jnp.stack([euc.data, evc.data], axis=-3)
+    elif m := re.match(r"^ns_vort_(?P<size>\d+)$", channel):
+        orig_size = int(m.group("size"))
+        uv = make_channel_from_batch(f"ns_uv_{orig_size}", batch, model_params, alt_source=alt_source)
+        u = uv[..., 0, :, :]
+        v = uv[..., 1, :, :]
+        dx = model_params.size_stats[orig_size].dx
+        dy = model_params.size_stats[orig_size].dx
+        dv_dx = (jnp.roll(v, -1, axis=-2) - v) / dx
+        du_dy = (jnp.roll(u, -1, axis=-1) - u) / dy
+        vort = jnp.expand_dims(dv_dx - du_dy, -3)
+        return vort
+    elif m := re.match(r"^ns_scaled_(?P<orig_name>.+?)_(?P<orig_size>\d+)to\d+$", channel):
+        orig_name = m.group("orig_name")
+        orig_size = int(m.group("orig_size"))
+        return jax.vmap(make_basic_coarsener(orig_size, end_size, model_params))(
+            make_channel_from_batch(f"ns_{orig_name}_{orig_size}", batch, model_params, alt_source=alt_source)
         )
     elif m := re.match(r"^residual:(?P<chan1>[^-]+)-(?P<chan2>[^-]+)$", channel):
         chan1 = jax.vmap(
@@ -1131,6 +1225,82 @@ def load_network_continue(weight_file, old_state, old_net_info):
     return state, net_info
 
 
+def make_train_loader(
+    *,
+    train_path,
+    system_type,
+    batch_size,
+    loader_chunk_size,
+    base_logger,
+    np_rng,
+    required_fields
+):
+    if system_type == "qg":
+        return AggregateLoader(
+            loaders=[
+                ThreadedPreShuffledSnapshotLoader(
+                    file_path=train_path,
+                    batch_size=batch_size,
+                    chunk_size=loader_chunk_size,
+                    buffer_size=10,
+                    seed=np_rng.integers(2**32).item(),
+                    base_logger=base_logger.getChild("train_loader"),
+                    fields=required_fields,
+                ),
+                FillableDataLoader(
+                    batch_size=batch_size,
+                    fields=required_fields,
+                    seed=np_rng.integers(2**32).item(),
+                ),
+                FillableDataLoader(
+                    batch_size=batch_size,
+                    fields=required_fields,
+                    seed=np_rng.integers(2**32).item(),
+                ),
+            ],
+            batch_size=batch_size,
+            seed=np_rng.integers(2**32).item(),
+        )
+    elif system_type == "ns":
+        return ns_loader.NSAggregateLoader(
+            loaders=[
+                ns_loader.NSThreadedPreShuffledSnapshotLoader(
+                    file_path=train_path,
+                    batch_size=batch_size,
+                    buffer_size=10,
+                    chunk_size=loader_chunk_size,
+                    seed=np_rng.integers(2**32).item(),
+                    base_logger=base_logger.getChild("train_loader"),
+                    fields=required_fields,
+                ),
+            ],
+            batch_size=batch_size,
+            seed=np_rng.integers(2**32).item(),
+        )
+    else:
+        raise ValueError(f"unsupported system {system_type}")
+
+
+def make_val_loader(
+    *,
+    file_path,
+    required_fields,
+    system_type,
+):
+    if system_type == "qg":
+        return SimpleQGLoader(
+            file_path=file_path,
+            fields=required_fields,
+        )
+    elif system_type == "ns":
+        return ns_loader.SimpleNSLoader(
+            file_path=file_path,
+            fields=required_fields,
+        )
+    else:
+        raise ValueError(f"unsupported system {system_type}")
+
+
 def main(args):
     out_dir = pathlib.Path(args.out_dir)
     if out_dir.is_file():
@@ -1159,6 +1329,8 @@ def main(args):
     # Configure required elements for training
     rng_ctr = jax.random.PRNGKey(seed=np_rng.integers(2**32).item())
     train_path = (pathlib.Path(args.train_set) / "shuffled.hdf5").resolve()
+    system_type = sniff_system_type(train_path)
+    logger.info("System type %s", system_type)
     if args.live_gen_base_data is None:
         live_gen_path = train_path
     else:
@@ -1276,36 +1448,21 @@ def main(args):
     with contextlib.ExitStack() as train_context:
         # Open data files
         train_loader = train_context.enter_context(
-            AggregateLoader(
-                loaders=[
-                    ThreadedPreShuffledSnapshotLoader(
-                        file_path=train_path,
-                        batch_size=args.batch_size,
-                        chunk_size=args.loader_chunk_size,
-                        buffer_size=10,
-                        seed=np_rng.integers(2**32).item(),
-                        base_logger=logger.getChild("train_loader"),
-                        fields=required_fields,
-                    ),
-                    FillableDataLoader(
-                        batch_size=args.batch_size,
-                        fields=required_fields,
-                        seed=np_rng.integers(2**32).item(),
-                    ),
-                    FillableDataLoader(
-                        batch_size=args.batch_size,
-                        fields=required_fields,
-                        seed=np_rng.integers(2**32).item(),
-                    ),
-                ],
+            make_train_loader(
+                train_path=train_path,
+                system_type=system_type,
                 batch_size=args.batch_size,
-                seed=np_rng.integers(2**32).item(),
+                loader_chunk_size=args.loader_chunk_size,
+                base_logger=logger,
+                np_rng=np_rng,
+                required_fields=required_fields,
             )
         )
         val_loader = train_context.enter_context(
-            SimpleQGLoader(
+            make_val_loader(
                 file_path=val_path,
-                fields=required_fields,
+                required_fields=required_fields,
+                system_type=system_type,
             )
         )
 
@@ -1429,16 +1586,22 @@ def main(args):
                 set_switch_count = (epoch - args.live_gen_start_epoch) // args.live_gen_switch_set_interval
                 fillable_idx = 1 + (set_switch_count % 2)
                 just_switched = ((epoch - args.live_gen_start_epoch) % args.live_gen_switch_set_interval) == 0
-                fillable_loader = train_loader.loaders[fillable_idx]
-                assert isinstance(fillable_loader, FillableDataLoader)
-                if just_switched:
+                if fillable_idx < len(train_loader.loaders):
+                    fillable_loader = train_loader.loaders[fillable_idx]
+                else:
+                    fillable_loader = None
+                assert fillable_loader is None or isinstance(fillable_loader, FillableDataLoader)
+                if fillable_loader is not None and just_switched:
                     logger.info("Clearing new data loader %d", fillable_idx)
                     num_dirty_samples[fillable_idx] = 0
                     fillable_loader.clear()
             else:
                 fillable_idx = 1
-                fillable_loader = train_loader.loaders[fillable_idx]
-                assert isinstance(fillable_loader, FillableDataLoader)
+                if fillable_idx < len(train_loader.loaders):
+                    fillable_loader = train_loader.loaders[fillable_idx]
+                else:
+                    fillable_loader = None
+                assert fillable_loader is None or isinstance(fillable_loader, FillableDataLoader)
             new_live_trajs, new_traj_info, rng_ctr = live_gen_func(
                 epoch=epoch,
                 rng_ctr=rng_ctr,
