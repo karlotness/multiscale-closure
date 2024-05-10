@@ -37,15 +37,6 @@ parser.add_argument("--trajectory_batch_size", type=int, default=16, help="Numbe
 parser.add_argument("--param_alpha", type=float, default=1.0, help="Filter factor scaling parameter")
 
 
-def batched(iterable, n):
-    # Following recipe from itertools documentation
-    if n < 1:
-        raise ValueError('n must be at least one')
-    it = iter(iterable)
-    while batch := tuple(itertools.islice(it, n)):
-        yield batch
-
-
 def pearsonr(x, y):
     # Based on SciPy implementation
     assert x.ndim == 1
@@ -437,7 +428,7 @@ def main():
                 results_group.create_group(f"traj{traj_num:05d}")
 
             for net_id, ln in zip(net_ids, loaded_nets, strict=True):
-                for traj_batch in batched(range(data_set.num_trajs), args.trajectory_batch_size):
+                for traj_batch in itertools.batched(range(data_set.num_trajs), args.trajectory_batch_size):
                     # Load data
                     logger.info("Loading trajectories %d - %d", min(traj_batch), max(traj_batch))
                     traj_data = []
