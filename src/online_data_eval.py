@@ -19,7 +19,7 @@ import cascaded_eval
 from cascaded_train import name_remove_residual
 from systems.qg import loader, spectral, utils as qg_utils, coarsen
 from online_ke_data import model_rollout
-from train import determine_required_fields, determine_channel_size, load_model_params, determine_output_size
+from train import determine_required_fields, determine_channel_size, load_model_params, determine_output_size, sniff_system_type
 from online_ensemble_compare import make_ke_time_computer, LoadedNetwork, ke_spec, SYS_INFO_CHANNELS
 from cascaded_online_eval import make_net_param_func
 import pyqg_jax
@@ -305,7 +305,8 @@ def load_networks(net_paths, eval_file, logger=None):
                     model_params=load_model_params(net_info["train_path"], eval_path=eval_file),
                 )
             )
-        del loaded_nets[-1].model_params.qg_models["big_model"]
+        if sniff_system_type(eval_file) == "qg":
+            del loaded_nets[-1].model_params.qg_models["big_model"]
     # Add null network
     null_net_info = loaded_nets[0].net_info.copy()
     null_net_info["input_channels"] = list(map(name_remove_residual, filter(lambda c: not re.match(SYS_INFO_CHANNELS, c), loaded_nets[0].net_info["input_channels"])))
