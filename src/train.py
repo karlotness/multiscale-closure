@@ -728,9 +728,13 @@ def make_channel_from_batch(channel, batch, model_params, alt_source=None):
         )
     elif m := re.match(r"^ns_(?P<base>(u|v)(_corr)?)_(?P<size>\d+)$", channel):
         base_chan = m.group("base")
-        return jax.vmap(model_params.size_stats[int(m.group("size"))].field_stats(base_chan).scale_to_standard)(
+        target_size = int(m.group("size"))
+        ret = jax.vmap(model_params.size_stats[target_size].field_stats(base_chan).scale_to_standard)(
             jnp.expand_dims(getattr(batch, base_chan), -3)
         ).astype(jnp.float32)
+        if ret.shape[-2:] != (target_size, target_size):
+            raise ValueError(f"Input batch has wrong base size {ret.shape} should be {target_size}")
+        return ret
     elif m := re.match(r"^ns_uv_(?P<size>\d+)$", channel):
         orig_size = int(m.group("size"))
         u = make_channel_from_batch(f"ns_u_{orig_size}", batch, model_params, alt_source=alt_source)
