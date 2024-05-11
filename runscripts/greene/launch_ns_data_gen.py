@@ -19,6 +19,8 @@ VAST = pathlib.Path(os.environ["VAST"]).resolve()
 BATCH_TRAJS = 2
 SIMULTANEOUS_TRAJS = 2
 GEN_TIME = "12:00:00"
+COMBINE_TIME = "4:00:00"
+SHUFFLE_TIME = "12:00:00"
 BIG_SIZE = 2048
 SMALL_SIZES = {64, 128}
 
@@ -65,3 +67,47 @@ for phase, num_trajs, seed in [
             mem_gb=20,
         )
         launches.append(launch_id)
+    # Collect launched data
+    launch_args = [
+        "python",
+        "generate_data.py",
+        phase_dir,
+        "combine_ns_slice",
+    ]
+    combine_id = lu.container_cmd_launch(
+        launch_args,
+        time_limit=COMBINE_TIME,
+        job_name=f"ns-comb-{phase}",
+        cpus=2,
+        gpus=0,
+        mem_gb=20,
+        dependency_ids=launches,
+    )
+    # Clean up *.nc files
+    lu.raw_cmd_launch(
+        [f"rm {phase_dir}/data-slice*-sz*.nc"],
+        dependency_ids=[combine_id],
+        job_name=f"clean-{phase}",
+        cpus=1,
+        gpus=0,
+        mem_gb=1,
+        time_limit="0:30:00",
+    )
+    # If phase is train, we need to shuffle data
+    if phase == "train":
+        launch_args = [
+            "python",
+            "generate_data.py",
+            phase_dir,
+            "shuffle_ns_data",
+            "--seed=123",
+        ]
+        shuffle_id = lu.container_cmd_launch(
+            launch_args,
+            time_limit=SHUFFLE_TIME,
+            job_name=f"ns-shuf-{phase}",
+            cpus=8,
+            gpus=0,
+            mem_gb=20,
+            dependency_ids=[combine_id],
+        )
