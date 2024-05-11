@@ -1,6 +1,8 @@
 import jax_cfd
 import jax_cfd.ml
 import jax_cfd.base
+import jax
+import jax.numpy as jnp
 import math
 import operator
 import textwrap
@@ -9,8 +11,8 @@ import typing
 import functools
 
 
-def make_grid(size):
-    return jax_cfd.base.grids.Grid(((operator.index(size),)*2), domain=([(0, 2*math.pi)]*2))
+def make_grid(size, grid_domain_scale=1):
+    return jax_cfd.base.grids.Grid(((operator.index(size),)*2), domain=([(0, 2*grid_domain_scale*math.pi)]*2))
 
 
 def make_generation_config(viscosity=0.001):
