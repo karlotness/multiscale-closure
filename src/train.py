@@ -755,7 +755,7 @@ def make_channel_from_batch(channel, batch, model_params, alt_source=None):
         u = uv[..., 0, :, :]
         v = uv[..., 1, :, :]
         dx = model_params.size_stats[orig_size].dx
-        dy = model_params.size_stats[orig_size].dx
+        dy = model_params.size_stats[orig_size].dy
         dv_dx = (jnp.roll(v, -1, axis=-2) - v) / dx
         du_dy = (jnp.roll(u, -1, axis=-1) - u) / dy
         vort = jnp.expand_dims(dv_dx - du_dy, -3)
