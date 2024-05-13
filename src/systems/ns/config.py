@@ -11,8 +11,8 @@ import typing
 import functools
 
 
-def make_grid(size, grid_domain_scale=1):
-    return jax_cfd.base.grids.Grid(((operator.index(size),)*2), domain=([(0, 2*grid_domain_scale*math.pi)]*2))
+def make_grid(size, grid_domain_scale=1, ndim=2):
+    return jax_cfd.base.grids.Grid(((operator.index(size),)*ndim), domain=([(0, 2*grid_domain_scale*math.pi)]*ndim))
 
 
 def make_generation_config(viscosity=0.001):
