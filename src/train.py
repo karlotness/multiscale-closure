@@ -1186,7 +1186,11 @@ def init_network(architecture, lr, rng, input_channels, output_channels, process
         case "adamw":
             optim = optax.adamw(learning_rate=schedule)
         case _:
-            raise ValueError(f"unsupported optimizer {optim_type}")
+            if m := re.match(r"adam:eps=(?P<eps>[^,]+)", optim_type):
+                eps = float(m.group("eps"))
+                optim = optax.adam(learning_rate=schedule, eps=eps)
+            else:
+                raise ValueError(f"unsupported optimizer {optim_type}")
 
     optim = optax.apply_if_finite(
         optax.chain(
