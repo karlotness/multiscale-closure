@@ -41,7 +41,7 @@ parser.add_argument("--num_val_samples", type=int, default=10, help="Number of s
 parser.add_argument("--val_sample_seed", type=int, default=1234, help="RNG seed to select validation samples")
 parser.add_argument("--val_interval", type=int, default=1, help="Number of epochs between validation periods")
 parser.add_argument("--architecture", type=str, nargs="+", default=["gz-fcnn-v1"], help="Network architecture to train")
-parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam", "adamw"], help="Which optimizer to use")
+parser.add_argument("--optimizer", type=str, default="adabelief", help="Which optimizer to use")
 parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine", "ross22"], help="What learning rate schedule")
 parser.add_argument("--normalization", type=str, default="none", choices=["none", "layer"], help="What type of normalization to apply in the network")
 parser.add_argument("--net_load_type", type=str, default="best_loss", help="Which saved weights to load for previous networks")

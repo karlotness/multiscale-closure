@@ -51,7 +51,7 @@ parser.add_argument("--input_channels", type=str, nargs="+", default=["q_64"], h
 parser.add_argument("--noise_specs", type=str, nargs="+", default=[], help="Channels with noise variances (format 'channel=var0,var1')")
 parser.add_argument("--processing_size", type=int, default=None, help="Size to user for internal network evaluation (default: select automatically)")
 parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", help="Network architecture to train")
-parser.add_argument("--optimizer", type=str, default="adabelief", choices=["adabelief", "adam", "adamw"], help="Which optimizer to use")
+parser.add_argument("--optimizer", type=str, default="adabelief", help="Which optimizer to use")
 parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine", "ross22"], help="What learning rate schedule")
 parser.add_argument("--network_zero_mean", action="store_true", help="Constrain the network to zero mean outputs")
 parser.add_argument("--loader_chunk_size", type=int, default=10850, help="Chunk size to read before batching")
