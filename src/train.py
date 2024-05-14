@@ -670,7 +670,7 @@ def load_model_params(train_path, eval_path=None):
     )
 
 
-def make_basic_coarsener(from_size, to_size, model_params, coarse_cls=coarsen.BasicSpectralCoarsener):
+def make_basic_coarsener(from_size, to_size, model_params):
     model_size = max(from_size, to_size)
     small_size = min(from_size, to_size)
     system_type = getattr(model_params, "system_type", "qg")
@@ -685,7 +685,7 @@ def make_basic_coarsener(from_size, to_size, model_params, coarse_cls=coarsen.Ba
         raise ValueError(f"unsupported system {system_type}")
     if from_size == to_size:
         return coarsen.NoOpCoarsener(big_model=big_model, small_nx=small_size).coarsen
-    direct_op = coarse_cls(big_model=big_model, small_nx=small_size)
+    direct_op = coarsen.BasicSpectralCoarsener(big_model=big_model, small_nx=small_size)
     if from_size < to_size:
         return direct_op.uncoarsen
     else:
