@@ -674,22 +674,28 @@ def make_basic_coarsener(from_size, to_size, model_params):
     model_size = max(from_size, to_size)
     small_size = min(from_size, to_size)
     system_type = getattr(model_params, "system_type", "qg")
-    if system_type == "qg":
+    if system_type == "ns":
+        if from_size == to_size:
+            return (lambda img: img)
+        else:
+            return jax.vmap(
+                functools.partial(
+                    jax.image.resize,
+                    shape=(to_size, to_size),
+                    method="nearest",
+                )
+            )
+    elif system_type == "qg":
         big_model = model_params.qg_models[model_size]
-    elif system_type == "ns":
-        big_model = pyqg_jax.qg_model.QGModel(
-            nx=model_size,
-            ny=model_size,
-        )
+        if from_size == to_size:
+            return coarsen.NoOpCoarsener(big_model=big_model, small_nx=small_size).coarsen
+        direct_op = coarsen.BasicSpectralCoarsener(big_model=big_model, small_nx=small_size)
+        if from_size < to_size:
+            return direct_op.uncoarsen
+        else:
+            return direct_op.coarsen
     else:
         raise ValueError(f"unsupported system {system_type}")
-    if from_size == to_size:
-        return coarsen.NoOpCoarsener(big_model=big_model, small_nx=small_size).coarsen
-    direct_op = coarsen.BasicSpectralCoarsener(big_model=big_model, small_nx=small_size)
-    if from_size < to_size:
-        return direct_op.uncoarsen
-    else:
-        return direct_op.coarsen
 
 
 def make_channel_from_batch(channel, batch, model_params, alt_source=None):
