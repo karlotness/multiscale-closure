@@ -85,10 +85,10 @@ class BaseNetRun:
 
 
 LR_ASSIGNMENTS = {
-    "small": SweepParams(peak_lr=0.001, num_epochs=100),
-    "puresmall": SweepParams(peak_lr=0.001, num_epochs=100),
-    "medium": SweepParams(peak_lr=0.0004, num_epochs=50),
-    "puremedium": SweepParams(peak_lr=0.0004, num_epochs=50),
+    "small": SweepParams(peak_lr=0.001, num_epochs=150),
+    "puresmall": SweepParams(peak_lr=0.001, num_epochs=150),
+    "medium": SweepParams(peak_lr=0.0004, num_epochs=75),
+    "puremedium": SweepParams(peak_lr=0.0004, num_epochs=75),
 }
 
 
@@ -133,7 +133,7 @@ def launch_training(
         out_dir,
         train_dir,
         val_dir,
-        f"--optimizer={optimizer}",
+        "--optimizer", str(optimizer),
         f"--batch_size={batch_size:d}",
         f"--num_epochs={num_epochs:d}",
         f"--batches_per_epoch={batches_per_epoch:d}",
@@ -199,7 +199,7 @@ def launch_sequential_training(
         args.extend(scales)
         args.extend(
             [
-                f"--optimizer={optimizer}",
+                "--optimizer", str(optimizer),
                 f"--batch_size={batch_size:d}",
                 "--loader_chunk_size=23925",
                 f"--num_epochs={num_epochs[train_step]:d}",
@@ -264,8 +264,10 @@ for scale_set in SCALE_SETS:
                 out_dir=out_dir,
                 train_dir=DATA_FILES.train.parent,
                 val_dir=DATA_FILES.val.parent,
-                scale=max(scale_set),
+                scale=peak_scale,
                 num_epochs=num_epochs,
+                batch_size=32,
+                optimizer="adam:eps=0.0001",
                 lr=peak_lr,
                 lr_schedule=LR_SCHEDULE,
                 architecture=arch,
@@ -289,6 +291,8 @@ for scale_set in SCALE_SETS:
                 train_dir=DATA_FILES.train.parent,
                 val_dir=DATA_FILES.val.parent,
                 scales=scale_set,
+                batch_size=32,
+                optimizer="adam:eps=0.0001",
                 num_epochs=[num_epochs] * len(scale_set),
                 lrs=[peak_lr] * len(scale_set),
                 lr_schedule=LR_SCHEDULE,
