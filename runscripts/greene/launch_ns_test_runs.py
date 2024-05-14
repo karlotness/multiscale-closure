@@ -235,17 +235,28 @@ def launch_sequential_training(
     return lu.container_cmd_launch(args, time_limit="0:30:00", job_name="seq-to-cascade", cpus=1, gpus=0, mem_gb=4, dependency_ids=dependency_ids)
 
 
-for scale_set in SCALE_SETS:
-    scale_set = tuple(sorted(scale_set, reverse=True))
-    assert len(scale_set) == 2
-    scale_set_underscore = "_".join(map(str, scale_set))
-    scale_set_dir = base_out_dir / f"ns-{scale_set_underscore}"
+def launch_online_eval(*, out_file, eval_file, weight_files, dependency_ids=None):
+    args = [
+        "python",
+        "online_ns_data_eval.py",
+        out_file,
+        eval_file,
+    ]
+    args.extend(weight_files)
+    return lu.container_cmd_launch(args, time_limit="15:00:00", job_name="eval", cpus=1, gpus=1, mem_gb=20, dependency_ids=dependency_ids)
+
+
+scale_set_lengths = set(len(scs) for scs in SCALE_SETS)
+if len(scale_set_lengths) != 1:
+    raise ValueError("Scale sets should all have the same length")
+scale_set_length = scale_set_lengths.pop()
+for peak_scale in set(max(scs) for scs in SCALE_SETS):
+    scale_set_dir = base_out_dir / f"ns-{peak_scale:d}"
     lu.dry_run_mkdir(scale_set_dir)
     # Launch base runs
     base_runs = {}
-    seq_runs = {}
-    base_inputs = [f"ns_uv_{max(scale_set):d}", f"ns_vort_{max(scale_set):d}"]
-    base_outputs = [f"ns_uv_corr_{max(scale_set):d}"]
+    base_inputs = [f"ns_uv_{peak_scale:d}", f"ns_vort_{peak_scale:d}"]
+    base_outputs = [f"ns_uv_corr_{peak_scale:d}"]
     for arch_base, base_depth in itertools.product(ARCH_BASES, NET_DEPTHS):
         # BASELINE RUNS
         arch_out_dir = scale_set_dir / f"{arch_base}-{base_depth}"
@@ -255,7 +266,7 @@ for scale_set in SCALE_SETS:
         num_epochs = train_params.num_epochs
         peak_lr = train_params.peak_lr
         base_arch = f"shallow-gz-fcnn-v1-{arch_base}-l{base_depth:d}"
-        arch_str = ":".join(itertools.repeat(base_arch, len(scale_set)))
+        arch_str = ":".join(itertools.repeat(base_arch, scale_set_length))
         arch = f"stacked-noscale-net-v1-{arch_str}"
         for repeat in range(NUM_REPEATS):
             out_dir = arch_out_dir / f"base-stacked-{repeat + 1:d}"
@@ -280,6 +291,39 @@ for scale_set in SCALE_SETS:
                     run_id=train_id,
                 )
             )
+
+    # Launch online evaluation
+    online_eval_dir = scale_set_dir / "online-eval-results"
+    lu.dry_run_mkdir(online_eval_dir)
+    for base_key, eval_records in base_runs.items():
+        net_seq_str = "_".join(map(str, base_key))
+        eval_weight_files = [er.out_dir / "weights" / "best_val_loss.eqx" for er in eval_records]
+        train_runs = [er.run_id for er in eval_records]
+        launch_online_eval(
+            out_file=online_eval_dir / f"base-{peak_scale}-{net_seq_str}-best_val_loss.hdf5",
+            eval_file=DATA_FILES.test,
+            weight_files=eval_weight_files,
+            dependency_ids=train_runs,
+        )
+
+for scale_set in SCALE_SETS:
+    scale_set = tuple(sorted(scale_set, reverse=True))
+    assert len(scale_set) == 2
+    scale_set_underscore = "_".join(map(str, scale_set))
+    scale_set_dir = base_out_dir / f"ns-{scale_set_underscore}"
+    lu.dry_run_mkdir(scale_set_dir)
+    # Launch base runs
+    seq_runs = {}
+    base_inputs = [f"ns_uv_{max(scale_set):d}", f"ns_vort_{max(scale_set):d}"]
+    base_outputs = [f"ns_uv_corr_{max(scale_set):d}"]
+    for arch_base, base_depth in itertools.product(ARCH_BASES, NET_DEPTHS):
+        # BASELINE RUNS
+        arch_out_dir = scale_set_dir / f"{arch_base}-{base_depth}"
+        base_key = (arch_base, base_depth)
+        train_params = LR_ASSIGNMENTS[arch_base]
+        num_epochs = train_params.num_epochs
+        peak_lr = train_params.peak_lr
+        base_arch = f"shallow-gz-fcnn-v1-{arch_base}-l{base_depth:d}"
         # SEQUENTIAL RUNS
         seq_runs[base_key] = []
         for repeat in range(NUM_REPEATS):
@@ -305,3 +349,16 @@ for scale_set in SCALE_SETS:
                     run_id=train_id,
                 )
             )
+    # Launch online evaluation
+    online_eval_dir = scale_set_dir / "online-eval-results"
+    lu.dry_run_mkdir(online_eval_dir)
+    for base_key, eval_records in seq_runs.items():
+        net_seq_str = "_".join(map(str, base_key))
+        eval_weight_files = [er.out_dir / "weights" / "best_val_loss.eqx" for er in eval_records]
+        train_runs = [er.run_id for er in eval_records]
+        launch_online_eval(
+            out_file=online_eval_dir / f"seq-{scale_set_underscore}-{net_seq_str}-best_val_loss.hdf5",
+            eval_file=DATA_FILES.test,
+            weight_files=eval_weight_files,
+            dependency_ids=train_runs,
+        )
