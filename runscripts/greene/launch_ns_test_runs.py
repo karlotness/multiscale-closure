@@ -14,8 +14,8 @@ VAST = pathlib.Path(os.environ["VAST"]).resolve()
 # lu.enable_real_launch()
 
 # General parameters
-NUM_REPEATS = 3
-SCALE_SETS = [(128, 96), (128, 64), (64, 32), (64, 48)]
+NUM_REPEATS = 5
+SCALE_SETS = [(64, 32), (64, 48), (128, 96), (128, 64)]
 NET_DEPTHS = [8]
 ARCH_BASES = ["medium"]
 LR_SCHEDULE = "warmup1-cosine"
