@@ -682,7 +682,8 @@ def make_basic_coarsener(from_size, to_size, model_params):
                 functools.partial(
                     jax.image.resize,
                     shape=(to_size, to_size),
-                    method="nearest",
+                    method="linear",
+                    antialias=True,
                 )
             )
     elif system_type == "qg":
