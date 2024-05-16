@@ -46,6 +46,7 @@ def load_networks(weight_file):
                 input_channels=frozenset(net_params["input_channels"]),
                 output_channels=frozenset(net_params["output_channels"]),
                 processing_size=net_params["processing_size"],
+                net_aux=net_params.get("net_aux"),
             )
         )
     # Ensure all weights are float32

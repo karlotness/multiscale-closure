@@ -139,6 +139,7 @@ def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_w
         input_channels=net_info["input_channels"],
         output_channels=net_info["output_channels"],
         processing_size=net_info["processing_size"],
+        net_aux=net_info.get("net_aux", {}),
     )
     q_coarsener = coarse_cls(big_model=big_model, small_nx=q_size)
     forcing_coarseners = {s: coarse_cls(big_model=big_model, small_nx=s) for s in q_forcing_sizes}

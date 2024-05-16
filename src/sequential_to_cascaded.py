@@ -43,6 +43,7 @@ def join_network_info(out_dir, num_nets):
                 "input_channels": ni["input_channels"],
                 "output_channels": ni["output_channels"],
                 "processing_size": ni["processing_size"],
+                "net_aux": ni.get("net_aux", {}),
             }
             for ni in network_infos
         ]

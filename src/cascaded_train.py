@@ -75,6 +75,10 @@ class NetData:
     input_channels: set[str]
     output_channels: set[str]
     processing_size: int
+    net_aux: dict[str, object] = dataclasses.field(
+        default_factory=dict,
+        metadata={"closure_field_opts": {"static": True}},
+    )
 
 
 def init_networks(architecture, lr, rng, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name, processing_scales, normalization):

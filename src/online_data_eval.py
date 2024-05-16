@@ -282,7 +282,8 @@ def load_networks(net_paths, eval_file, logger=None):
                         cascaded_eval.NetData(
                             input_channels=net_info["input_channels"],
                             output_channels=net_info["output_channels"],
-                            processing_size=net_info["processing_size"]
+                            processing_size=net_info["processing_size"],
+                            net_aux=net_info.get("net_aux", {}),
                         ),
                     ],
                     net_path=str(net_path.resolve()),
@@ -315,6 +316,7 @@ def load_networks(net_paths, eval_file, logger=None):
         input_channels=null_net_info["input_channels"],
         output_channels=null_net_info["output_channels"],
         processing_size=null_net_info["processing_size"],
+        net_aux=null_net_info.get("net_aux", {}),
     )
 
     def out_shape(in_shape, out_chans):
