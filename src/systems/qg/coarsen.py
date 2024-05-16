@@ -1,3 +1,4 @@
+import inspect
 import jax
 import jax.numpy as jnp
 import pyqg_jax
@@ -12,14 +13,20 @@ def _generic_irfftn(a):
     return jnp.fft.irfftn(a, axes=(-2, -1))
 
 
+def model_to_args(model):
+    return {
+        arg: getattr(model, arg) for arg in inspect.signature(type(model)).parameters
+    }
+
+
 def coarsen_model(big_model, small_nx):
     assert big_model.nx == big_model.ny
     assert small_nx < big_model.nx
     assert small_nx % 2 == 0
-    model_args = utils.qg_model_to_args(big_model)
+    model_args = model_to_args(big_model)
     model_args["nx"] = small_nx
     model_args["ny"] = small_nx
-    return pyqg_jax.qg_model.QGModel(**model_args)
+    return type(big_model)(**model_args)
 
 
 class Coarsener:
