@@ -65,6 +65,7 @@ parser.add_argument("--live_gen_mode", type=str, default="add-hardest", choices=
 parser.add_argument("--live_gen_net_steps", type=int, default=5, help="")
 parser.add_argument("--live_gen_base_data", type=str, default=None, help="")
 parser.add_argument("--live_gen_switch_set_interval", type=int, default=None, help="")
+parser.add_argument("--channel_coarsen_type", type=str, choices=["spectral", "linear", "nearest"], default="spectral", help="What coarsening operator should be used by the network to rescale channels")
 
 
 def sniff_system_type(data_file):
@@ -671,36 +672,95 @@ def load_model_params(train_path, eval_path=None):
     )
 
 
-def make_basic_coarsener(from_size, to_size, model_params):
+def make_basic_coarsener_linear(from_size, to_size):
+    if from_size == to_size:
+        return (lambda img: img)
+    else:
+        return jax.vmap(
+            functools.partial(
+                jax.image.resize,
+                shape=(to_size, to_size),
+                method="linear",
+                antialias=True,
+            )
+        )
+
+
+def make_basic_coarsener_nearest(from_size, to_size):
+    if from_size == to_size:
+        return (lambda img: img)
+    else:
+        return jax.vmap(
+            functools.partial(
+                jax.image.resize,
+                shape=(to_size, to_size),
+                method="nearest",
+                antialias=True,
+            )
+        )
+
+
+
+def make_basic_coarsener_spectral(from_size, to_size, model_params):
     model_size = max(from_size, to_size)
     small_size = min(from_size, to_size)
     system_type = getattr(model_params, "system_type", "qg")
     if system_type == "ns":
-        if from_size == to_size:
-            return (lambda img: img)
-        else:
-            return jax.vmap(
-                functools.partial(
-                    jax.image.resize,
-                    shape=(to_size, to_size),
-                    method="linear",
-                    antialias=True,
-                )
-            )
+        big_model = pyqg_jax.bt_model.BTModel(
+            nx=model_size,
+            ny=model_size,
+        )
+
+        def post_process_func(func):
+            @functools.wraps(func)
+            def coarsen_ns(chan):
+                return jax.vmap(func)(
+                    jnp.expand_dims(chan, 1)
+                ).squeeze(1)
+
+            return coarsen_ns
+
     elif system_type == "qg":
         big_model = model_params.qg_models[model_size]
-        if from_size == to_size:
-            return coarsen.NoOpCoarsener(big_model=big_model, small_nx=small_size).coarsen
-        direct_op = coarsen.BasicSpectralCoarsener(big_model=big_model, small_nx=small_size)
-        if from_size < to_size:
-            return direct_op.uncoarsen
-        else:
-            return direct_op.coarsen
+
+        def post_process_func(func):
+            return func
+
     else:
         raise ValueError(f"unsupported system {system_type}")
 
+    if from_size == to_size:
+        return post_process_func(coarsen.NoOpCoarsener(big_model=big_model, small_nx=small_size).coarsen)
+    direct_op = coarsen.BasicSpectralCoarsener(big_model=big_model, small_nx=small_size)
+    if from_size < to_size:
+        return post_process_func(direct_op.uncoarsen)
+    else:
+        return post_process_func(direct_op.coarsen)
 
-def make_channel_from_batch(channel, batch, model_params, alt_source=None):
+
+def make_basic_coarsener(from_size, to_size, model_params, net_aux={}):
+    match net_aux.get("channel_coarsen_type", "spectral"):
+        case "spectral":
+            return make_basic_coarsener_spectral(
+                from_size=from_size,
+                to_size=to_size,
+                model_params=model_params,
+            )
+        case "linear":
+            return make_basic_coarsener_linear(
+                from_size=from_size,
+                to_size=to_size,
+            )
+        case "nearest":
+            return make_basic_coarsener_nearest(
+                from_size=from_size,
+                to_size=to_size,
+            )
+        case _:
+            raise ValueError(f"unsupported coarsener type {coarsen_type}")
+
+
+def make_channel_from_batch(channel, batch, model_params, alt_source=None, net_aux={}):
     if alt_source is not None and channel in alt_source:
         return alt_source[channel]
     end_size = determine_channel_size(channel)
@@ -726,13 +786,13 @@ def make_channel_from_batch(channel, batch, model_params, alt_source=None):
         ).astype(jnp.float32)
     elif m := re.match(r"^q_scaled_forcing_(?P<orig_size>\d+)to\d+$", channel):
         orig_size = int(m.group("orig_size"))
-        return jax.vmap(make_basic_coarsener(orig_size, end_size, model_params))(
-            make_channel_from_batch(f"q_total_forcing_{orig_size}", batch, model_params, alt_source=alt_source)
+        return jax.vmap(make_basic_coarsener(orig_size, end_size, model_params, net_aux=net_aux))(
+            make_channel_from_batch(f"q_total_forcing_{orig_size}", batch, model_params, alt_source=alt_source, net_aux=net_aux)
         )
     elif m := re.match(r"^q_scaled_(?P<orig_size>\d+)to\d+$", channel):
         orig_size = int(m.group("orig_size"))
-        return jax.vmap(make_basic_coarsener(orig_size, end_size, model_params))(
-            make_channel_from_batch(f"q_{orig_size}", batch, model_params, alt_source=alt_source)
+        return jax.vmap(make_basic_coarsener(orig_size, end_size, model_params, net_aux=net_aux))(
+            make_channel_from_batch(f"q_{orig_size}", batch, model_params, alt_source=alt_source, net_aux=net_aux)
         )
     elif m := re.match(r"^ns_(?P<base>(u|v)(_corr)?)_(?P<size>\d+)$", channel):
         base_chan = m.group("base")
@@ -745,21 +805,21 @@ def make_channel_from_batch(channel, batch, model_params, alt_source=None):
         return ret
     elif m := re.match(r"^ns_uv_(?P<size>\d+)$", channel):
         orig_size = int(m.group("size"))
-        u = make_channel_from_batch(f"ns_u_{orig_size}", batch, model_params, alt_source=alt_source)
-        v = make_channel_from_batch(f"ns_v_{orig_size}", batch, model_params, alt_source=alt_source)
+        u = make_channel_from_batch(f"ns_u_{orig_size}", batch, model_params, alt_source=alt_source, net_aux=net_aux)
+        v = make_channel_from_batch(f"ns_v_{orig_size}", batch, model_params, alt_source=alt_source, net_aux=net_aux)
         # Package/"encode" grid as done by jax_cfd
         eu, ev = jax.vmap(lambda u, v: ns_utils.make_train_encoder(size=orig_size)((u, v)))(u, v)
         return jnp.stack([eu.data, ev.data], axis=-3)
     elif m := re.match(r"^ns_uv_corr_(?P<size>\d+)$", channel):
         orig_size = int(m.group("size"))
-        u_corr = make_channel_from_batch(f"ns_u_corr_{orig_size}", batch, model_params, alt_source=alt_source)
-        v_corr = make_channel_from_batch(f"ns_v_corr_{orig_size}", batch, model_params, alt_source=alt_source)
+        u_corr = make_channel_from_batch(f"ns_u_corr_{orig_size}", batch, model_params, alt_source=alt_source, net_aux=net_aux)
+        v_corr = make_channel_from_batch(f"ns_v_corr_{orig_size}", batch, model_params, alt_source=alt_source, net_aux=net_aux)
         # Package/"encode" grid as done by jax_cfd
         euc, evc = jax.vmap(lambda u, v: ns_utils.make_train_encoder(size=orig_size)((u, v)))(u_corr, v_corr)
         return jnp.stack([euc.data, evc.data], axis=-3)
     elif m := re.match(r"^ns_vort_(?P<size>\d+)$", channel):
         orig_size = int(m.group("size"))
-        uv = make_channel_from_batch(f"ns_uv_{orig_size}", batch, model_params, alt_source=alt_source)
+        uv = make_channel_from_batch(f"ns_uv_{orig_size}", batch, model_params, alt_source=alt_source, net_aux=net_aux)
         u = uv[..., 0, :, :]
         v = uv[..., 1, :, :]
         dx = model_params.size_stats[orig_size].dx
@@ -771,8 +831,8 @@ def make_channel_from_batch(channel, batch, model_params, alt_source=None):
     elif m := re.match(r"^ns_scaled_(?P<orig_name>.+?)_(?P<orig_size>\d+)to\d+$", channel):
         orig_name = m.group("orig_name")
         orig_size = int(m.group("orig_size"))
-        return jax.vmap(make_basic_coarsener(orig_size, end_size, model_params))(
-            make_channel_from_batch(f"ns_{orig_name}_{orig_size}", batch, model_params, alt_source=alt_source)
+        return jax.vmap(make_basic_coarsener(orig_size, end_size, model_params, net_aux=net_aux))(
+            make_channel_from_batch(f"ns_{orig_name}_{orig_size}", batch, model_params, alt_source=alt_source, net_aux=net_aux)
         )
     elif m := re.match(r"^residual:(?P<chan1>[^-]+)-(?P<chan2>[^-]+)$", channel):
         chan1 = jax.vmap(
@@ -780,15 +840,17 @@ def make_channel_from_batch(channel, batch, model_params, alt_source=None):
                 determine_channel_size(m.group("chan1")),
                 end_size,
                 model_params,
+                net_aux=net_aux,
             )
-        )(make_channel_from_batch(m.group("chan1"), batch, model_params, alt_source=alt_source))
+        )(make_channel_from_batch(m.group("chan1"), batch, model_params, alt_source=alt_source, net_aux=net_aux))
         chan2 = jax.vmap(
             make_basic_coarsener(
                 determine_channel_size(m.group("chan2")),
                 end_size,
                 model_params,
+                net_aux=net_aux,
             )
-        )(make_channel_from_batch(m.group("chan2"), batch, model_params, alt_source=alt_source))
+        )(make_channel_from_batch(m.group("chan2"), batch, model_params, alt_source=alt_source, net_aux=net_aux))
         return chan1 - chan2
     # System parameters
     elif m := re.match(r"^(?P<norm>ejnorm_)?(?P<chan>rek|delta|beta)_\d+$", channel):
@@ -811,12 +873,13 @@ def make_channel_from_batch(channel, batch, model_params, alt_source=None):
         raise ValueError(f"unsupported channel {channel}")
 
 
-def make_noisy_channel_from_batch(channel, batch, model_params, alt_source=None, noise_var=0, key=None):
+def make_noisy_channel_from_batch(channel, batch, model_params, alt_source=None, noise_var=0, key=None, net_aux={}):
     chan = make_channel_from_batch(
         channel=channel,
         batch=batch,
         model_params=model_params,
-        alt_source=alt_source
+        alt_source=alt_source,
+        net_aux=net_aux,
     )
     if np.any(noise_var != 0):
         noise_var = jnp.asarray(noise_var).astype(chan.dtype)
@@ -843,7 +906,7 @@ def standardize_noise_specs(channels, noise_spec):
     return noise_specs, count_noise
 
 
-def make_chunk_from_batch(channels, batch, model_params, processing_size, alt_source=None, noise_spec=None, key=None):
+def make_chunk_from_batch(channels, batch, model_params, processing_size, alt_source=None, noise_spec=None, key=None, net_aux={}):
     standard_channels = sorted(set(channels))
     stacked_channels = []
     noise_spec, count_noise = standardize_noise_specs(channels, noise_spec)
@@ -858,49 +921,49 @@ def make_chunk_from_batch(channels, batch, model_params, processing_size, alt_so
             key = keys.pop()
         else:
             key = None
-        data = make_noisy_channel_from_batch(channel, batch, model_params, alt_source=alt_source, noise_var=noise_var, key=key)
+        data = make_noisy_channel_from_batch(channel, batch, model_params, alt_source=alt_source, noise_var=noise_var, key=key, net_aux=net_aux)
         assert channel not in {"rek", "beta", "delta"} or data.shape[-1] == processing_size
         stacked_channels.append(
-            jax.vmap(make_basic_coarsener(data.shape[-1], processing_size, model_params))(data)
+            jax.vmap(make_basic_coarsener(data.shape[-1], processing_size, model_params, net_aux=net_aux))(data)
         )
     return jnp.concatenate(stacked_channels, axis=-3)
 
 
-def make_non_residual_chunk_from_batch(channels, batch, model_params, processing_size, alt_source=None):
+def make_non_residual_chunk_from_batch(channels, batch, model_params, processing_size, alt_source=None, net_aux={}):
     standard_channels = sorted(set(channels))
     stacked_channels = []
     for channel in standard_channels:
         if m := re.match(r"^residual:(?P<chan1>[^-]+)-(?P<chan2>[^-]+)$", channel):
             # Special processing for residual channel
             # Load base channel
-            data = make_channel_from_batch(m.group("chan1"), batch, model_params, alt_source=alt_source)
+            data = make_channel_from_batch(m.group("chan1"), batch, model_params, alt_source=alt_source, net_aux=net_aux)
             # Scale to residual size (and skip the subtraction)
-            data = jax.vmap(make_basic_coarsener(data.shape[-1], determine_channel_size(channel), model_params))(data)
+            data = jax.vmap(make_basic_coarsener(data.shape[-1], determine_channel_size(channel), model_params, net_aux=net_aux))(data)
             # Scale to final size
-            data = jax.vmap(make_basic_coarsener(data.shape[-1], processing_size, model_params))(data)
+            data = jax.vmap(make_basic_coarsener(data.shape[-1], processing_size, model_params, net_aux=net_aux))(data)
             stacked_channels.append(data)
         else:
             # Normal processing
-            data = make_channel_from_batch(channel, batch, model_params, alt_source=alt_source)
+            data = make_channel_from_batch(channel, batch, model_params, alt_source=alt_source, net_aux=net_aux)
             assert channel not in {"rek", "beta", "delta"} or data.shape[-1] == processing_size
             stacked_channels.append(
-                jax.vmap(make_basic_coarsener(data.shape[-1], processing_size, model_params))(data)
+                jax.vmap(make_basic_coarsener(data.shape[-1], processing_size, model_params, net_aux=net_aux))(data)
             )
     return jnp.concatenate(stacked_channels, axis=-3)
 
 
-def remove_residual_from_output_chunk(output_channels, output_chunk, batch, model_params, processing_size, alt_source=None):
+def remove_residual_from_output_chunk(output_channels, output_chunk, batch, model_params, processing_size, alt_source=None, net_aux={}):
     standard_channels = sorted(set(output_channels))
     stacked_channels = []
     for channel in standard_channels:
         if m := re.match(r"^residual:(?P<chan1>[^-]+)-(?P<chan2>[^-]+)$", channel):
             # Special processing for residual channel
             # Load base channel
-            data = make_channel_from_batch(m.group("chan2"), batch, model_params, alt_source=alt_source)
+            data = make_channel_from_batch(m.group("chan2"), batch, model_params, alt_source=alt_source, net_aux=net_aux)
             # Scale to residual size (and skip the subtraction)
-            data = jax.vmap(make_basic_coarsener(data.shape[-1], determine_channel_size(channel), model_params))(data)
+            data = jax.vmap(make_basic_coarsener(data.shape[-1], determine_channel_size(channel), model_params, net_aux=net_aux))(data)
             # Scale to final size
-            data = jax.vmap(make_basic_coarsener(data.shape[-1], processing_size, model_params))(data)
+            data = jax.vmap(make_basic_coarsener(data.shape[-1], processing_size, model_params, net_aux=net_aux))(data)
             stacked_channels.append(data)
         else:
             # Normal processing (no offset needed)
@@ -911,12 +974,12 @@ def remove_residual_from_output_chunk(output_channels, output_chunk, batch, mode
     return output_chunk + jnp.concatenate(stacked_channels, axis=-3)
 
 
-def make_batch_computer(input_channels, output_channels, model_params, processing_size, noise_spec):
+def make_batch_computer(input_channels, output_channels, model_params, processing_size, noise_spec, net_aux={}):
     output_size = determine_output_size(output_channels)
 
     def sample_loss(input_elem, target_elem, net):
         y = net(input_elem)
-        y = make_basic_coarsener(processing_size, output_size, model_params)(y)
+        y = make_basic_coarsener(processing_size, output_size, model_params, net_aux=net_aux)(y)
         mse = jnp.mean((y - target_elem)**2)
         return mse
 
@@ -944,6 +1007,7 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
             batch=batch,
             model_params=model_params,
             processing_size=output_size,
+            net_aux=net_aux,
         )
         if noise_spec:
             # Need to do noise processing and selection
@@ -958,12 +1022,14 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
                 processing_size=processing_size,
                 noise_spec=noise_spec,
                 key=rng2,
+                net_aux=net_aux,
             )
             input_chunk_clean1 = make_chunk_from_batch(
                 channels=input_channels,
                 batch=batch,
                 model_params=model_params,
                 processing_size=processing_size,
+                net_aux=net_aux,
             )
             # Pick how many to apply noise to
             indices = jnp.arange(batch_size, dtype=jnp.uint32)
@@ -975,6 +1041,7 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
                 batch=batch,
                 model_params=model_params,
                 processing_size=processing_size,
+                net_aux=net_aux,
             )
         # Store chunks
         input_chunks.append(input_chunk1)
@@ -990,6 +1057,7 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
                     batch=batch,
                     model_params=model_params,
                     processing_size=processing_size,
+                    net_aux=net_aux,
                 )
             )
             target_chunks.append(
@@ -998,6 +1066,7 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
                     batch=batch,
                     model_params=model_params,
                     processing_size=output_size,
+                    net_aux=net_aux,
                 )
             )
         # Do selection slicing
@@ -1044,12 +1113,12 @@ def do_epoch(train_state, batch_iter, batch_fn, rng_ctr, clean_vs_noise_spec_cou
     return train_state, {"mean_loss": mean_loss.item(), "final_loss": final_loss.item(), "duration_sec": epoch_end - epoch_start}, rng_ctr
 
 
-def make_validation_stats_function(input_channels, output_channels, model_params, processing_size, include_raw_err=False):
+def make_validation_stats_function(input_channels, output_channels, model_params, processing_size, include_raw_err=False, net_aux={}):
     output_size = determine_output_size(output_channels)
 
     def make_samples(input_chunk, net):
         ys = jax.vmap(net)(input_chunk)
-        return jax.vmap(make_basic_coarsener(processing_size, output_size, model_params))(ys)
+        return jax.vmap(make_basic_coarsener(processing_size, output_size, model_params, net_aux=net_aux))(ys)
 
     def compute_stats(batch, net):
         input_chunk = make_chunk_from_batch(
@@ -1057,12 +1126,14 @@ def make_validation_stats_function(input_channels, output_channels, model_params
             batch=batch,
             model_params=model_params,
             processing_size=processing_size,
+            net_aux=net_aux,
         )
         targets = make_non_residual_chunk_from_batch(
             channels=output_channels,
             batch=batch,
             model_params=model_params,
             processing_size=output_size,
+            net_aux=net_aux,
         )
         samples = remove_residual_from_output_chunk(
             output_channels=output_channels,
@@ -1070,6 +1141,7 @@ def make_validation_stats_function(input_channels, output_channels, model_params
             batch=batch,
             model_params=model_params,
             processing_size=output_size,
+            net_aux=net_aux,
         )
         err = targets - samples
         mse = jnp.mean(err**2)
@@ -1122,7 +1194,7 @@ def do_validation(train_state, loader, sample_stat_fn, traj, step, logger=None):
     return stats_report
 
 
-def init_network(architecture, lr, rng, input_channels, output_channels, processing_size, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name, arch_args={}):
+def init_network(architecture, lr, rng, input_channels, output_channels, processing_size, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name, arch_args={}, channel_coarsen_type="spectral"):
 
     def leaf_map(leaf):
         if isinstance(leaf, jnp.ndarray):
@@ -1222,6 +1294,9 @@ def init_network(architecture, lr, rng, input_channels, output_channels, process
         "processing_size": processing_size,
         "train_path": str(pathlib.Path(train_path).resolve()),
         "coarse_op_name": coarse_op_name,
+        "net_aux": {
+            "channel_coarsen_type": channel_coarsen_type,
+        },
     }
     return state, network_info
 
@@ -1400,7 +1475,9 @@ def main(args):
         arch_args={
             "zero_mean": args.network_zero_mean,
         },
+        channel_coarsen_type=args.channel_coarsen_type,
     )
+    net_aux = network_info["net_aux"]
     if args.net_weight_continue is not None:
         logger.info("CONTINUING NETWORK: %s", args.net_weight_continue)
         # Load network from file, wrap in train state
@@ -1493,6 +1570,7 @@ def main(args):
                 model_params=model_params,
                 processing_size=processing_size,
                 noise_spec=noise_spec,
+                net_aux=net_aux,
             ),
             donate="all",
         )
@@ -1506,6 +1584,7 @@ def main(args):
                 output_channels=output_channels,
                 model_params=model_params,
                 processing_size=processing_size,
+                net_aux=net_aux,
             )
         )
 

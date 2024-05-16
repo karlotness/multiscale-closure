@@ -47,6 +47,7 @@ parser.add_argument("--normalization", type=str, default="none", choices=["none"
 parser.add_argument("--net_load_type", type=str, default="best_loss", help="Which saved weights to load for previous networks")
 parser.add_argument("--no_residual", action="store_false", dest="output_residuals", help="Set sequential networks to output non-residual values (they learn to combine the fields)")
 parser.add_argument("--loader_chunk_size", type=int, default=10850, help="Chunk size to read before batching")
+parser.add_argument("--channel_coarsen_type", type=str, choices=["spectral", "linear", "nearest"], default="spectral", help="What coarsening operator should be used by the network to rescale channels")
 
 
 def load_prev_networks(base_dir, train_step, net_load_type, base_logger=None):
@@ -70,13 +71,14 @@ def load_prev_networks(base_dir, train_step, net_load_type, base_logger=None):
                 input_channels=set(net_info["input_channels"]),
                 output_channels=set(net_info["output_channels"]),
                 processing_size=net_info["processing_size"],
+                net_aux=net_info.get("net_aux", {}),
             )
         )
     logger.info("finished loading networks")
     return loaded_nets, loaded_net_data, loaded_net_info
 
 
-def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name, processing_scales, normalization, train_step, output_residuals=True, logger=None, system_type="qg"):
+def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name, processing_scales, normalization, train_step, output_residuals=True, logger=None, system_type="qg", channel_coarsen_type="spectral"):
     if logger is None:
         logger = logging.getLogger("seq_net_init")
     processing_scales = set(processing_scales)
@@ -125,11 +127,6 @@ def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batc
     else:
         raise ValueError(f"invalid train_step {train_step}")
     processing_size = determine_processing_size(input_channels=in_channels, output_channels=out_channels)
-    net_data = NetData(
-        input_channels=in_channels,
-        output_channels=out_channels,
-        processing_size=processing_size,
-    )
     # Initialize network, etc.
     arch = architectures[train_step]
     logger.info("Training network: %s", arch)
@@ -147,6 +144,13 @@ def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batc
         end_lr=end_lr,
         schedule_type=schedule_type,
         coarse_op_name=coarse_op_name,
+        channel_coarsen_type=channel_coarsen_type,
+    )
+    net_data = NetData(
+        input_channels=in_channels,
+        output_channels=out_channels,
+        processing_size=processing_size,
+        net_aux=network_info["net_aux"],
     )
     return state, network_info, net_data
 
@@ -163,9 +167,10 @@ def make_alt_source_computer(loaded_nets, loaded_net_data, model_params):
                 model_params=model_params,
                 processing_size=data.processing_size,
                 alt_source=alt_sources,
+                net_aux=data.net_aux,
             )
             predictions = jax.vmap(net)(input_chunk)
-            predictions = jax.vmap(make_basic_coarsener(data.processing_size, output_size, model_params))(predictions)
+            predictions = jax.vmap(make_basic_coarsener(data.processing_size, output_size, model_params, net_aux=data.net_aux))(predictions)
             predictions = split_chunk_into_channels(
                 channels=data.output_channels,
                 chunk=remove_residual_from_output_chunk(
@@ -175,6 +180,7 @@ def make_alt_source_computer(loaded_nets, loaded_net_data, model_params):
                     model_params=model_params,
                     processing_size=output_size,
                     alt_source=alt_sources,
+                    net_aux=data.net_aux,
                 )
             )
             alt_sources.update({name_remove_residual(k): v for k, v in predictions.items()})
@@ -188,7 +194,7 @@ def make_batch_computer(net_data, alt_source_computer, model_params):
 
     def sample_loss(input_elem, target_elem, net):
         y = net(input_elem)
-        y = make_basic_coarsener(net_data.processing_size, output_size, model_params)(y)
+        y = make_basic_coarsener(net_data.processing_size, output_size, model_params, net_aux=net_data.net_aux)(y)
         mse = jnp.mean((y - target_elem)**2)
         return mse, y
 
@@ -209,6 +215,7 @@ def make_batch_computer(net_data, alt_source_computer, model_params):
             model_params=model_params,
             processing_size=net_data.processing_size,
             alt_source=alt_sources,
+            net_aux=net_data.net_aux,
         )
         target_chunk = make_chunk_from_batch(
             channels=net_data.output_channels,
@@ -216,6 +223,7 @@ def make_batch_computer(net_data, alt_source_computer, model_params):
             model_params=model_params,
             processing_size=output_size,
             alt_source=alt_sources,
+            net_aux=net_data.net_aux,
         )
         # Compute losses
         loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, input_chunk, target_chunk)
@@ -231,7 +239,7 @@ def make_validation_stats_function(net_data, model_params, alt_source_computer):
 
     def make_samples(input_chunk, net):
         ys = jax.vmap(net)(input_chunk)
-        return jax.vmap(make_basic_coarsener(net_data.processing_size, output_size, model_params))(ys)
+        return jax.vmap(make_basic_coarsener(net_data.processing_size, output_size, model_params, net_aux=net_data.net_aux))(ys)
 
     def compute_stats(batch, net):
         alt_sources = alt_source_computer(batch)
@@ -241,12 +249,14 @@ def make_validation_stats_function(net_data, model_params, alt_source_computer):
             model_params=model_params,
             processing_size=net_data.processing_size,
             alt_source=alt_sources,
+            net_aux=net_data.net_aux,
         )
         targets = make_non_residual_chunk_from_batch(
             channels=net_data.output_channels,
             batch=batch,
             model_params=model_params,
             processing_size=output_size,
+            net_aux=net_data.net_aux,
         )
         samples = remove_residual_from_output_chunk(
             output_channels=net_data.output_channels,
@@ -255,6 +265,7 @@ def make_validation_stats_function(net_data, model_params, alt_source_computer):
             model_params=model_params,
             processing_size=output_size,
             alt_source=alt_sources,
+            net_aux=net_data.net_aux,
         )
         err = targets - samples
         mse = jnp.mean(err**2)
@@ -380,6 +391,7 @@ def main():
         output_residuals=args.output_residuals,
         logger=logger.getChild("init_net"),
         system_type=system_type,
+        channel_coarsen_type=args.channel_coarsen_type,
     )
     logger.info("Input channels: %s", net_data.input_channels)
     logger.info("Output channels: %s", net_data.output_channels)
