@@ -1,6 +1,7 @@
 import math
 import functools
 import operator
+import itertools
 import dataclasses
 import jax
 import jax.numpy as jnp
@@ -49,15 +50,41 @@ class Scaler:
 
 
 def register_pytree_dataclass(cls):
-    fields = tuple(f.name for f in dataclasses.fields(cls))
+    cls_fields = []
+    cls_static_fields = []
+    for field in dataclasses.fields(cls):
+        if field.metadata.get("closure_field_opts", {}).get("static", False):
+            cls_static_fields.append(field.name)
+        else:
+            cls_fields.append(field.name)
+    fields = tuple(cls_fields)
+    static_fields = tuple(cls_static_fields)
+
+    def flatten_with_keys(obj):
+        if static_fields:
+            aux = tuple(getattr(obj, name) for name in static_fields)
+        else:
+            aux = None
+        return [
+            (jax.tree_util.GetAttrKey(name), getattr(obj, name)) for name in fields
+        ], aux
 
     def flatten(obj):
-        return [getattr(obj, name) for name in fields], None
+        flatkeys, aux = flatten_with_keys(obj)
+        return [c for _, c in flatkeys], aux
 
     def unflatten(aux_data, flat_contents):
-        return cls(**dict(zip(fields, flat_contents, strict=True)))
+        if aux_data is None:
+            aux_data = ()
+        return cls(
+            **dict(
+                itertools.chain(
+                    zip(fields, flat_contents), zip(static_fields, aux_data)
+                )
+            )
+        )
 
-    jax.tree_util.register_pytree_node(cls, flatten, unflatten)
+    jax.tree_util.register_pytree_with_keys(cls, flatten_with_keys, unflatten, flatten)
     return cls
 
 
