@@ -23,13 +23,23 @@ COMBINE_TIME = "4:00:00"
 SHUFFLE_TIME = "12:00:00"
 BIG_SIZE = 2048
 SMALL_SIZES = {64, 128}
+VISCOSITY = 1/3500
+MAX_VELOCITY = 7.0
+CFL_FACTOR = 0.5
+PEAK_WAVENUMBER = 4
+DOMAIN_SIZE_MULT = 2
+STORE_AS_SINGLE = True
+
+TMAX = 70.0
+TWARMUP = 40.0
+TSTEP = 0.006574203376652748
 
 NUM_TRAIN_TRAJS = 128
 NUM_VAL_TRAJS = 3
 NUM_TEST_TRAJS = 16
 
 launch_time = time.strftime("%Y%m%d-%H%M%S")
-base_out_dir = SCRATCH / "closure" / f"data-ns-{launch_time}"
+base_out_dir = SCRATCH / "closure" / f"data-ns-highre-{launch_time}"
 
 
 lu.dry_run_mkdir(base_out_dir)
@@ -53,9 +63,17 @@ for phase, num_trajs, seed in [
             "--num_trajs", f"{num_trajs}",
             "--traj_slice", f"{slice_start}:{slice_end}",
             "--simultaneous_trajs", SIMULTANEOUS_TRAJS,
+            "--viscosity", VISCOSITY,
+            "--cfl_factor", CFL_FACTOR,
+            "--peak_wavenumber", PEAK_WAVENUMBER,
+            "--domain_size_multiple", DOMAIN_SIZE_MULT,
+            "--twarmup", TWARMUP,
+            "--tmax", TMAX,
+            "--tstep", TSTEP,
             "--big_size", BIG_SIZE,
-            "--store_as_single",
         ]
+        if STORE_AS_SINGLE:
+            launch_args.append("--store_as_single")
         launch_args.append("--small_size")
         launch_args.extend(sorted(SMALL_SIZES))
         launch_id = lu.container_cmd_launch(
