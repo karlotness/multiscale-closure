@@ -86,6 +86,7 @@ parser_ns.add_argument("--max_velocity", type=float, default=7.0, help="Setting 
 parser_ns.add_argument("--cfl_factor", type=float, default=0.5, help="Setting for CFL factor when picking time step")
 parser_ns.add_argument("--simultaneous_trajs", type=int, default=2, help="Number of trajectories to generate at once")
 parser_ns.add_argument("--peak_wavenumber", type=int, default=4, help="Peak wavenumber for initial condition")
+parser_ns.add_argument("--domain_size_multiple", type=int, default=1, help="Integer scaling for the domain")
 
 # Combine NS slice options
 parser_combine_ns_slice = subparsers.add_parser("combine_ns_slice", help="Combine slices of NS data")
@@ -570,8 +571,8 @@ def gen_ns(out_dir, args, base_logger):
     rng_ctr = jax.random.key(args.seed)
     np_rng = np.random.default_rng(args.seed)
     # Construct grids and model classes
-    big_grid = ns_config.make_grid(size=args.big_size)
-    small_grids = {s: ns_config.make_grid(size=s) for s in args.small_size}
+    big_grid = ns_config.make_grid(size=args.big_size, grid_domain_scale=args.domain_size_multiple)
+    small_grids = {s: ns_config.make_grid(size=s, grid_domain_scale=args.domain_size_multiple) for s in args.small_size}
     physics_specs = jax_cfd.ml.physics_specifications.get_physics_specs()
     dt = jax_cfd.base.equations.stable_time_step(args.max_velocity, args.cfl_factor, args.viscosity, big_grid)
     stable_steps = {s: jax_cfd.base.equations.stable_time_step(args.max_velocity, args.cfl_factor, args.viscosity, sg) for s, sg in small_grids.items()}
@@ -699,7 +700,7 @@ def gen_ns(out_dir, args, base_logger):
             attrs = {
                 "seed": args.seed,
                 "ndim": 2,
-                "domain_size_multiple": 1,
+                "domain_size_multiple": args.domain_size_multiple,
                 "warmup_grid_size": args.big_size,
                 "simulation_grid_size": args.big_size,
                 "save_grid_size": small_size,
