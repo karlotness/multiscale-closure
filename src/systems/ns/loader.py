@@ -43,6 +43,7 @@ class CoreSystemParams:
     v_corr_stats: ParamStat
     dx: float
     dy: float
+    domain_size_multiple: int
 
     def field_stats(self, field: str) -> ParamStat:
         match field:
@@ -93,6 +94,7 @@ def load_system_stats(data_path):
             # Compute dx and dy
             params_args["dx"] = (sz_group["dims"]["x"][1] - sz_group["dims"]["x"][0]).item()
             params_args["dy"] = (sz_group["dims"]["y"][1] - sz_group["dims"]["y"][0]).item()
+            params_args["domain_size_multiple"] = sz_group["params"]["domain_size_multiple"][()].item()
             for name in ["u", "v", "u_corr", "v_corr"]:
                 # Get stats
                 params_args[f"{name}_stats"] = ParamStat(

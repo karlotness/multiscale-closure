@@ -16,11 +16,11 @@ def temp_gin_config():
         gin.parse_config(cache)
 
 
-def make_train_encoder(size: int):
+def make_train_encoder(size: int, grid_domain_scale: int = 1):
     _ = importlib.import_module("jax_cfd.ml")
     with temp_gin_config():
         gin.parse_config(make_generation_config())
-        grid = make_grid(size)
+        grid = make_grid(size, grid_domain_scale=grid_domain_scale)
         return gin.configurable(jax_cfd.ml.encoders.aligned_array_encoder)(
             grid=grid,
             dt=None,

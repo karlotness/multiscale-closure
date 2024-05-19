@@ -808,14 +808,14 @@ def make_channel_from_batch(channel, batch, model_params, alt_source=None, net_a
         u = make_channel_from_batch(f"ns_u_{orig_size}", batch, model_params, alt_source=alt_source, net_aux=net_aux)
         v = make_channel_from_batch(f"ns_v_{orig_size}", batch, model_params, alt_source=alt_source, net_aux=net_aux)
         # Package/"encode" grid as done by jax_cfd
-        eu, ev = jax.vmap(lambda u, v: ns_utils.make_train_encoder(size=orig_size)((u, v)))(u, v)
+        eu, ev = jax.vmap(lambda u, v: ns_utils.make_train_encoder(size=orig_size, grid_domain_scale=model_params.size_stats[orig_size].domain_size_multiple)((u, v)))(u, v)
         return jnp.stack([eu.data, ev.data], axis=-3)
     elif m := re.match(r"^ns_uv_corr_(?P<size>\d+)$", channel):
         orig_size = int(m.group("size"))
         u_corr = make_channel_from_batch(f"ns_u_corr_{orig_size}", batch, model_params, alt_source=alt_source, net_aux=net_aux)
         v_corr = make_channel_from_batch(f"ns_v_corr_{orig_size}", batch, model_params, alt_source=alt_source, net_aux=net_aux)
         # Package/"encode" grid as done by jax_cfd
-        euc, evc = jax.vmap(lambda u, v: ns_utils.make_train_encoder(size=orig_size)((u, v)))(u_corr, v_corr)
+        euc, evc = jax.vmap(lambda u, v: ns_utils.make_train_encoder(size=orig_size, grid_domain_scale=model_params.size_stats[orig_size].domain_size_multiple)((u, v)))(u_corr, v_corr)
         return jnp.stack([euc.data, evc.data], axis=-3)
     elif m := re.match(r"^ns_vort_(?P<size>\d+)$", channel):
         orig_size = int(m.group("size"))
