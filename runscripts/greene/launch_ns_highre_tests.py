@@ -23,7 +23,7 @@ NET_ARCH_SETS = [
 COARSEN_OPS = ["spectral"]
 LR_SCHEDULE = "warmup1-cosine"
 EPOCHS = 150
-PEAK_LR = 0.001
+PEAK_LR = 0.001 * 0.75
 END_LR = 0.0001
 OPTIMIZER = "adam:eps=0.001"
 EVAL_TYPE = "best_val_loss"
