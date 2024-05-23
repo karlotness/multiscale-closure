@@ -1263,6 +1263,8 @@ def init_network(architecture, lr, rng, input_channels, output_channels, process
             optim = optax.adabelief(learning_rate=schedule)
         case "adam":
             optim = optax.adam(learning_rate=schedule)
+        case "sgd":
+            optim = optax.sgd(learning_rate=schedule)
         case "adamw":
             optim = optax.adamw(learning_rate=schedule)
         case _:
