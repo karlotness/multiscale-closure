@@ -52,7 +52,8 @@ parser.add_argument("--noise_specs", type=str, nargs="+", default=[], help="Chan
 parser.add_argument("--processing_size", type=int, default=None, help="Size to user for internal network evaluation (default: select automatically)")
 parser.add_argument("--architecture", type=str, default="gz-fcnn-v1", help="Network architecture to train")
 parser.add_argument("--optimizer", type=str, default="adabelief", help="Which optimizer to use")
-parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine", "ross22"], help="What learning rate schedule")
+parser.add_argument("--wrap_optim", type=str, default="legacy", choices=["legacy", "none", "if_finite"], help="Should the optimizer be wrapped")
+parser.add_argument("--lr_schedule", type=str, default="constant", help="What learning rate schedule")
 parser.add_argument("--network_zero_mean", action="store_true", help="Constrain the network to zero mean outputs")
 parser.add_argument("--loader_chunk_size", type=int, default=10850, help="Chunk size to read before batching")
 parser.add_argument("--net_weight_continue", type=str, default=None, help="Network weights to load and continue training")
@@ -1194,7 +1195,7 @@ def do_validation(train_state, loader, sample_stat_fn, traj, step, logger=None):
     return stats_report
 
 
-def init_network(architecture, lr, rng, input_channels, output_channels, processing_size, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name, arch_args={}, channel_coarsen_type="spectral"):
+def init_network(architecture, lr, rng, input_channels, output_channels, processing_size, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name, arch_args={}, channel_coarsen_type="spectral", wrap_optim="legacy"):
 
     def leaf_map(leaf):
         if isinstance(leaf, jnp.ndarray):
@@ -1243,6 +1244,18 @@ def init_network(architecture, lr, rng, input_channels, output_channels, process
                 },
             }
             schedule = optax.warmup_cosine_decay_schedule(**sched_args["args"])
+        case "onecycle-cosine":
+            sched_args = {
+                "type": "onecycle-cosine",
+                "args": {
+                    "transition_steps": total_steps,
+                    "peak_value": lr,
+                    "pct_start": 0.3,
+                    "div_factor": 25.0,
+                    "final_div_factor": 10000.0,
+                }
+            }
+            schedule = optax.cosine_onecycle_schedule(**sched_args["args"])
         case "ross22":
             sched_args = {
                 "type": "ross22",
@@ -1274,13 +1287,21 @@ def init_network(architecture, lr, rng, input_channels, output_channels, process
             else:
                 raise ValueError(f"unsupported optimizer {optim_type}")
 
-    optim = optax.apply_if_finite(
-        optax.chain(
-            optax.identity() if schedule_type in {"ross22"} else optax.clip(1.0),
-            optim,
-        ),
-        100,
-    )
+    match wrap_optim:
+        case "legacy":
+            optim = optax.apply_if_finite(
+                optax.chain(
+                    optax.identity() if schedule_type in {"ross22"} else optax.clip(1.0),
+                    optim,
+                ),
+                100,
+            )
+        case "none":
+            optim = optim
+        case "if_finite":
+            optim = optax.apply_if_finite(optim, 100)
+        case _:
+            raise ValueError(f"unsupported optimizer wrapper {wrap_optim}")
 
     net = jax.tree_util.tree_map(leaf_map, net)
     optim = jax.tree_util.tree_map(leaf_map, optim)
@@ -1478,6 +1499,7 @@ def main(args):
             "zero_mean": args.network_zero_mean,
         },
         channel_coarsen_type=args.channel_coarsen_type,
+        wrap_optim=args.wrap_optim,
     )
     net_aux = network_info["net_aux"]
     if args.net_weight_continue is not None:

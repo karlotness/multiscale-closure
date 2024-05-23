@@ -42,7 +42,8 @@ parser.add_argument("--val_sample_seed", type=int, default=1234, help="RNG seed 
 parser.add_argument("--val_interval", type=int, default=1, help="Number of epochs between validation periods")
 parser.add_argument("--architecture", type=str, nargs="+", default=["gz-fcnn-v1"], help="Network architecture to train")
 parser.add_argument("--optimizer", type=str, default="adabelief", help="Which optimizer to use")
-parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "warmup1-cosine", "ross22"], help="What learning rate schedule")
+parser.add_argument("--wrap_optim", type=str, default="legacy", choices=["legacy", "none", "if_finite"], help="Should the optimizer be wrapped")
+parser.add_argument("--lr_schedule", type=str, default="constant", help="What learning rate schedule")
 parser.add_argument("--normalization", type=str, default="none", choices=["none", "layer"], help="What type of normalization to apply in the network")
 parser.add_argument("--net_load_type", type=str, default="best_loss", help="Which saved weights to load for previous networks")
 parser.add_argument("--no_residual", action="store_false", dest="output_residuals", help="Set sequential networks to output non-residual values (they learn to combine the fields)")
@@ -78,7 +79,7 @@ def load_prev_networks(base_dir, train_step, net_load_type, base_logger=None):
     return loaded_nets, loaded_net_data, loaded_net_info
 
 
-def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name, processing_scales, normalization, train_step, output_residuals=True, logger=None, system_type="qg", channel_coarsen_type="spectral"):
+def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batches_per_epoch, end_lr, schedule_type, coarse_op_name, processing_scales, normalization, train_step, output_residuals=True, logger=None, system_type="qg", channel_coarsen_type="spectral", wrap_optim="legacy"):
     if logger is None:
         logger = logging.getLogger("seq_net_init")
     processing_scales = set(processing_scales)
@@ -145,6 +146,7 @@ def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batc
         schedule_type=schedule_type,
         coarse_op_name=coarse_op_name,
         channel_coarsen_type=channel_coarsen_type,
+        wrap_optim=wrap_optim,
     )
     net_data = NetData(
         input_channels=in_channels,
@@ -392,6 +394,7 @@ def main():
         logger=logger.getChild("init_net"),
         system_type=system_type,
         channel_coarsen_type=args.channel_coarsen_type,
+        wrap_optim=args.wrap_optim,
     )
     logger.info("Input channels: %s", net_data.input_channels)
     logger.info("Output channels: %s", net_data.output_channels)
