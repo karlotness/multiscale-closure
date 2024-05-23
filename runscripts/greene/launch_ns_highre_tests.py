@@ -22,13 +22,37 @@ NET_ARCH_SETS = [
 ]
 COARSEN_OPS = ["spectral"]
 LR_SCHEDULE = "warmup1-cosine"
-EPOCHS = 150
-PEAK_LR = 0.001 * 0.75
-END_LR = 0.0001
-OPTIMIZER = "adam:eps=0.001"
+OPTIMIZER = "adam"
+OPTIM_WRAP = "none"
 EVAL_TYPE = "best_val_loss"
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 
+
+@dataclasses.dataclass
+class SweepParams:
+    peak_lr: float
+    end_lr: float
+    num_epochs: int
+
+
+def largest_arch(desc):
+    order = ["psm", "sm", "pmd", "md", "lg"]
+    size_map = {
+        "psm": "puresmall",
+        "pmd": "puremedium",
+        "md": "medium",
+        "sm": "small",
+        "lg": "large",
+    }
+    return size_map[max(filter(bool, re.split(r"\d+", desc)), key=order.index)]
+
+
+LR_ASSIGNMENTS = {
+    "small": SweepParams(peak_lr=0.001, end_lr=0.000025, num_epochs=100),
+    "puresmall": SweepParams(peak_lr=0.001, end_lr=0.000025, num_epochs=100),
+    "medium": SweepParams(peak_lr=0.0004, end_lr=0.00001, num_epochs=50),
+    "puremedium": SweepParams(peak_lr=0.0004, end_lr=0.00001, num_epochs=50),
+}
 
 @dataclasses.dataclass
 class BaseNetRun:
@@ -71,6 +95,7 @@ def launch_training(
     output_channels=None,
     dependency_ids=None,
     channel_coarsen_type="spectral",
+    wrap_optim="legacy",
 ):
     args = [
         "python",
@@ -91,6 +116,7 @@ def launch_training(
         f"--lr_schedule={lr_schedule}",
         f"--architecture={architecture}",
         f"--channel_coarsen_type={channel_coarsen_type}",
+        f"--wrap_optim={wrap_optim}",
     ]
     if input_channels:
         args.append("--input_channels")
@@ -121,13 +147,14 @@ def launch_sequential_training(
     val_interval=1,
     save_interval=10,
     lrs=[0.001],
-    end_lr=0.0,
+    end_lrs=[0.0],
     lr_schedule="ross22",
     architectures=["gz-fcnn-v1"],
     dependency_ids=None,
     net_load_type="best_loss",
     skip_nets=0,
     channel_coarsen_type="spectral",
+    wrap_optim="legacy",
 ):
     scales = [str(s) for s in sorted(set(scales))]
     if len(scales) < 2:
@@ -155,10 +182,11 @@ def launch_sequential_training(
                 f"--val_interval={val_interval:d}",
                 f"--save_interval={save_interval:d}",
                 f"--lr={lrs[train_step]}",
-                f"--end_lr={end_lr}",
+                f"--end_lr={end_lrs[train_step]}",
                 f"--lr_schedule={lr_schedule}",
                 f"--net_load_type={net_load_type}",
                 f"--channel_coarsen_type={channel_coarsen_type}",
+                f"--wrap_optim={wrap_optim}",
             ]
         )
         assert len(architectures) == len(scales)
@@ -208,6 +236,7 @@ for peak_scale, (arch_key, arch_parts), chan_coarse_op in itertools.product(
     base_outputs = [f"ns_uv_corr_{peak_scale:d}"]
     arch_out_dir = scale_set_dir / arch_key
     lu.dry_run_mkdir(arch_out_dir)
+    train_record = LR_ASSIGNMENTS[largest_arch(arch_key)]
     runs = []
     for repeat in range(NUM_REPEATS):
         out_dir = arch_out_dir / f"base-stacked-{chan_coarse_op}-{repeat + 1:d}"
@@ -217,16 +246,17 @@ for peak_scale, (arch_key, arch_parts), chan_coarse_op in itertools.product(
             train_dir=DATA_FILES.train.parent,
             val_dir=DATA_FILES.val.parent,
             scale=peak_scale,
-            num_epochs=EPOCHS,
+            num_epochs=train_record.num_epochs,
             batch_size=BATCH_SIZE,
             optimizer=OPTIMIZER,
-            lr=PEAK_LR,
-            end_lr=END_LR,
+            lr=train_record.peak_lr,
+            end_lr=train_record.end_lr,
             lr_schedule=LR_SCHEDULE,
             architecture=arch,
             input_channels=base_inputs,
             output_channels=base_outputs,
             channel_coarsen_type=chan_coarse_op,
+            wrap_optim=OPTIM_WRAP,
         )
         runs.append(
             BaseNetRun(
@@ -255,6 +285,14 @@ for scale_set, (arch_key, arch_parts), chan_coarse_op in itertools.product(
     arch_out_dir = scale_set_dir / arch_key
     lu.dry_run_mkdir(arch_out_dir)
     runs = []
+    lr_list = []
+    end_lr_list = []
+    epochs_list = []
+    for ap in arch_parts:
+        train_record = LR_ASSIGNMENTS[ap.split("-")[-2]]
+        lr_list.append(train_record.peak_lr)
+        end_lr_list.append(train_record.end_lr)
+        epochs_list.append(train_record.num_epochs)
     for repeat in range(NUM_REPEATS):
         out_dir = arch_out_dir / f"seq-multiscale-{chan_coarse_op}-{repeat + 1:d}"
         lu.dry_run_mkdir(out_dir)
@@ -265,13 +303,14 @@ for scale_set, (arch_key, arch_parts), chan_coarse_op in itertools.product(
             scales=scale_set,
             batch_size=BATCH_SIZE,
             optimizer=OPTIMIZER,
-            num_epochs=[EPOCHS] * len(scale_set),
-            lrs=[PEAK_LR] * len(scale_set),
-            end_lr=END_LR,
+            num_epochs=epochs_list,
+            lrs=lr_list,
+            end_lrs=end_lr_list,
             lr_schedule=LR_SCHEDULE,
             architectures=list(arch_parts),
             net_load_type=EVAL_TYPE,
             channel_coarsen_type=chan_coarse_op,
+            wrap_optim=OPTIM_WRAP,
         )
         runs.append(
             BaseNetRun(
