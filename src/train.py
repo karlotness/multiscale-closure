@@ -67,6 +67,9 @@ parser.add_argument("--live_gen_net_steps", type=int, default=5, help="")
 parser.add_argument("--live_gen_base_data", type=str, default=None, help="")
 parser.add_argument("--live_gen_switch_set_interval", type=int, default=None, help="")
 parser.add_argument("--channel_coarsen_type", type=str, choices=["spectral", "linear", "nearest"], default="spectral", help="What coarsening operator should be used by the network to rescale channels")
+parser.add_argument("--noisy_batch_mode", type=str, choices=["off", "live-gen", "simple-prob-clean"], default="live-gen", help="Mode for adding noise during training")
+parser.add_argument("--simple_prob_clean", type=float, default="0.5", help="Probability of a clean sample (when --noisy_batch_mode=simple-prob-clean)")
+parser.add_argument("--simple_prob_clean_start_epoch", type=int, default=1, help="Epoch to start adding noise for simple-prob-clean")
 
 
 def sniff_system_type(data_file):
@@ -975,8 +978,9 @@ def remove_residual_from_output_chunk(output_channels, output_chunk, batch, mode
     return output_chunk + jnp.concatenate(stacked_channels, axis=-3)
 
 
-def make_batch_computer(input_channels, output_channels, model_params, processing_size, noise_spec, net_aux={}):
+def make_batch_computer(input_channels, output_channels, model_params, processing_size, noise_spec, net_aux={}, noisy_batch_args={}):
     output_size = determine_output_size(output_channels)
+    noisy_batch_mode = noisy_batch_args.get("mode", "live-gen")
 
     def sample_loss(input_elem, target_elem, net):
         y = net(input_elem)
@@ -1010,7 +1014,7 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
             processing_size=output_size,
             net_aux=net_aux,
         )
-        if noise_spec:
+        if noisy_batch_mode in {"live-gen", "simple-prob-clean"} and noise_spec:
             # Need to do noise processing and selection
             rng1, rng2, rng_ctr = jax.random.split(rng_ctr, 3)
             n_clean, n_noise = clean_vs_noise_spec_counts
@@ -1036,6 +1040,8 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
             indices = jnp.arange(batch_size, dtype=jnp.uint32)
             select_indices = (indices >= num_clean).astype(jnp.uint8)
             input_chunk1 = jnp.stack([input_chunk_clean1, input_chunk_noisy1], axis=0)[select_indices, indices]
+        elif noisy_batch_mode not in {"off", "live-gen", "simple-prob-clean"}:
+            raise ValueError(f"invalid noise mode {noisy_batch_mode}")
         else:
             input_chunk1 = make_chunk_from_batch(
                 channels=input_channels,
@@ -1052,6 +1058,8 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
         for batch in itertools.islice(batches, 1, None):
             if batch is None:
                 continue
+            if noisy_batch_mode != "live-gen":
+                raise ValueError(f"Got unexpected live-generation batch (mode {noisy_batch_mode})")
             input_chunks.append(
                 make_chunk_from_batch(
                     channels=input_channels,
@@ -1090,10 +1098,27 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
     return do_batch
 
 
-def do_epoch(train_state, batch_iter, batch_fn, rng_ctr, clean_vs_noise_spec_counts, logger=None):
-    clean_vals, noise_vals = clean_vs_noise_spec_counts
-    n_clean = sum(clean_vals)
-    n_noisy = sum(noise_vals)
+def do_epoch(train_state, batch_iter, batch_fn, rng_ctr, clean_vs_noise_spec_counts, epoch, logger=None, noisy_batch_args={}):
+    noisy_batch_mode = noisy_batch_args.get("mode", "live-gen")
+    match noisy_batch_mode:
+        case "live-gen":
+            clean_vals, noise_vals = clean_vs_noise_spec_counts
+            n_clean = sum(clean_vals)
+            n_noisy = sum(noise_vals)
+        case "simple-prob-clean":
+            if epoch >= noisy_batch_args["simple-prob-clean"]["start_epoch"]:
+                # Active noise selection
+                n_clean = float(noisy_batch_args["simple-prob-clean"]["prob"])
+                n_noisy = 1.0 - n_clean
+            else:
+                # Inactive noise selection
+                n_clean = 1.0
+                n_noisy = 0.0
+        case "off":
+            n_clean = 1.0
+            n_noisy = 0.0
+        case _:
+            raise ValueError(f"Invalid noisy_batch_mode {noisy_batch_mode}")
     logger.info("Epoch with virtual noise samples clean=%d, noisy=%d", n_clean, n_noisy)
     if logger is None:
         logger = logging.getLogger("train_epoch")
@@ -1585,6 +1610,13 @@ def main(args):
 
         num_clean_samples = [train_loader.num_samples(), 0, 0]
         num_dirty_samples = [0, 0, 0]
+        noisy_batch_args = {
+            "mode": args.noisy_batch_mode,
+            "simple-prob-clean": {
+                "prob": args.simple_prob_clean,
+                "start_epoch": args.simple_prob_clean_start_epoch,
+            },
+        }
 
         # Training functions
         train_batch_fn = eqx.filter_jit(
@@ -1595,6 +1627,7 @@ def main(args):
                 processing_size=processing_size,
                 noise_spec=noise_spec,
                 net_aux=net_aux,
+                noisy_batch_args=noisy_batch_args,
             ),
             donate="all",
         )
@@ -1632,6 +1665,8 @@ def main(args):
                     logger=logger.getChild(f"{epoch:05d}_train"),
                     rng_ctr=rng_ctr,
                     clean_vs_noise_spec_counts=(num_clean_samples, num_dirty_samples),
+                    epoch=epoch,
+                    noisy_batch_args=noisy_batch_args,
                 )
             mean_loss = epoch_stats["mean_loss"]
 
