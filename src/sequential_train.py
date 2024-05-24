@@ -105,9 +105,14 @@ def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batc
         prev_scales = sorted(processing_scales)[:train_step]
         assert small in prev_scales
         if system_type == "qg":
-            in_channels = [f"q_scaled_{max(processing_scales)}to{big}"] + [f"q_scaled_forcing_{max(processing_scales)}to{sz}" for sz in prev_scales]
+            in_channels = [
+                (f"q_scaled_{max(processing_scales)}to{big}" if max(processing_scales) != big else f"q_{max(processing_scales)}"),
+            ] + [f"q_scaled_forcing_{max(processing_scales)}to{sz}" for sz in prev_scales]
         elif system_type == "ns":
-            in_channels = [f"ns_scaled_uv_{max(processing_scales)}to{big}", f"ns_scaled_vort_{max(processing_scales)}to{big}"] + [f"ns_scaled_uv_corr_{max(processing_scales)}to{sz}" for sz in prev_scales]
+            in_channels = [
+                (f"ns_scaled_uv_{max(processing_scales)}to{big}" if max(processing_scales) != big else f"ns_uv_{max(processing_scales)}"),
+                (f"ns_scaled_vort_{max(processing_scales)}to{big}" if max(processing_scales) != big else f"ns_vort_{max(processing_scales)}"),
+            ] + [f"ns_scaled_uv_corr_{max(processing_scales)}to{sz}" for sz in prev_scales]
         if big == max(processing_scales):
             if system_type == "qg":
                 target_chan = f"q_total_forcing_{max(processing_scales)}"
