@@ -53,6 +53,7 @@ parser.add_argument("--noise_specs", type=str, nargs="+", default=[], help="Chan
 parser.add_argument("--noisy_batch_mode", type=str, choices=["off", "simple-prob-clean"], default="off", help="Mode for adding noise during training")
 parser.add_argument("--simple_prob_clean", type=float, default=0.5, help="Probability of a clean sample (when --noisy_batch_mode=simple-prob-clean)")
 parser.add_argument("--simple_prob_clean_start_epoch", type=int, default=1, help="Epoch to start adding noise for simple-prob-clean")
+parser.add_argument("--noise_free_alt_source", dest="noisy_alt_source", action="store_false", help="Disable input noise for the frozen alt-source nets during training")
 
 
 def load_prev_networks(base_dir, train_step, net_load_type, base_logger=None):
@@ -561,8 +562,8 @@ def main():
             loaded_nets=loaded_nets,
             loaded_net_data=loaded_net_data,
             model_params=model_params,
-            noisy_batch_args=noisy_batch_args,
-            noise_spec=noise_spec,
+            noisy_batch_args=(noisy_batch_args if args.noisy_alt_source else {"mode": "off"}),
+            noise_spec=(noise_spec if args.noisy_alt_source else None),
         )
         val_alt_source_computer = make_alt_source_computer(
             loaded_nets=loaded_nets,
