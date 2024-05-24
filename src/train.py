@@ -68,7 +68,7 @@ parser.add_argument("--live_gen_base_data", type=str, default=None, help="")
 parser.add_argument("--live_gen_switch_set_interval", type=int, default=None, help="")
 parser.add_argument("--channel_coarsen_type", type=str, choices=["spectral", "linear", "nearest"], default="spectral", help="What coarsening operator should be used by the network to rescale channels")
 parser.add_argument("--noisy_batch_mode", type=str, choices=["off", "live-gen", "simple-prob-clean"], default="live-gen", help="Mode for adding noise during training")
-parser.add_argument("--simple_prob_clean", type=float, default="0.5", help="Probability of a clean sample (when --noisy_batch_mode=simple-prob-clean)")
+parser.add_argument("--simple_prob_clean", type=float, default=0.5, help="Probability of a clean sample (when --noisy_batch_mode=simple-prob-clean)")
 parser.add_argument("--simple_prob_clean_start_epoch", type=int, default=1, help="Epoch to start adding noise for simple-prob-clean")
 
 
