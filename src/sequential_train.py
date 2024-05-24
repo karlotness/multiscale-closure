@@ -49,6 +49,10 @@ parser.add_argument("--net_load_type", type=str, default="best_loss", help="Whic
 parser.add_argument("--no_residual", action="store_false", dest="output_residuals", help="Set sequential networks to output non-residual values (they learn to combine the fields)")
 parser.add_argument("--loader_chunk_size", type=int, default=10850, help="Chunk size to read before batching")
 parser.add_argument("--channel_coarsen_type", type=str, choices=["spectral", "linear", "nearest"], default="spectral", help="What coarsening operator should be used by the network to rescale channels")
+parser.add_argument("--noise_specs", type=str, nargs="+", default=[], help="Channels with noise variances (format 'channel=var0,var1')")
+parser.add_argument("--noisy_batch_mode", type=str, choices=["off", "simple-prob-clean"], default="off", help="Mode for adding noise during training")
+parser.add_argument("--simple_prob_clean", type=float, default="0.5", help="Probability of a clean sample (when --noisy_batch_mode=simple-prob-clean)")
+parser.add_argument("--simple_prob_clean_start_epoch", type=int, default=1, help="Epoch to start adding noise for simple-prob-clean")
 
 
 def load_prev_networks(base_dir, train_step, net_load_type, base_logger=None):
@@ -162,20 +166,54 @@ def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batc
     return state, network_info, net_data
 
 
-def make_alt_source_computer(loaded_nets, loaded_net_data, model_params):
+def make_alt_source_computer(loaded_nets, loaded_net_data, model_params, noise_spec=None, noisy_batch_args={}):
+    noisy_batch_mode = noisy_batch_args.get("mode", "off")
 
-    def alt_source_computer(batch):
+    def alt_source_computer(batch, rng_noise=None, rng_select=None, p_clean=1.0):
         alt_sources = {}
         for net, data in zip(loaded_nets, loaded_net_data, strict=True):
             output_size = determine_output_size(data.output_channels)
-            input_chunk = make_chunk_from_batch(
-                channels=data.input_channels,
-                batch=batch,
-                model_params=model_params,
-                processing_size=data.processing_size,
-                alt_source=alt_sources,
-                net_aux=data.net_aux,
-            )
+            if noisy_batch_mode == "off":
+                input_chunk = make_chunk_from_batch(
+                    channels=data.input_channels,
+                    batch=batch,
+                    model_params=model_params,
+                    processing_size=data.processing_size,
+                    alt_source=alt_sources,
+                    net_aux=data.net_aux,
+                )
+            elif noisy_batch_mode == "simple-prob-clean":
+                # Determine batch size
+                batch_sizes = {leaf.shape[0] for leaf in jax.tree_util.tree_leaves(batch)}
+                if len(batch_sizes) != 1:
+                    raise ValueError(f"inconsistent batch sizes {batch_sizes}")
+                batch_size = batch_sizes.pop()
+                # Do noise addition
+                num_clean = jnp.count_nonzero(jax.random.uniform(rng_select, shape=(batch_size,), dtype=jnp.float32) <= p_clean)
+                input_chunk_noisy1 = make_chunk_from_batch(
+                    channels=data.input_channels,
+                    batch=batch,
+                    model_params=model_params,
+                    processing_size=data.processing_size,
+                    noise_spec=noise_spec,
+                    key=rng_noise,
+                    alt_source=alt_sources,
+                    net_aux=data.net_aux,
+                )
+                input_chunk_clean1 = make_chunk_from_batch(
+                    channels=data.input_channels,
+                    batch=batch,
+                    model_params=model_params,
+                    processing_size=data.processing_size,
+                    alt_source=alt_sources,
+                    net_aux=data.net_aux,
+                )
+                # Pick how many to apply noise to
+                indices = jnp.arange(batch_size, dtype=jnp.uint32)
+                select_indices = (indices >= num_clean).astype(jnp.uint8)
+                input_chunk = jnp.stack([input_chunk_clean1, input_chunk_noisy1], axis=0)[select_indices, indices]
+            else:
+                raise ValueError(f"invalid noise mode {noisy_batch_mode}")
             predictions = jax.vmap(net)(input_chunk)
             predictions = jax.vmap(make_basic_coarsener(data.processing_size, output_size, model_params, net_aux=data.net_aux))(predictions)
             predictions = split_chunk_into_channels(
@@ -196,8 +234,9 @@ def make_alt_source_computer(loaded_nets, loaded_net_data, model_params):
     return alt_source_computer
 
 
-def make_batch_computer(net_data, alt_source_computer, model_params):
+def make_batch_computer(net_data, alt_source_computer, model_params, noise_spec, noisy_batch_args={}):
     output_size = determine_output_size(net_data.output_channels)
+    noisy_batch_mode = noisy_batch_args.get("mode", "off")
 
     def sample_loss(input_elem, target_elem, net):
         y = net(input_elem)
@@ -214,16 +253,51 @@ def make_batch_computer(net_data, alt_source_computer, model_params):
         )(input_chunk, target_chunk)
         return jnp.mean(losses)
 
-    def do_batch(batch, state):
-        alt_sources = alt_source_computer(batch)
-        input_chunk = make_chunk_from_batch(
-            channels=net_data.input_channels,
-            batch=batch,
-            model_params=model_params,
-            processing_size=net_data.processing_size,
-            alt_source=alt_sources,
-            net_aux=net_data.net_aux,
-        )
+    def do_batch(batch, state, rng_ctr, p_clean):
+        if noisy_batch_mode == "off":
+            alt_sources = alt_source_computer(batch)
+            input_chunk = make_chunk_from_batch(
+                channels=net_data.input_channels,
+                batch=batch,
+                model_params=model_params,
+                processing_size=net_data.processing_size,
+                alt_source=alt_sources,
+                net_aux=net_data.net_aux,
+            )
+        elif noisy_batch_mode == "simple-prob-clean":
+            # Determine batch size
+            batch_sizes = {leaf.shape[0] for leaf in jax.tree_util.tree_leaves(batch)}
+            if len(batch_sizes) != 1:
+                raise ValueError(f"inconsistent batch sizes {batch_sizes}")
+            batch_size = batch_sizes.pop()
+            # Do noise addition
+            rng_noise, rng_select, rng_ctr = jax.random.split(rng_ctr, 3)
+            alt_sources = alt_source_computer(batch, rng_noise, rng_select, p_clean)
+            num_clean = jnp.count_nonzero(jax.random.uniform(rng_select, shape=(batch_size,), dtype=jnp.float32) <= p_clean)
+            input_chunk_noisy1 = make_chunk_from_batch(
+                channels=net_data.input_channels,
+                batch=batch,
+                model_params=model_params,
+                processing_size=net_data.processing_size,
+                noise_spec=noise_spec,
+                key=rng_noise,
+                alt_source=alt_sources,
+                net_aux=net_data.net_aux,
+            )
+            input_chunk_clean1 = make_chunk_from_batch(
+                channels=net_data.input_channels,
+                batch=batch,
+                model_params=model_params,
+                processing_size=net_data.processing_size,
+                alt_source=alt_sources,
+                net_aux=net_data.net_aux,
+            )
+            # Pick how many to apply noise to
+            indices = jnp.arange(batch_size, dtype=jnp.uint32)
+            select_indices = (indices >= num_clean).astype(jnp.uint8)
+            input_chunk = jnp.stack([input_chunk_clean1, input_chunk_noisy1], axis=0)[select_indices, indices]
+        else:
+            raise ValueError(f"invalid noise mode {noisy_batch_mode}")
         target_chunk = make_chunk_from_batch(
             channels=net_data.output_channels,
             batch=batch,
@@ -236,7 +310,7 @@ def make_batch_computer(net_data, alt_source_computer, model_params):
         loss, grads = eqx.filter_value_and_grad(batch_loss)(state.net, input_chunk, target_chunk)
         # Update parameters
         out_state = state.apply_updates(grads)
-        return out_state, loss
+        return out_state, loss, rng_ctr
 
     return do_batch
 
@@ -442,6 +516,25 @@ def main():
     )
     logger.info("Required fields: %s", required_fields)
 
+    noisy_batch_args = {
+        "mode": args.noisy_batch_mode,
+        "simple-prob-clean": {
+            "prob": args.simple_prob_clean,
+            "start_epoch": args.simple_prob_clean_start_epoch,
+        },
+    }
+    val_noisy_batch_args = {
+        "mode": "off",
+    }
+    # Process noise_spec
+    noise_spec = {}
+    for spec in args.noise_specs:
+        spec = spec.strip()
+        if not spec:
+            continue
+        chan_name, var = spec.split("=")
+        noise_spec[chan_name.strip()] = np.array([float(v.strip()) for v in var.strip().split(",")])
+
     with contextlib.ExitStack() as train_context:
         # Open data files
         train_loader = train_context.enter_context(
@@ -468,12 +561,22 @@ def main():
             loaded_nets=loaded_nets,
             loaded_net_data=loaded_net_data,
             model_params=model_params,
+            noisy_batch_args=noisy_batch_args,
+            noise_spec=noise_spec,
+        )
+        val_alt_source_computer = make_alt_source_computer(
+            loaded_nets=loaded_nets,
+            loaded_net_data=loaded_net_data,
+            model_params=model_params,
+            noisy_batch_args=val_noisy_batch_args,
         )
         train_batch_fn = eqx.filter_jit(
             make_batch_computer(
                 net_data=net_data,
                 alt_source_computer=alt_source_computer,
                 model_params=model_params,
+                noise_spec=noise_spec,
+                noisy_batch_args=noisy_batch_args,
             ),
             donate="all",
         )
@@ -485,7 +588,7 @@ def main():
             make_validation_stats_function(
                 net_data=net_data,
                 model_params=model_params,
-                alt_source_computer=alt_source_computer,
+                alt_source_computer=val_alt_source_computer,
             )
         )
 
@@ -502,11 +605,14 @@ def main():
             logger.info("Starting epoch %d of %d", epoch, args.num_epochs)
             # Training step
             with contextlib.closing(train_loader.iter_batches()) as train_batch_iter:
-                state, epoch_stats = do_epoch(
+                state, epoch_stats, rng_ctr = do_epoch(
                     train_state=state,
                     batch_iter=itertools.islice(train_batch_iter, args.batches_per_epoch),
                     batch_fn=train_batch_fn,
                     logger=logger.getChild(f"{epoch:05d}_train"),
+                    epoch=epoch,
+                    noisy_batch_args=noisy_batch_args,
+                    rng_ctr=rng_ctr,
                 )
             mean_loss = epoch_stats["mean_loss"]
 

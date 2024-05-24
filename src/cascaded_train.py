@@ -277,13 +277,27 @@ def make_batch_computer(net_data, model_params):
     return do_batch
 
 
-def do_epoch(train_state, batch_iter, batch_fn, logger=None):
+def do_epoch(train_state, batch_iter, batch_fn, rng_ctr, epoch, logger=None, noisy_batch_args={}):
     if logger is None:
         logger = logging.getLogger("train_epoch")
+    noisy_batch_mode = noisy_batch_args.get("mode", "off")
+    match noisy_batch_mode:
+        case "simple-prob-clean":
+            if epoch >= noisy_batch_args["simple-prob-clean"]["start_epoch"]:
+                # Active noise selection
+                p_clean = float(noisy_batch_args["simple-prob-clean"]["prob"])
+            else:
+                # Inactive noise selection
+                p_clean = 1.0
+        case "off":
+            p_clean = 1.0
+        case _:
+            raise ValueError(f"Invalid noisy_batch_mode {noisy_batch_mode}")
+
     epoch_start = time.perf_counter()
     losses = []
     for batch in batch_iter:
-        train_state, batch_loss = batch_fn(batch, train_state)
+        train_state, batch_loss, rng_ctr = batch_fn(batch, train_state, rng_ctr, jnp.float32(p_clean))
         losses.append(batch_loss)
     epoch_end = time.perf_counter()
     mean_loss = jax.device_get(jnp.mean(jnp.stack(losses)))
@@ -291,7 +305,7 @@ def do_epoch(train_state, batch_iter, batch_fn, logger=None):
     logger.info("Finished epoch in %f sec", epoch_end - epoch_start)
     logger.info("Epoch mean loss %f", mean_loss)
     logger.info("Epoch final loss %f", final_loss)
-    return train_state, {"mean_loss": mean_loss.item(), "final_loss": final_loss.item(), "duration_sec": epoch_end - epoch_start}
+    return train_state, {"mean_loss": mean_loss.item(), "final_loss": final_loss.item(), "duration_sec": epoch_end - epoch_start}, rng_ctr
 
 
 def make_validation_stats_function(net_data, model_params, processing_scales):
