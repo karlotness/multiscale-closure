@@ -33,5 +33,6 @@ else
 fi
 export JAX_ENABLE_X64=True
 export JAX_DEFAULT_DTYPE_BITS=32
+export CUDA_CACHE_DISABLE=1
 cd "${CHECKOUT_DIR}/src"
 singularity run "${gpu_args[@]}" "$SINGULARITY_CONTAINER" "${@:2}"
