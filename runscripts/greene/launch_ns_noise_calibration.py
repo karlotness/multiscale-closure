@@ -28,10 +28,11 @@ OPTIMIZER = "adam:eps=0.001"
 OPTIM_WRAP = "none"
 EVAL_TYPE = "best_val_loss"
 BATCH_SIZE = 32
-NOISE_LEVELS = [0.005, 0.01, 0.02, 0.05, 0.1]
+NOISE_LEVELS = [0.05, 0.1, 0.15, 0.25]
 NOISE_MODE = "simple-prob-clean"
 NOISE_START_EPOCH = 6
-NOISE_PROB_CLEAN = 0.5
+NOISE_PROB_CLEAN = 0.25
+NOISELESS_ALT_SOURCE = [True, False]
 
 VAR_BASE_STDDEV = {
     "ns_vort_64": (4.2444882,),
@@ -160,6 +161,7 @@ def launch_sequential_training(
     noise_mode="off",
     noise_start_epoch=1,
     noise_prob_clean=0.5,
+    noiseless_alt_source=False,
 ):
     scales = [str(s) for s in sorted(set(scales))]
     if len(scales) < 2:
@@ -197,6 +199,8 @@ def launch_sequential_training(
                 f"--simple_prob_clean_start_epoch={noise_start_epoch}",
             ]
         )
+        if noiseless_alt_source:
+            args.append("--noise_free_alt_source")
         if noise_vars:
             args.append("--noise_specs")
             for k, v in noise_vars.items():
@@ -301,13 +305,14 @@ for noise_level in NOISE_LEVELS:
             dependency_ids=[er.run_id for er in runs],
         )
 
-    for scale_set, (arch_key, arch_parts), chan_coarse_op in itertools.product(
-        SCALE_SETS, NET_ARCH_SETS, COARSEN_OPS,
+    for scale_set, (arch_key, arch_parts), chan_coarse_op, noiseless_alt_source in itertools.product(
+        SCALE_SETS, NET_ARCH_SETS, COARSEN_OPS, NOISELESS_ALT_SOURCE
     ):
         scale_set = tuple(sorted(scale_set, reverse=True))
         assert len(scale_set) == 2
         scale_set_underscore = "_".join(map(str, scale_set))
-        scale_set_dir = base_out_dir / f"ns-{scale_set_underscore}"
+        noiseless_str = "-noiselessalt" if noiseless_alt_source else ""
+        scale_set_dir = base_out_dir / f"ns-{scale_set_underscore}{noiseless_str}"
         lu.dry_run_mkdir(scale_set_dir)
         arch_out_dir = scale_set_dir / arch_key
         lu.dry_run_mkdir(arch_out_dir)
@@ -334,6 +339,7 @@ for noise_level in NOISE_LEVELS:
                 noise_mode=NOISE_MODE,
                 noise_start_epoch=NOISE_START_EPOCH,
                 noise_prob_clean=NOISE_PROB_CLEAN,
+                noiseless_alt_source=noiseless_alt_source,
             )
             runs.append(
                 BaseNetRun(
