@@ -241,7 +241,7 @@ def launch_online_eval(*, out_file, eval_file, weight_files, rollout_length=7.5,
         eval_file,
     ]
     args.extend(weight_files)
-    return lu.container_cmd_launch(args, time_limit="15:00:00", job_name="eval", cpus=1, gpus=1, mem_gb=20, dependency_ids=dependency_ids)
+    return lu.container_cmd_launch(args, time_limit="20:00:00", job_name="eval", cpus=1, gpus=1, mem_gb=20, dependency_ids=dependency_ids)
 
 
 # Launch baselines
