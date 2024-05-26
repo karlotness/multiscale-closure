@@ -14,10 +14,11 @@ VAST = pathlib.Path(os.environ["VAST"]).resolve()
 # lu.enable_real_launch()
 
 # General parameters
-NUM_REPEATS = 4
-SCALE_SETS = [(64, 32), (64, 48), (128, 96), (128, 64)]
+NUM_REPEATS = 10
+SCALE_SETS = [(64, 32), (64, 48)]
 NET_ARCH_SETS = [
     ("md8md8", ("shallow-gz-fcnn-v1-medium-l8", "shallow-gz-fcnn-v1-medium-l8")),
+    ("psm4pmd8", ("shallow-gz-fcnn-v1-puresmall-l4", "shallow-gz-fcnn-v1-puremedium-l8")),
 ]
 COARSEN_OPS = ["spectral"]
 LR_SCHEDULE = "warmup1-cosine"
@@ -28,11 +29,12 @@ OPTIMIZER = "adam:eps=0.001"
 OPTIM_WRAP = "none"
 EVAL_TYPE = "best_val_loss"
 BATCH_SIZE = 32
-NOISE_LEVELS = [0.05, 0.1, 0.15, 0.25]
+NOISE_LEVELS = [0.02, 0.035, 0.05, 0.075, 0.1]
 NOISE_MODE = "simple-prob-clean"
 NOISE_START_EPOCH = 6
 NOISE_PROB_CLEAN = 0.25
-NOISELESS_ALT_SOURCE = [True, False]
+NOISELESS_ALT_SOURCE = [False]
+ROLLOUT_LENGTH = 15
 
 VAR_BASE_STDDEV = {
     "ns_vort_64": (4.2444882,),
@@ -230,11 +232,11 @@ def launch_sequential_training(
     return lu.container_cmd_launch(args, time_limit="0:30:00", job_name="seq-to-cascade", cpus=1, gpus=0, mem_gb=4, dependency_ids=dependency_ids)
 
 
-def launch_online_eval(*, out_file, eval_file, weight_files, dependency_ids=None):
+def launch_online_eval(*, out_file, eval_file, weight_files, rollout_length=7.5, dependency_ids=None):
     args = [
         "python",
         "online_ns_data_eval.py",
-        "--rollout_length_limit=7.5",
+        f"--rollout_length_limit={rollout_length}",
         out_file,
         eval_file,
     ]
@@ -303,6 +305,7 @@ for noise_level in NOISE_LEVELS:
             eval_file=DATA_FILES.test,
             weight_files=[er.out_dir / "weights" / f"{EVAL_TYPE}.eqx" for er in runs],
             dependency_ids=[er.run_id for er in runs],
+            rollout_length=ROLLOUT_LENGTH,
         )
 
     for scale_set, (arch_key, arch_parts), chan_coarse_op, noiseless_alt_source in itertools.product(
@@ -354,4 +357,5 @@ for noise_level in NOISE_LEVELS:
             eval_file=DATA_FILES.test,
             weight_files=[er.out_dir / "weights" / f"{EVAL_TYPE}.eqx" for er in runs],
             dependency_ids=[er.run_id for er in runs],
+            rollout_length=ROLLOUT_LENGTH,
         )
