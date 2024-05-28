@@ -7,10 +7,14 @@ import operator
 import threading
 import contextlib
 import typing
+import pathlib
+import shutil
+import tempfile
 import numpy as np
 import jax
 import jax.numpy as jnp
 import h5py
+import zarr
 from ..qg.utils import register_pytree_dataclass
 
 
@@ -459,6 +463,120 @@ class NSAggregateLoader:
         for loader in self.loaders:
             loader.close()
         self._closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        self.close()
+
+
+class NSFillableDataLoader:
+    def __init__(self, batch_size, fields=("ns_u_64", "ns_v_64", "ns_u_corr_64", "ns_v_corr_64"), seed=None, base_logger=None):
+        self.batch_size = batch_size
+        self.fields = sorted(set(fields))
+        if base_logger is None:
+            self._logger = logging.getLogger("ns_fillable_loader")
+        else:
+            self._logger = base_logger.getChild("ns_fillable_loader")
+        if seed is None:
+            seed = random.SystemRandom().randint(0, 2**32)
+            self._logger.debug("auto-seeding with %d", seed)
+        self._np_rng = np.random.default_rng(seed=seed)
+        # Check the fields and determine size
+        sizes = set()
+        load_fields = set()
+        for field in self.fields:
+            if m := re.fullmatch(r"ns_(?P<basename>.+?)_(?P<size>\d+)", field):
+                sizes.add(int(m.group("size")))
+                base_name = m.group("basename")
+                if base_name not in {"u", "v", "u_corr", "v_corr"}:
+                    raise ValueError(f"Requested invalid field {base_name} not in file")
+                load_fields.add(base_name)
+            else:
+                raise ValueError(f"invalid field {field}")
+        self._load_fields = load_fields
+        self._non_fields = {"u", "v", "u_corr", "v_corr"} - set(self._load_fields)
+        if len(sizes) != 1:
+            raise ValueError(f"Requested loading inconsistent sizes {fields}")
+        # Configure temporary directories and data
+        self._temp_dir = tempfile.TemporaryDirectory(prefix="temp-ns-fill-loader-")
+        self._logger.debug("using temporary directory %s", self._temp_dir.name)
+        self._data = None
+
+    def _create_struct_dtype(self, sample):
+        struct_dtype = []
+        for field in self._load_fields:
+            sample_field = sample.field(field)
+            if field not in {"u", "v", "u_corr", "v_corr"}:
+                raise ValueError(f"unsupported field {field}")
+            struct_dtype.append(
+                (field, sample_field.dtype, sample_field.shape[1:])
+            )
+        return np.dtype(struct_dtype)
+
+    def _combine_array(self, sample, dtype):
+        num_steps = sample.field(next(iter(self._load_fields))).shape[0]
+        arr = np.empty(shape=num_steps, dtype=dtype)
+        for field in self._load_fields:
+            arr[field] = sample.field(field)
+        return arr
+
+    def add_data(self, sample):
+        if self._temp_dir is None:
+            raise ValueError("closed loader, cannot add data")
+        if self._data is None:
+            self._logger.debug("initialized new zarr array")
+            self._data = zarr.open_array(
+                pathlib.Path(self._temp_dir.name) / "data.zarr",
+                dtype=self._create_struct_dtype(sample),
+                fill_value=None,
+                shape=(0,),
+                chunks=(25,),
+                mode="w-",
+                compressor=None,
+            )
+        self._data.append(self._combine_array(sample, self._data.dtype), axis=0)
+
+    def clear(self):
+        if self._data is not None:
+            self._data = None
+            shutil.rmtree(pathlib.Path(self._temp_dir.name) / "data.zarr")
+            self._logger.debug("cleared current zarr array")
+
+    def num_samples(self):
+        if self._data is None:
+            return 0
+        return self._data.shape[0]
+
+    def next_batch(self):
+        if self._temp_dir is None:
+            raise ValueError("closed loader, cannot load batches")
+        num_samps = self.num_samples()
+        if num_samps <= 0:
+            raise ValueError("empty fillable dataset, insert data first")
+        indices = self._np_rng.integers(0, num_samps, size=self.batch_size)
+        samples = self._data[indices]
+        # Bundle samples into batch
+        result_fields = {k: None for k in self._non_fields}
+        for field in self._load_fields:
+            result_fields[field] = samples[field].astype(np.float32)
+        return jax.device_put(LoadedState(**result_fields))
+
+    def iter_batches(self):
+        # A generator over the batches
+        while True:
+            yield self.next_batch()
+
+    def close(self):
+        if self._temp_dir is None:
+            return
+        self._data = None
+        self._temp_dir.cleanup()
+        self._temp_dir = None
 
     def __enter__(self):
         return self

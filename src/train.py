@@ -1423,6 +1423,18 @@ def make_train_loader(
                     base_logger=base_logger.getChild("train_loader"),
                     fields=required_fields,
                 ),
+                ns_loader.NSFillableDataLoader(
+                    batch_size=batch_size,
+                    fields=required_fields,
+                    seed=np_rng.integers(2**32).item(),
+                    base_logger=base_logger.getChild("ns-fill-1"),
+                ),
+                ns_loader.NSFillableDataLoader(
+                    batch_size=batch_size,
+                    fields=required_fields,
+                    seed=np_rng.integers(2**32).item(),
+                    base_logger=base_logger.getChild("ns-fill-2"),
+                ),
             ],
             batch_size=batch_size,
             seed=np_rng.integers(2**32).item(),
@@ -1758,7 +1770,7 @@ def main(args):
                     fillable_loader = train_loader.loaders[fillable_idx]
                 else:
                     fillable_loader = None
-                assert fillable_loader is None or isinstance(fillable_loader, FillableDataLoader)
+                assert fillable_loader is None or isinstance(fillable_loader, (FillableDataLoader, ns_loader.NSFillableDataLoader))
                 if fillable_loader is not None and just_switched:
                     logger.info("Clearing new data loader %d", fillable_idx)
                     num_dirty_samples[fillable_idx] = 0
@@ -1769,7 +1781,7 @@ def main(args):
                     fillable_loader = train_loader.loaders[fillable_idx]
                 else:
                     fillable_loader = None
-                assert fillable_loader is None or isinstance(fillable_loader, FillableDataLoader)
+                assert fillable_loader is None or isinstance(fillable_loader, (FillableDataLoader, ns_loader.NSFillableDataLoader))
             new_live_trajs, new_traj_info, rng_ctr = live_gen_func(
                 epoch=epoch,
                 rng_ctr=rng_ctr,
