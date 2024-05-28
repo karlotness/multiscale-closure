@@ -337,7 +337,7 @@ class ThreadedPreShuffledSnapshotLoader:
 
 
 class AggregateLoader:
-    def __init__(self, loaders, batch_size, seed=None):
+    def __init__(self, loaders, batch_size, seed=None, loader_weights=None):
         self.loaders = tuple(loaders)
         self.batch_size = batch_size
         self._closed = False
@@ -346,6 +346,12 @@ class AggregateLoader:
         self._np_rng = np.random.default_rng(seed=seed)
         if any(loader.batch_size < self.batch_size for loader in self.loaders):
             raise ValueError("Batch size too small for aggregation")
+        if loader_weights is not None:
+            self.loader_weights = np.asarray(loader_weights, dtype=np.float64)
+            if self.loader_weights.shape != (len(self.loaders),):
+                raise ValueError("Loader has weights inconsistent size")
+        else:
+            self.loader_weights = 1
 
     def num_samples(self):
         return sum(l.num_samples() for l in self.loaders)
@@ -360,7 +366,7 @@ class AggregateLoader:
             if num_samps > 0:
                 active_loaders.append(loader)
                 weights.append(num_samps)
-        weights = np.asarray([loader.num_samples() for loader in active_loaders])
+        weights = np.asarray([loader.num_samples() for loader in active_loaders]) * self.loader_weights
         weights = weights / weights.sum()
         samples_per_loader = self._np_rng.multinomial(self.batch_size, weights)
         batches = [loader.next_batch() for loader in active_loaders]

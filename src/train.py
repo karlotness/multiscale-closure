@@ -66,6 +66,7 @@ parser.add_argument("--live_gen_mode", type=str, default="add-hardest", choices=
 parser.add_argument("--live_gen_net_steps", type=int, default=5, help="")
 parser.add_argument("--live_gen_base_data", type=str, default=None, help="")
 parser.add_argument("--live_gen_switch_set_interval", type=int, default=None, help="")
+parser.add_argument("--live_gen_noise_weight", type=float, default=None, help="How much extra weight should noisy samples get")
 parser.add_argument("--channel_coarsen_type", type=str, choices=["spectral", "linear", "nearest"], default="spectral", help="What coarsening operator should be used by the network to rescale channels")
 parser.add_argument("--noisy_batch_mode", type=str, choices=["off", "live-gen", "simple-prob-clean"], default="live-gen", help="Mode for adding noise during training")
 parser.add_argument("--simple_prob_clean", type=float, default=0.5, help="Probability of a clean sample (when --noisy_batch_mode=simple-prob-clean)")
@@ -1098,13 +1099,13 @@ def make_batch_computer(input_channels, output_channels, model_params, processin
     return do_batch
 
 
-def do_epoch(train_state, batch_iter, batch_fn, rng_ctr, clean_vs_noise_spec_counts, epoch, logger=None, noisy_batch_args={}):
+def do_epoch(train_state, batch_iter, batch_fn, rng_ctr, clean_vs_noise_spec_counts, epoch, logger=None, noisy_batch_args={}, noise_weight=None):
     noisy_batch_mode = noisy_batch_args.get("mode", "live-gen")
     match noisy_batch_mode:
         case "live-gen":
             clean_vals, noise_vals = clean_vs_noise_spec_counts
             n_clean = sum(clean_vals)
-            n_noisy = sum(noise_vals)
+            n_noisy = sum(noise_vals) * (noise_weight if noise_weight is not None else 1)
         case "simple-prob-clean":
             if epoch >= noisy_batch_args["simple-prob-clean"]["start_epoch"]:
                 # Active noise selection
@@ -1372,9 +1373,14 @@ def make_train_loader(
     loader_chunk_size,
     base_logger,
     np_rng,
-    required_fields
+    required_fields,
+    noise_weight=None,
 ):
     if system_type == "qg":
+        if noise_weight is not None:
+            noise_weights = [1, noise_weight, noise_weight]
+        else:
+            noise_weights = None
         return AggregateLoader(
             loaders=[
                 ThreadedPreShuffledSnapshotLoader(
@@ -1399,8 +1405,13 @@ def make_train_loader(
             ],
             batch_size=batch_size,
             seed=np_rng.integers(2**32).item(),
+            loader_weights=noise_weights,
         )
     elif system_type == "ns":
+        if noise_weight is not None:
+            noise_weights = [1, noise_weight, noise_weight]
+        else:
+            noise_weights = None
         return ns_loader.NSAggregateLoader(
             loaders=[
                 ns_loader.NSThreadedPreShuffledSnapshotLoader(
@@ -1415,6 +1426,7 @@ def make_train_loader(
             ],
             batch_size=batch_size,
             seed=np_rng.integers(2**32).item(),
+            loader_weights=noise_weights,
         )
     else:
         raise ValueError(f"unsupported system {system_type}")
@@ -1598,6 +1610,7 @@ def main(args):
                 base_logger=logger,
                 np_rng=np_rng,
                 required_fields=required_fields,
+                noise_weight=args.live_gen_noise_weight,
             )
         )
         val_loader = train_context.enter_context(
@@ -1667,6 +1680,7 @@ def main(args):
                     clean_vs_noise_spec_counts=(num_clean_samples, num_dirty_samples),
                     epoch=epoch,
                     noisy_batch_args=noisy_batch_args,
+                    noise_weight=args.live_gen_noise_weight,
                 )
             mean_loss = epoch_stats["mean_loss"]
 
