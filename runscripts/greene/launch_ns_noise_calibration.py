@@ -37,8 +37,8 @@ NOISELESS_ALT_SOURCE = [False]
 ROLLOUT_LENGTH = 15
 
 VAR_BASE_STDDEV = {
-    "ns_vort_64": (4.2444882,),
-    "ns_vort_128": (4.4990916,),
+    "ns_vort_v2_64": (1.0,),
+    "ns_vort_v2_128": (1.0,),
     "ns_uv_64": (1.0, 1.0),
     "ns_uv_128": (1.0, 1.0),
 }
@@ -126,7 +126,7 @@ def launch_training(
         args.append("--input_channels")
         args.extend(input_channels)
     else:
-        args.extend(["--input_channels", f"ns_uv_{scale:d}", f"ns_vort_{scale:d}"])
+        args.extend(["--input_channels", f"ns_uv_{scale:d}", f"ns_vort_v2_{scale:d}"])
     if output_channels:
         args.append("--output_channels")
         args.extend(output_channels)
@@ -263,7 +263,7 @@ for noise_level in NOISE_LEVELS:
         lu.dry_run_mkdir(scale_set_dir)
         arch_core_str = ":".join(arch_parts)
         arch = f"stacked-noscale-net-v1-{arch_core_str}"
-        base_inputs = [f"ns_uv_{peak_scale:d}", f"ns_vort_{peak_scale:d}"]
+        base_inputs = [f"ns_uv_{peak_scale:d}", f"ns_vort_v2_{peak_scale:d}"]
         base_outputs = [f"ns_uv_corr_{peak_scale:d}"]
         arch_out_dir = scale_set_dir / arch_key
         lu.dry_run_mkdir(arch_out_dir)

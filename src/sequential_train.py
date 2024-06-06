@@ -103,7 +103,7 @@ def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batc
             in_channels = [f"q_{max(processing_scales)}"]
             out_channels = [f"q_scaled_forcing_{max(processing_scales)}to{min(processing_scales)}"]
         elif system_type == "ns":
-            in_channels = [f"ns_uv_{max(processing_scales)}", f"ns_vort_{max(processing_scales)}"]
+            in_channels = [f"ns_uv_{max(processing_scales)}", f"ns_vort_v2_{max(processing_scales)}"]
             out_channels = [f"ns_scaled_uv_corr_{max(processing_scales)}to{min(processing_scales)}"]
     elif 1 <= train_step < len(processing_scales):
         small, big = next(itertools.islice(itertools.pairwise(sorted(processing_scales)), train_step - 1, None))
@@ -116,7 +116,7 @@ def init_network(architecture, lr, rng, train_path, optim_type, num_epochs, batc
         elif system_type == "ns":
             in_channels = [
                 (f"ns_scaled_uv_{max(processing_scales)}to{big}" if max(processing_scales) != big else f"ns_uv_{max(processing_scales)}"),
-                (f"ns_scaled_vort_{max(processing_scales)}to{big}" if max(processing_scales) != big else f"ns_vort_{max(processing_scales)}"),
+                (f"ns_scaled_vort_v2_{max(processing_scales)}to{big}" if max(processing_scales) != big else f"ns_vort_v2_{max(processing_scales)}"),
             ] + [f"ns_scaled_uv_corr_{max(processing_scales)}to{sz}" for sz in prev_scales]
         if big == max(processing_scales):
             if system_type == "qg":

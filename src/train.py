@@ -516,7 +516,7 @@ def determine_required_fields(channels):
             loader_chans.update(determine_required_fields([f"ns_{orig_name}_{orig_size}"]))
         elif re.match(r"^ns_(u|v)(_corr)?_\d+$", chan):
             loader_chans.add(chan)
-        elif m := re.match(r"^ns_(vort|uv)_(?P<size>\d+)$", chan):
+        elif m := re.match(r"^ns_(vort|uv|vort_v2)_(?P<size>\d+)$", chan):
             size = int(m.group("size"))
             loader_chans.update(determine_required_fields([f"ns_u_{size}", f"ns_v_{size}"]))
         elif m := re.match(r"^ns_uv_corr_(?P<size>\d+)$", chan):
@@ -543,7 +543,7 @@ def determine_channel_size(chan):
         return int(m.group("size"))
     elif m := re.match(r"^ns_scaled_.+?_\d+to(?P<size>\d+)$", chan):
         return int(m.group("size"))
-    elif m := re.match(r"^ns_(vort|uv|uv_corr)_(?P<size>\d+)$", chan):
+    elif m := re.match(r"^ns_(vort|uv|uv_corr|vort_v2)_(?P<size>\d+)$", chan):
         return int(m.group("size"))
     elif m := re.match(r"^residual:(?P<chan1>[^-]+)-(?P<chan2>[^-]+)$", chan):
         return max(
@@ -560,7 +560,7 @@ def determine_channel_layers(chan):
         return 2
     elif re.match(r"^ns_(u|v)(_corr)?_\d+$", chan):
         return 1
-    elif m := re.match(r"^ns_vort_(?P<size>\d+)$", chan):
+    elif m := re.match(r"^ns_vort(_v2)?_(?P<size>\d+)$", chan):
         size = int(m.group("size"))
         return determine_channel_layers(f"ns_u_{size}")
     elif m := re.match(r"^ns_uv_(?P<size>\d+)$", chan):
@@ -832,6 +832,24 @@ def make_channel_from_batch(channel, batch, model_params, alt_source=None, net_a
         dv_dx = (jnp.roll(v, -1, axis=-2) - v) / dx
         du_dy = (jnp.roll(u, -1, axis=-1) - u) / dy
         vort = jnp.expand_dims(dv_dx - du_dy, -3)
+        return vort
+    elif m := re.match(r"^ns_vort_v2_(?P<size>\d+)$", channel):
+        orig_size = int(m.group("size"))
+        u = jnp.expand_dims(batch.u, -3)
+        v = jnp.expand_dims(batch.v, -3)
+        eu, ev = jax.vmap(lambda u, v: ns_utils.make_train_encoder(size=orig_size, grid_domain_scale=model_params.size_stats[orig_size].domain_size_multiple)((u, v)))(u, v)
+        u = eu.data
+        v = ev.data
+        # Compute vorticity
+        dx = model_params.size_stats[orig_size].dx
+        dy = model_params.size_stats[orig_size].dy
+        dv_dx = (jnp.roll(v, -1, axis=-2) - v) / dx
+        du_dy = (jnp.roll(u, -1, axis=-1) - u) / dy
+        vort = jax.vmap(model_params.size_stats[orig_size].field_stats("vort").scale_to_standard)(
+            jnp.expand_dims(dv_dx - du_dy, -3)
+        )
+        if vort.shape[-2:] != (orig_size, orig_size):
+            raise ValueError(f"Input batch has wrong base size {ret.shape} should be {orig_size}")
         return vort
     elif m := re.match(r"^ns_scaled_(?P<orig_name>.+?)_(?P<orig_size>\d+)to\d+$", channel):
         orig_name = m.group("orig_name")
