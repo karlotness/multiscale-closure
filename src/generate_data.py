@@ -19,6 +19,7 @@ import haiku as hk
 import gin
 import jax_cfd
 import jax_cfd.ml, jax_cfd.base, jax_cfd.spectral, jax_cfd.base.grids, jax_cfd.data
+from jax_cfd.data import xarray_utils as cfd_xarray_utils
 import jax_utils
 import powerpax as ppx
 import pyqg_jax
@@ -782,7 +783,7 @@ def combine_ns_slice(out_dir, args, base_logger):
             trajs_group = size_group.create_group("trajs")
             ns_names = ("u", "v", "u_corr", "v_corr")
             stat_accumulators = {
-                name: ns_stats.NSStatAccumulator() for name in ns_names
+                name: ns_stats.NSStatAccumulator() for name in itertools.chain(ns_names, ["vort"])
             }
             with xarray.open_dataset(param_ref_set) as dataset:
                 for k, v in dataset.attrs.items():
@@ -804,6 +805,10 @@ def combine_ns_slice(out_dir, args, base_logger):
                         batch_data = None
                         for k, v in dataset[name].attrs.items():
                             out_data.attrs[k] = v
+                    # Compute vorticity stats
+                    stat_accumulators["vort"].add_batch(
+                        cfd_xarray_utils.vorticity_2d(dataset).data
+                    )
             # Add statistics
             stats_group = size_group.create_group("stats")
             for name, stat_comp in stat_accumulators.items():

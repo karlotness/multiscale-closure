@@ -18,6 +18,12 @@ import zarr
 from ..qg.utils import register_pytree_dataclass
 
 
+PRECOMPUTED_VORT_STATS: dict[int, tuple[float, float]] = {
+    # Mean, var
+    64: (3.652492497823865e-12, 18.618713874668554),
+    128: (-1.8384845371823544e-12, 21.308386331528155),
+}
+
 
 @register_pytree_dataclass
 @dataclasses.dataclass
@@ -45,6 +51,7 @@ class CoreSystemParams:
     v_stats: ParamStat
     u_corr_stats: ParamStat
     v_corr_stats: ParamStat
+    vort_stats: ParamStat
     dx: float
     dy: float
     domain_size_multiple: int
@@ -59,6 +66,8 @@ class CoreSystemParams:
                 return self.u_corr_stats
             case "v_corr":
                 return self.v_corr_stats
+            case "vort":
+                return self.vort_stats
             case _:
                 raise ValueError(f"Invalid field {field}")
 
@@ -107,6 +116,21 @@ def load_system_stats(data_path):
                 )
                 # Get offsets
                 params_args[f"{name}_offset"] = sz_group["attrs"][name]["offset"][()]
+            # Special handling for vorticity parameters
+            # If present in file, used values. Otherwise, substitute precomputed value
+            if "vort" in sz_group["stats"]:
+                # Load from file
+                params_args[f"vort_stats"] = ParamStat(
+                    mean=sz_group["stats"]["vort"]["mean"][()].item(),
+                    var=sz_group["stats"]["vort"]["var"][()].item(),
+                )
+            else:
+                # Use precomputed values
+                precomp_mean, precomp_var = PRECOMPUTED_VORT_STATS[size]
+                params_args[f"vort_stats"] = ParamStat(
+                    mean=precomp_mean,
+                    var=precomp_var,
+                )
             results[size] = CoreSystemParams(**params_args)
     return NSModelParams(
         size_stats=results,

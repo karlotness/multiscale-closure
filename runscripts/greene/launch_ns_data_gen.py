@@ -98,7 +98,7 @@ for phase, num_trajs, seed in [
         job_name=f"ns-comb-{phase}",
         cpus=2,
         gpus=0,
-        mem_gb=20,
+        mem_gb=25,
         dependency_ids=launches,
     )
     # Clean up *.nc files
