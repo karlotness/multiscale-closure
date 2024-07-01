@@ -101,7 +101,7 @@ WINNING_ARCHES = {
             arch=to_stacked_arch_string(gen_arch_desc(name)),
             largest_arch=largest_arch(name),
         )
-        for name in ["psm4pmd8", "pmd8pmd8", "psm8md8", "pmd8md8", "sm8sm8"]
+        for name in ["psm4pmd8", "pmd8pmd8", "psm8md8", "pmd8md8", "sm8sm8", "md8md8"]
     ],
     (96, 64): [
         ArchStr(
@@ -109,7 +109,7 @@ WINNING_ARCHES = {
             arch=to_stacked_arch_string(gen_arch_desc(name)),
             largest_arch=largest_arch(name),
         )
-        for name in ["psm4pmd8", "md4md8", "sm4pmd8", "sm4md8", "pmd8md8"]
+        for name in ["psm4pmd8", "md4md8", "sm4pmd8", "sm4md8", "pmd8md8", "md8md8"]
     ],
 }
 
@@ -122,11 +122,11 @@ DATA_FILES = {
         val=VAST / "closure" / "data-nowarmup" / f"val/{COARSE_OP}/data.hdf5",
         test=VAST / "closure" / "data-eddyonly" / f"test/{COARSE_OP}/data.hdf5",
     ),
-    "jet": TrainFileSet(
-        train=SCRATCH / "closure" / "data-jet-nowarmup" / f"train/{COARSE_OP}/shuffled.hdf5",
-        val=SCRATCH / "closure" / "data-jet-nowarmup" / f"val/{COARSE_OP}/data.hdf5",
-        test=SCRATCH / "closure" / "data-jet-nowarmup" / f"test/{COARSE_OP}/data.hdf5",
-    ),
+    # "jet": TrainFileSet(
+    #     train=SCRATCH / "closure" / "data-jet-nowarmup" / f"train/{COARSE_OP}/shuffled.hdf5",
+    #     val=SCRATCH / "closure" / "data-jet-nowarmup" / f"val/{COARSE_OP}/data.hdf5",
+    #     test=SCRATCH / "closure" / "data-jet-nowarmup" / f"test/{COARSE_OP}/data.hdf5",
+    # ),
 }
 assert all(p.is_file() for p in itertools.chain.from_iterable([df.train, df.val, df.test] for df in DATA_FILES.values()))
 
