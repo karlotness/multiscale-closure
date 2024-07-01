@@ -35,10 +35,10 @@ def make_network_results_computer(nets, net_data, model_params):
                 model_params=model_params,
                 processing_size=data.processing_size,
                 alt_source=alt_sources,
-                net_aux=net_data.net_aux,
+                net_aux=data.net_aux,
             )
             predictions = jax.vmap(net)(input_chunk)
-            predictions = jax.vmap(make_basic_coarsener(data.processing_size, output_size, model_params, net_aux=net_data.net_aux))(predictions)
+            predictions = jax.vmap(make_basic_coarsener(data.processing_size, output_size, model_params, net_aux=data.net_aux))(predictions)
             # Process predictions and add to alt_sources
             predictions = split_chunk_into_channels(
                 channels=data.output_channels,
@@ -49,7 +49,7 @@ def make_network_results_computer(nets, net_data, model_params):
                     model_params=model_params,
                     processing_size=output_size,
                     alt_source=alt_sources,
-                    net_aux=net_data.net_aux,
+                    net_aux=data.net_aux,
                 )
             )
             results.update({name_remove_residual(k): v for k, v in predictions.items()})
