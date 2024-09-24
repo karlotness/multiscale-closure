@@ -55,7 +55,11 @@ def _get_core_traj_data(file_path):
 
 
 class SimpleQGLoader:
-    def __init__(self, file_path, fields=("q", "dqhdt", "t", "tc", "ablevel")):
+    def __init__(self, file_path, fields=("q", "dqhdt", "t", "tc", "ablevel"), base_logger=None):
+        if base_logger is None:
+            self._logger = logging.getLogger("qg_simple_loader")
+        else:
+            self._logger = base_logger.getChild("qg_simple_loader")
         self._fields = sorted(set(fields))
         self._core_fields = [f for f in self._fields if f in {"t", "tc", "ablevel"}]
         self._non_core_fields = [f for f in self._fields if f not in {"t", "tc", "ablevel"}]
@@ -77,15 +81,20 @@ class SimpleQGLoader:
         self.close()
 
     def __del__(self):
-        self.close()
+        if not self.closed:
+            self._logger.warning("Loader not properly closed before GC")
 
     def num_samples(self):
         return self.num_steps * self.num_trajs
 
     def close(self):
-        if self._trajs_group is not None:
+        if not self.closed:
             self._trajs_group = None
             self._h5_file.close()
+
+    @property
+    def closed(self):
+        return self._trajs_group is None
 
     def get_trajectory(self, traj, start=0, end=None):
         start = operator.index(start)
@@ -139,6 +148,7 @@ class ThreadedPreShuffledSnapshotLoader:
     ):
         if base_logger is None:
             base_logger = logging.getLogger("preshuffle_loader")
+        self._logger = base_logger.getChild("qg_preshuffle_loader")
         # Note: Loads only q and q_total_forcing
         self.fields = sorted(set(fields))
         self.batch_size = batch_size
@@ -286,7 +296,7 @@ class ThreadedPreShuffledSnapshotLoader:
             logger.debug("batch producer exiting")
 
     def next_batch(self):
-        if self._stop_event.is_set():
+        if self.closed:
             raise ValueError("Closed dataset, cannot load batches")
         res = self._batch_queue.get()
         if res is None:
@@ -303,7 +313,7 @@ class ThreadedPreShuffledSnapshotLoader:
         return self._num_samples
 
     def close(self):
-        if self._stop_event.is_set():
+        if self.closed:
             # Already cleaned up
             return
         self._stop_event.set()
@@ -326,6 +336,10 @@ class ThreadedPreShuffledSnapshotLoader:
         # Join the second thread
         self._batch_thread.join()
 
+    @property
+    def closed(self):
+        return self._stop_event.is_set()
+
     def __enter__(self):
         return self
 
@@ -333,11 +347,16 @@ class ThreadedPreShuffledSnapshotLoader:
         self.close()
 
     def __del__(self):
-        self.close()
+        if not self.closed:
+            self._logger.warning("Loader not properly closed before GC")
 
 
 class AggregateLoader:
-    def __init__(self, loaders, batch_size, seed=None, loader_weights=None):
+    def __init__(self, loaders, batch_size, seed=None, loader_weights=None, base_logger=None):
+        if base_logger is None:
+            self._logger = logging.getLogger("qg_aggregate_loader")
+        else:
+            self._logger = base_logger.getChild("qg_aggregate_loader")
         self.loaders = tuple(loaders)
         self.batch_size = batch_size
         self._closed = False
@@ -357,7 +376,7 @@ class AggregateLoader:
         return sum(l.num_samples() for l in self.loaders)
 
     def next_batch(self):
-        if self._closed:
+        if self.closed:
             raise ValueError("Closed loader, cannot load batches")
         active_loaders = []
         weights = []
@@ -386,11 +405,15 @@ class AggregateLoader:
             yield self.next_batch()
 
     def close(self):
-        if self._closed:
+        if self.closed:
             return
         for loader in self.loaders:
             loader.close()
         self._closed = True
+
+    @property
+    def closed(self):
+        return self._closed
 
     def __enter__(self):
         return self
@@ -399,11 +422,16 @@ class AggregateLoader:
         self.close()
 
     def __del__(self):
-        self.close()
+        if not self.closed:
+            self._logger.warning("Loader not properly closed before GC")
 
 
 class FillableDataLoader:
-    def __init__(self, batch_size, fields=("q", "q_total_forcing_64"), seed=None):
+    def __init__(self, batch_size, fields=("q", "q_total_forcing_64"), seed=None, base_logger=None):
+        if base_logger is None:
+            self._logger = logging.getLogger("qg_fillable_loader")
+        else:
+            self._logger = base_logger.getChild("qg_fillable_loader")
         self.batch_size = batch_size
         self.fields = sorted(set(fields))
         self._temp_dir = tempfile.TemporaryDirectory(prefix="temp-fill-loader-")
@@ -471,7 +499,7 @@ class FillableDataLoader:
         return self._data.shape[0]
 
     def next_batch(self):
-        if self._temp_dir is None:
+        if self.closed:
             raise ValueError("Closed loader, cannot load batches")
         num_samps = self.num_samples()
         if num_samps <= 0:
@@ -506,11 +534,15 @@ class FillableDataLoader:
             yield self.next_batch()
 
     def close(self):
-        if self._temp_dir is None:
+        if self.closed:
             return
         self._data = None
         self._temp_dir.cleanup()
         self._temp_dir = None
+
+    @property
+    def closed(self):
+        return self._temp_dir is None
 
     def __enter__(self):
         return self
@@ -519,4 +551,5 @@ class FillableDataLoader:
         self.close()
 
     def __del__(self):
-        self.close()
+        if not self.closed:
+            self._logger.warning("Loader not properly closed before GC")

@@ -326,7 +326,7 @@ class NSThreadedPreShuffledSnapshotLoader:
             logger.debug("Batch producer exiting")
 
     def next_batch(self):
-        if self._stop_event.is_set():
+        if self.closed:
             raise ValueError("closed dataset, cannot load batches")
         res = self._batch_queue.get()
         if res is None:
@@ -342,7 +342,7 @@ class NSThreadedPreShuffledSnapshotLoader:
         return self._num_samples
 
     def close(self):
-        if self._stop_event.is_set():
+        if self.closed:
             # Already cleaned up
             return
         self._stop_event.set()
@@ -365,6 +365,10 @@ class NSThreadedPreShuffledSnapshotLoader:
         # Join the second thread
         self._batch_thread.join()
 
+    @property
+    def closed(self):
+        return self._stop_event.is_set()
+
     def __enter__(self):
         return self
 
@@ -372,11 +376,12 @@ class NSThreadedPreShuffledSnapshotLoader:
         self.close()
 
     def __del__(self):
-        self.close()
+        if not self.closed:
+            self._logger.warning("Loader not properly closed before GC")
 
 
 class SimpleNSLoader:
-    def __init__(self, file_path, fields=("ns_u_64", "ns_v_64", "ns_u_corr_64", "ns_v_corr_64")):
+    def __init__(self, file_path, fields=("ns_u_64", "ns_v_64", "ns_u_corr_64", "ns_v_corr_64"), base_logger=None):
         self.fields = sorted(set(fields))
         sizes = set()
         load_fields = set()
@@ -406,6 +411,10 @@ class SimpleNSLoader:
         self.num_trajs = self.num_trajectories
         if "model_type" not in self._h5_file.keys() or self._h5_file["model_type"].asstr()[()] != "ns":
             raise ValueError("provided dataset is not for NS system")
+        if base_logger is None:
+            self._logger = logging.getLogger("ns_simple_loader")
+        else:
+            self._logger = base_logger.getChild("ns_simple_loader")
 
     def __enter__(self):
         return self
@@ -414,13 +423,18 @@ class SimpleNSLoader:
         self.close()
 
     def __del__(self):
-        self.close()
+        if not self.closed:
+            self._logger.warning("Loader not properly closed before GC")
 
     def num_samples(self):
         return self.num_steps * self.num_trajs
 
+    @property
+    def closed(self):
+        return self._trajs_group is None
+
     def close(self):
-        if self._trajs_group is not None:
+        if not self.closed:
             self._trajs_group = None
             self._h5_file.close()
 
@@ -438,10 +452,14 @@ class SimpleNSLoader:
 
 
 class NSAggregateLoader:
-    def __init__(self, loaders, batch_size, seed=None, loader_weights=None):
+    def __init__(self, loaders, batch_size, seed=None, loader_weights=None, base_logger=None):
         self.loaders = tuple(loaders)
         self.batch_size = batch_size
         self._closed = False
+        if base_logger is None:
+            self._logger = logging.getLogger("ns_aggregate_loader")
+        else:
+            self._logger = base_logger.getChild("ns_aggregate_loader")
         if seed is None:
             seed = random.SystemRandom().randint(0, 2**32)
         self._np_rng = np.random.default_rng(seed=seed)
@@ -458,7 +476,7 @@ class NSAggregateLoader:
         return sum(l.num_samples() for l in self.loaders)
 
     def next_batch(self):
-        if self._closed:
+        if self.closed:
             raise ValueError("Closed loader, cannot load batches")
         active_loaders = []
         weights = []
@@ -482,11 +500,15 @@ class NSAggregateLoader:
             yield self.next_batch()
 
     def close(self):
-        if self._closed:
+        if self.closed:
             return
         for loader in self.loaders:
             loader.close()
         self._closed = True
+
+    @property
+    def closed(self):
+        return self._closed
 
     def __enter__(self):
         return self
@@ -495,7 +517,8 @@ class NSAggregateLoader:
         self.close()
 
     def __del__(self):
-        self.close()
+        if not self.closed:
+            self._logger.warning("Loader not properly closed before GC")
 
 
 class NSFillableDataLoader:
@@ -577,7 +600,7 @@ class NSFillableDataLoader:
         return self._data.shape[0]
 
     def next_batch(self):
-        if self._temp_dir is None:
+        if self.closed:
             raise ValueError("closed loader, cannot load batches")
         num_samps = self.num_samples()
         if num_samps <= 0:
@@ -596,11 +619,15 @@ class NSFillableDataLoader:
             yield self.next_batch()
 
     def close(self):
-        if self._temp_dir is None:
+        if self.closed:
             return
         self._data = None
         self._temp_dir.cleanup()
         self._temp_dir = None
+
+    @property
+    def closed(self):
+        return self._temp_dir is None
 
     def __enter__(self):
         return self
@@ -609,4 +636,5 @@ class NSFillableDataLoader:
         self.close()
 
     def __del__(self):
-        self.close()
+        if not self.closed:
+            self._logger.warning("Loader not properly closed before GC")
