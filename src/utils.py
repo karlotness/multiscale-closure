@@ -7,6 +7,17 @@ import dataclasses
 import os
 import pathlib
 import contextlib
+import sys
+
+
+def python_executable_path():
+    if candidate := sys.executable:
+        # Validate executable path
+        c_path = pathlib.Path(candidate).resolve()
+        if c_path.is_file() and os.access(c_path, os.X_OK):
+            return str(c_path)
+        raise ValueError(f"Python interpreter '{candidate}' appears non-executable")
+    raise ValueError(f"Failed to locate current Python interpreter")
 
 
 @contextlib.contextmanager

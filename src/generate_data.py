@@ -838,7 +838,7 @@ def shuffle_ns_data(out_dir, args, base_logger):
             total_bytes = sum(ft["bytes"] for ft in field_types)
             logger.debug("Spawning process")
             proc = await asyncio.create_subprocess_exec(
-                sys.executable,
+                utils.python_executable_path(),
                 str(pathlib.Path(__file__).resolve().parent / "systems" / "ns" / "_background_loader.py"),
                 str(in_path),
                 "1",

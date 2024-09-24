@@ -42,7 +42,7 @@ async def proc_worker(in_queue, out_queue, data_file, data_dtype):
             total_bytes += field_bytes
             field_infos.append((field_name, field_shape, field_dtype, field_bytes))
         proc = await asyncio.create_subprocess_exec(
-            sys.executable,
+            utils.python_executable_path(),
             str(pathlib.Path(__file__).resolve().parent / "systems" / "qg" / "_loader.py"),
             str(data_file),
             "1",
