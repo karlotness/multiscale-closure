@@ -13,7 +13,7 @@ import sys
 def python_executable_path():
     if candidate := sys.executable:
         # Validate executable path
-        c_path = pathlib.Path(candidate).resolve()
+        c_path = pathlib.Path(candidate)
         if c_path.is_file() and os.access(c_path, os.X_OK):
             return str(c_path)
         raise ValueError(f"Python interpreter '{candidate}' appears non-executable")
