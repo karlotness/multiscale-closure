@@ -20,6 +20,7 @@ slurm-*.out
 *.json
 *.hdf5
 *.nc
+*.html
 
 # Ignore IPython notebooks
 *.ipynb
