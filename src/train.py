@@ -84,32 +84,37 @@ def sniff_system_type(data_file):
 def live_sample_get_args(train_path, required_fields, logger=None):
     if logger is None:
         logger = logging.getLogger("live-sample-params")
-    q_forcing_sizes = set()
-    for field in required_fields:
-        if m := re.match(r"^q_total_forcing_(?P<size>\d+)$", field):
-            q_forcing_sizes.add(int(m.group("size")))
-    with h5py.File(train_path, "r") as data_file:
-        try:
-            dt = data_file["params"]["dt"][()].item()
-            subsample = data_file["params"]["subsample"][()].item()
-            num_warmup_steps = math.ceil(155520000.0 / dt)
-            _traj_store_steps = data_file["source"]["step"][:].max()
-            q_size = data_file["shuffled"][0]["q"].shape[-1]
-        except KeyError:
-            logger.warning("Failed to determine live generation parameters (ok if generating no live trajectories)")
+    if sniff_system_type(train_path) == "ns":
+        # Get NS args
+        pass
+    else:
+        # Get QG args
+        q_forcing_sizes = set()
+        for field in required_fields:
+            if m := re.match(r"^q_total_forcing_(?P<size>\d+)$", field):
+                q_forcing_sizes.add(int(m.group("size")))
+        with h5py.File(train_path, "r") as data_file:
+            try:
+                dt = data_file["params"]["dt"][()].item()
+                subsample = data_file["params"]["subsample"][()].item()
+                num_warmup_steps = math.ceil(155520000.0 / dt)
+                _traj_store_steps = data_file["source"]["step"][:].max()
+                q_size = data_file["shuffled"][0]["q"].shape[-1]
+            except KeyError:
+                logger.warning("Failed to determine live generation parameters (ok if generating no live trajectories)")
+                return {
+                    k: None
+                    for k in ["dt", "subsample", "num_warmup_steps", "num_steps", "q_size", "q_forcing_sizes"]
+                }
+            num_steps = (_traj_store_steps * subsample) + num_warmup_steps
             return {
-                k: None
-                for k in ["dt", "subsample", "num_warmup_steps", "num_steps", "q_size", "q_forcing_sizes"]
+                "dt": dt,
+                "subsample": subsample,
+                "num_warmup_steps": num_warmup_steps,
+                "num_steps": num_steps,
+                "q_size": q_size,
+                "q_forcing_sizes": list(q_forcing_sizes),
             }
-        num_steps = (_traj_store_steps * subsample) + num_warmup_steps
-        return {
-            "dt": dt,
-            "subsample": subsample,
-            "num_warmup_steps": num_warmup_steps,
-            "num_steps": num_steps,
-            "q_size": q_size,
-            "q_forcing_sizes": list(q_forcing_sizes),
-        }
 
 
 def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_winners, dt, num_steps, num_warmup_steps, subsample, np_rng, logger, model_params, net_info, q_size, q_forcing_sizes, live_gen_mode, train_path, rollout_net_steps):
