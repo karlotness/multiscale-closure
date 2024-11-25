@@ -117,7 +117,10 @@ def live_sample_get_args(train_path, required_fields, logger=None):
             }
 
 
-def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_winners, dt, num_steps, num_warmup_steps, subsample, np_rng, logger, model_params, net_info, q_size, q_forcing_sizes, live_gen_mode, train_path, rollout_net_steps):
+def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_winners, dt, num_steps, num_warmup_steps, subsample, np_rng, logger, model_params, net_info, q_size, q_forcing_sizes, live_gen_mode, train_path, rollout_net_steps, time_multiplier=None):
+
+    if time_multiplier is not None or time_multiplier != 1:
+        raise ValueError(f"unsupported time multiplier {time_multiplier} for QG samples")
 
     def no_gen_traj_func(epoch, rng_ctr, net):
         return (
