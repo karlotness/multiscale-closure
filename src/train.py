@@ -1845,11 +1845,11 @@ def main(args):
                 rng_ctr=rng_ctr,
                 net=state.net,
             )
-            num_dirty_samples[fillable_idx] += new_traj_info["num_winners"]
             added_trajs = 0
             for live_traj in new_live_trajs:
                 fillable_loader.add_data(live_traj)
                 added_trajs += 1
+            num_dirty_samples[fillable_idx] += added_trajs
             logger.info("Added %d live-generated trajectories", added_trajs)
             logger.info("Loader samples: %s", [l.num_samples() for l in train_loader.loaders])
             new_live_trajs = None
