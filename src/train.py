@@ -86,7 +86,39 @@ def live_sample_get_args(train_path, required_fields, logger=None):
         logger = logging.getLogger("live-sample-params")
     if sniff_system_type(train_path) == "ns":
         # Get NS args
-        pass
+        # First, determine the main size
+        sizes = {determine_channel_size(f) for f in required_fields}
+        if len(sizes) != 1:
+            raise ValueError(f"Ambiguous input sizes {sizes}")
+        main_size = sizes.pop()
+        # Load parameters from training set
+        with h5py.File(train_path, "r") as data_file:
+            params_group = data_file[f"sz{main_size}"]["params"]
+            try:
+                if "shuffled" in data_file[f"sz{main_size}"].keys():
+                    # Fetch attributes for shuffled dataset
+                    u_offset = tuple(data_file[f"sz{main_size}"]["attrs"]["u"]["offset"])
+                    v_offset = tuple(data_file[f"sz{main_size}"]["attrs"]["v"]["offset"])
+                else:
+                    # Fetch attributes for normal data
+                    u_offset = tuple(data_file[f"sz{main_size}"]["trajs"][f"traj00000_u"].attrs["offset"])
+                    v_offset = tuple(data_file[f"sz{main_size}"]["trajs"][f"traj00000_v"].attrs["offset"])
+                return {
+                    "main_size": main_size,
+                    "ndim": params_group["ndim"][()].item(),
+                    "dt": params_group["dt"][()].item(),
+                    "stable_time_step": params_group["stable_time_step"][()].item(),
+                    "time_subsample_factor": params_group["time_subsample_factor"][()].item(),
+                    "maximum_velocity": params_group["maximum_velocity"][()].item(),
+                    "viscosity": params_group["viscosity"][()].item(),
+                    "full_config_str": params_group["full_config_str"].asstr()[()],
+                    "domain_size_mul": data_file[f"sz{main_size}"]["params"]["domain_size_multiple"][()].item(),
+                    "u_offset": u_offset,
+                    "v_offset": v_offset,
+                }
+            except KeyError:
+                logger.warning("Failed to determine live generation parameters for NS (ok if not generating)")
+                return {}
     else:
         # Get QG args
         q_forcing_sizes = set()
