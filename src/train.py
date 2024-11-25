@@ -431,7 +431,7 @@ def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_w
                     for _ in range(BATCH_SIZE):
                         traj = np_rng.integers(select_trajs).item()
                         step = np_rng.integers(low=0, high=ref_loader.num_steps - rollout_net_steps).item()
-                        traj_data = ref_loader.get_trajectory(traj, step, step + rollout_net_steps)
+                        traj_data = ref_loader.get_trajectory(traj, step, step + rollout_net_steps + 1)
                         traj_sys_params = jax.tree_map(lambda d: jnp.asarray(d[0, 0, 0, 0]), traj_data.sys_params)
                         batch.append((traj_data, traj_sys_params))
                     traj_data, traj_sys_params = jax.tree_util.tree_map(lambda *args: jnp.stack(args, axis=0), *batch)
