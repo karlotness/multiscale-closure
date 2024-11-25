@@ -24,11 +24,13 @@ import importlib
 from systems.qg.loader import ThreadedPreShuffledSnapshotLoader, SimpleQGLoader, AggregateLoader, FillableDataLoader, SnapshotStates
 from systems.qg import coarsen, diagnostics as qg_spec_diag, utils as qg_utils
 from systems.ns import loader as ns_loader, utils as ns_utils
+import gin
 import pyqg_jax
 from methods import get_net_constructor
 from generate_data import make_parameter_sampler, CONFIG_VARS as GEN_CONFIG_VARS
 import jax_utils
 import utils
+import powerpax
 
 
 parser = argparse.ArgumentParser(description="Train neural networks for closure")
@@ -67,6 +69,8 @@ parser.add_argument("--live_gen_net_steps", type=int, default=5, help="")
 parser.add_argument("--live_gen_base_data", type=str, default=None, help="")
 parser.add_argument("--live_gen_switch_set_interval", type=int, default=None, help="")
 parser.add_argument("--live_gen_noise_weight", type=float, default=None, help="How much extra weight should noisy samples get")
+parser.add_argument("--live_gen_time_multiplier", type=float, default=None, help="How much larger should the noise generation steps roughly be (default: 1.0)")
+parser.add_argument("--live_gen_batch_size_limit", type=int, default=None, help="How many live gen trajectories we can generate at once")
 parser.add_argument("--channel_coarsen_type", type=str, choices=["spectral", "linear", "nearest"], default="spectral", help="What coarsening operator should be used by the network to rescale channels")
 parser.add_argument("--noisy_batch_mode", type=str, choices=["off", "live-gen", "simple-prob-clean"], default="live-gen", help="Mode for adding noise during training")
 parser.add_argument("--simple_prob_clean", type=float, default=0.5, help="Probability of a clean sample (when --noisy_batch_mode=simple-prob-clean)")
@@ -521,6 +525,248 @@ def make_live_gen_func(start_epoch, interval, sample_conf, num_candidates, num_w
             return schedule_only
         case _:
             raise ValueError(f"invalid live generation mode {live_gen_mode}")
+
+
+def make_live_gen_func_ns(
+    *,
+    start_epoch,
+    interval,
+    num_candidates,
+    num_winners,
+    np_rng,
+    logger,
+    live_gen_mode,
+    time_multiplier,
+    net_info,
+    train_path,
+    rollout_net_steps,
+    batch_size_limit,
+    live_gen_args,
+    model_params,
+):
+
+    if time_multiplier is None:
+        time_multiplier = 1
+
+    def no_gen_traj_func(epoch, rng_ctr, net):
+        return (
+            [],
+            {
+                "num_winners": 0,
+                "num_candidates": 0,
+            },
+            rng_ctr,
+        )
+
+    def skip_for_early_epochs(fn):
+        @functools.wraps(fn)
+        def early_skip_wrap(epoch, rng_ctr, net):
+            if epoch < start_epoch or ((epoch - start_epoch) % interval) != 0:
+                # Inactive epoch, generate no trajectories
+                return no_gen_traj_func(epoch=epoch, rng_ctr=rng_ctr, net=net)
+            # Active epoch, delegate active generation
+            return fn(epoch=epoch, rng_ctr=rng_ctr, net=net)
+
+        return early_skip_wrap
+
+    # User requested that no trajectories be generated
+    if num_candidates == 0:
+        logger.info("Will generate *NO* live trajectories")
+        return no_gen_traj_func
+
+    assert num_winners <= num_candidates
+    assert start_epoch > 0
+
+    if num_winners != num_candidates:
+        logger.warning("Number of winners (%d) is not equal to number of candidates (%d)", num_winners, num_candidates)
+
+    def generate_network_finalstep(net, init_state, num_steps, step_dt):
+        # Lazy loading to avoid cycles and side effects
+        jax_cfd = importlib.import_module("jax_cfd")
+        jax_cfd_base = importlib.import_module("jax_cfd.base")
+        ns_config = importlib.import_module("systems.ns.config")
+        hk = importlib.import_module("haiku")
+        ns_online_eval = importlib.import_module("online_ns_data_eval")
+        NetData = importlib.import_module("cascaded_eval").NetData
+        # Set up model wrapping network for evaluation
+        with ns_utils.temp_gin_config():
+            # Load base configs
+            gin.parse_config(live_gen_args["full_config_str"])
+            gin.parse_config(ns_config.make_eval_model_config())
+
+            physics_specs = jax_cfd.ml.physics_specifications.get_physics_specs()
+            grid = ns_config.make_grid(
+                size=live_gen_args["main_size"],
+                grid_domain_scale=live_gen_args["domain_size_mul"],
+                ndim=live_gen_args["ndim"],
+            )
+            model_cls = jax_cfd.ml.model_builder.get_model_cls(
+                grid,
+                step_dt,
+                physics_specs
+            )
+            offsets = [live_gen_args["u_offset"], live_gen_args["v_offset"]]
+            bcs = [jax_cfd_base.boundaries.periodic_boundary_conditions(grid.ndim) for _ in range(grid.ndim)]
+
+            # Pack the network
+            net_data = NetData(
+                input_channels=net_info["input_channels"],
+                output_channels=net_info["output_channels"],
+                processing_size=net_info["processing_size"],
+                net_aux=net_info.get("net_aux", {}),
+            )
+            ns_packed_net = ns_online_eval.PackedModelData(
+                nets=[net],
+                net_data=[net_data],
+                model_params=model_params,
+            )
+
+            def step_fn(carry, xs, model):
+                assert xs is None
+                next_step = model.advance(carry)
+                return next_step, carry
+
+            def traj_eval_fn(init_state, ns_packed_net):
+                big_model = model_cls(ns_eqx_module=ns_packed_net)
+                init_u = init_state.u
+                init_v = init_state.v
+                start_vals = (init_u, init_v)
+                v0 = tuple(
+                    jnp.expand_dims(v.data, 0) for v in
+                    jax_cfd_base.initial_conditions.wrap_variables(
+                        start_vals,
+                        grid,
+                        bcs,
+                        offsets,
+                    )
+                )
+                enc_v0 = big_model.encode(v0)
+                _, traj = powerpax.sliced_scan(
+                    functools.partial(
+                        step_fn,
+                        model=big_model,
+                    ),
+                    enc_v0,
+                    None,
+                    length=num_steps,
+                    # Get only the last step
+                    start=-1,
+                )
+                traj = tuple(t.data for t in traj)
+                u, v = traj
+                return u, v
+
+            def hk_transform(init_state, ns_packed_net):
+                return hk.without_apply_rng(
+                    hk.transform(
+                        functools.partial(
+                            traj_eval_fn,
+                            init_state=init_state,
+                            ns_packed_net=ns_packed_net,
+                        )
+                    )
+                ).apply({})
+
+            def vec_fn(ns_packed_net, init_state):
+                return jax.vmap(
+                    functools.partial(
+                        hk_transform,
+                        ns_packed_net=ns_packed_net,
+                    )
+                )(init_state)
+
+            return vec_fn(ns_packed_net, init_state)
+
+    # Account for base dataset subsampling and user-specified time_multiplier
+    net_num_steps = rollout_net_steps * live_gen_args["time_subsample_factor"]
+    if net_num_steps % time_multiplier != 0:
+        logger.error("Specified time multiplier (%d) does not subdivide underlying step count (%d)", time_multiplier, net_num_steps)
+        raise ValueError(f"Invalid time multiplier {time_multiplier} for steps {net_num_steps}")
+    net_num_steps = net_num_steps // time_multiplier
+    generate_net_finalstep_fn = eqx.filter_jit(
+        functools.partial(
+            generate_network_finalstep,
+            num_steps=net_num_steps,
+            step_dt=live_gen_args["dt"] * time_multiplier,
+        )
+    )
+    logger.info("Multiplier takes %d underlying network steps", net_num_steps)
+
+    @skip_for_early_epochs
+    def net_noise_gen_onestep_func(epoch, rng_ctr, net):
+        # Open a basic loader on the training set
+        fields = determine_required_fields(
+            itertools.chain(
+                net_info["input_channels"],
+                net_info["output_channels"],
+            )
+        )
+        fixed_train_path = pathlib.Path(train_path)
+        train_name = fixed_train_path.parts[-2]
+        if "train" not in train_name:
+            logger.warning("Live generation train file appears to not be a training set")
+        # The default training files are shuffled, we need to use the base file
+        fixed_train_path = fixed_train_path.absolute().parent / "data.hdf5"
+
+        def generate_onestep_trajs():
+            with ns_loader.SimpleNSLoader(file_path=fixed_train_path, fields=fields) as ref_loader:
+                max_trajs = ref_loader.num_trajs
+                if batch_size_limit is not None:
+                    batch_size = min(batch_size_limit, num_candidates)
+                else:
+                    batch_size = num_candidates
+                while True:
+                    batch = []
+                    for _ in range(batch_size):
+                        traj = np_rng.integers(max_trajs).item()
+                        step = np_rng.integers(low=0, high=ref_loader.num_steps - rollout_net_steps).item()
+                        traj_data = ref_loader.get_trajectory(traj, step, step + rollout_net_steps + 1)
+                        batch.append(traj_data)
+                    traj_data = jax.tree_util.tree_map(lambda *args: jnp.stack(args, axis=0), *batch)
+                    init_state = jax.tree_util.tree_map(lambda d: d[:, 0], traj_data)
+                    net_u, net_v = np.asarray(generate_net_finalstep_fn(net, init_state))
+                    assert net_u.shape == net_v.shape
+                    assert net_u.shape[0] == batch_size
+                    # Split into batches
+                    for batch_idx in range(batch_size):
+                        state_u = net_u[batch_idx]
+                        state_v = net_v[batch_idx]
+                        state_u_corr = np.expand_dims(np.asarray(traj_data.u_corr[batch_idx, -1]), 0)
+                        state_v_corr = np.expand_dims(np.asarray(traj_data.v_corr[batch_idx, -1]), 0)
+                        if not np.all(np.isfinite(state_u)) and np.all(np.isfinite(state_v)):
+                            logger.warning("Dropping one trajectory for NaNs")
+                            continue
+                        yield ns_loader.LoadedState(
+                            u=state_u,
+                            v=state_v,
+                            u_corr=state_u_corr,
+                            v_corr=state_v_corr,
+                        )
+        # Return results
+        result_stats = {
+            "num_winners": num_winners,
+            "num_candidates": num_candidates,
+        }
+        return itertools.islice(generate_onestep_trajs(), num_candidates), result_stats, rng_ctr
+
+    @skip_for_early_epochs
+    def schedule_only(epoch, rng_ctr, net):
+        result_stats = {
+            "num_winners": num_winners,
+            "num_candidates": num_candidates,
+        }
+        return [], result_stats, rng_ctr
+
+    match live_gen_mode:
+        case "network-noise-onestep":
+            logger.info("Live generation with net noise of %d using only single step %d", num_candidates, rollout_net_steps)
+            return net_noise_gen_onestep_func
+        case "schedule-only":
+            logger.info("Live generation for schedule purposes only")
+            return schedule_only
+        case _:
+            raise ValueError(f"invalid live generation mode {live_gen_mode}")
+
 
 
 def save_network(output_name, output_dir, state, base_logger=None):
@@ -1648,25 +1894,48 @@ def main(args):
         noise_spec[chan_name.strip()] = np.array([float(v.strip()) for v in var.strip().split(",")])
 
     # Live generation function
-    live_gen_func = make_live_gen_func(
-        start_epoch=args.live_gen_start_epoch,
-        interval=args.live_gen_interval,
-        sample_conf=args.live_gen_sampler,
-        num_candidates=args.live_gen_candidates,
-        num_winners=args.live_gen_winners,
-        np_rng=np_rng,
-        logger=logger.getChild("live-gen"),
-        model_params=model_params,
-        net_info=network_info,
-        live_gen_mode=args.live_gen_mode,
-        train_path=live_gen_path,
-        rollout_net_steps=args.live_gen_net_steps,
-        **live_sample_get_args(
+    if system_type == "ns":
+        live_gen_func = make_live_gen_func_ns(
+            start_epoch=args.live_gen_start_epoch,
+            interval=args.live_gen_interval,
+            num_candidates=args.live_gen_candidates,
+            num_winners=args.live_gen_winners,
+            np_rng=np_rng,
+            logger=logger.getChild("ns-live-gen"),
+            live_gen_mode=args.live_gen_mode,
+            time_multiplier=args.live_gen_time_multiplier,
+            net_info=network_info,
             train_path=live_gen_path,
-            required_fields=required_fields,
-            logger=logger.getChild("live-sample-params"),
-        ),
-    )
+            rollout_net_steps=args.live_gen_net_steps,
+            batch_size_limit=args.live_gen_batch_size_limit,
+            live_gen_args=live_sample_get_args(
+                train_path=live_gen_path,
+                required_fields=required_fields,
+                logger=logger.getChild("live-sample-params"),
+            ),
+            model_params=model_params,
+        )
+    else:
+        live_gen_func = make_live_gen_func(
+            start_epoch=args.live_gen_start_epoch,
+            interval=args.live_gen_interval,
+            sample_conf=args.live_gen_sampler,
+            num_candidates=args.live_gen_candidates,
+            num_winners=args.live_gen_winners,
+            np_rng=np_rng,
+            logger=logger.getChild("qg-live-gen"),
+            model_params=model_params,
+            net_info=network_info,
+            live_gen_mode=args.live_gen_mode,
+            train_path=live_gen_path,
+            rollout_net_steps=args.live_gen_net_steps,
+            time_multiplier=args.live_gen_time_multiplier,
+            **live_sample_get_args(
+                train_path=live_gen_path,
+                required_fields=required_fields,
+                logger=logger.getChild("live-sample-params"),
+            ),
+        )
 
     # Open data files
     with contextlib.ExitStack() as train_context:
