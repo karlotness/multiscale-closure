@@ -1753,16 +1753,21 @@ def make_val_loader(
     file_path,
     required_fields,
     system_type,
+    base_logger=None,
 ):
+    if base_logger is None:
+        base_logger = logging.getLogger("val_loaders")
     if system_type == "qg":
         return SimpleQGLoader(
             file_path=file_path,
             fields=required_fields,
+            base_logger=base_logger,
         )
     elif system_type == "ns":
         return ns_loader.SimpleNSLoader(
             file_path=file_path,
             fields=required_fields,
+            base_logger=base_logger,
         )
     else:
         raise ValueError(f"unsupported system {system_type}")
