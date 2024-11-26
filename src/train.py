@@ -1682,70 +1682,80 @@ def make_train_loader(
     required_fields,
     noise_weight=None,
 ):
+    if noise_weight is not None:
+        noise_weights = [1, noise_weight, noise_weight]
+    else:
+        noise_weights = None
     if system_type == "qg":
-        if noise_weight is not None:
-            noise_weights = [1, noise_weight, noise_weight]
-        else:
-            noise_weights = None
-        return AggregateLoader(
-            loaders=[
+        try:
+            loaders = []
+            loaders.append(
                 ThreadedPreShuffledSnapshotLoader(
                     file_path=train_path,
                     batch_size=batch_size,
                     chunk_size=loader_chunk_size,
                     buffer_size=10,
                     seed=np_rng.integers(2**32).item(),
-                    base_logger=base_logger.getChild("train_loader"),
+                    base_logger=base_logger.getChild("qg_train_loader"),
                     fields=required_fields,
-                ),
-                FillableDataLoader(
-                    batch_size=batch_size,
-                    fields=required_fields,
-                    seed=np_rng.integers(2**32).item(),
-                ),
-                FillableDataLoader(
-                    batch_size=batch_size,
-                    fields=required_fields,
-                    seed=np_rng.integers(2**32).item(),
-                ),
-            ],
-            batch_size=batch_size,
-            seed=np_rng.integers(2**32).item(),
-            loader_weights=noise_weights,
-        )
+                )
+            )
+            for i in range(2):
+                loaders.append(
+                    FillableDataLoader(
+                        batch_size=batch_size,
+                        fields=required_fields,
+                        seed=np_rng.integers(2**32).item(),
+                        base_logger=base_logger.getChild(f"qg_fill_{i + 1}"),
+                    )
+                )
+            ret = AggregateLoader(
+                loaders=loaders,
+                batch_size=batch_size,
+                seed=np_rng.integers(2**32).item(),
+                loader_weights=noise_weights,
+                base_logger=base_logger.getChild("qg_agg"),
+            )
+            loaders = ()
+            return ret
+        finally:
+            for loader in loaders:
+                loader.close()
     elif system_type == "ns":
-        if noise_weight is not None:
-            noise_weights = [1, noise_weight, noise_weight]
-        else:
-            noise_weights = None
-        return ns_loader.NSAggregateLoader(
-            loaders=[
+        try:
+            loaders = []
+            loaders.append(
                 ns_loader.NSThreadedPreShuffledSnapshotLoader(
                     file_path=train_path,
                     batch_size=batch_size,
                     buffer_size=10,
                     chunk_size=loader_chunk_size,
                     seed=np_rng.integers(2**32).item(),
-                    base_logger=base_logger.getChild("train_loader"),
+                    base_logger=base_logger.getChild("ns_train_loader"),
                     fields=required_fields,
-                ),
-                ns_loader.NSFillableDataLoader(
-                    batch_size=batch_size,
-                    fields=required_fields,
-                    seed=np_rng.integers(2**32).item(),
-                    base_logger=base_logger.getChild("ns-fill-1"),
-                ),
-                ns_loader.NSFillableDataLoader(
-                    batch_size=batch_size,
-                    fields=required_fields,
-                    seed=np_rng.integers(2**32).item(),
-                    base_logger=base_logger.getChild("ns-fill-2"),
-                ),
-            ],
-            batch_size=batch_size,
-            seed=np_rng.integers(2**32).item(),
-            loader_weights=noise_weights,
-        )
+                )
+            )
+            for i in range(2):
+                loaders.append(
+                    ns_loader.NSFillableDataLoader(
+                        batch_size=batch_size,
+                        fields=required_fields,
+                        seed=np_rng.integers(2**32).item(),
+                        base_logger=base_logger.getChild(f"ns_fill_{i + 1}"),
+                    )
+                )
+            ret = ns_loader.NSAggregateLoader(
+                loaders=loaders,
+                batch_size=batch_size,
+                seed=np_rng.integers(2**32).item(),
+                loader_weights=noise_weights,
+                base_logger=base_logger.getChild("ns_agg"),
+            )
+            loaders = ()
+            return ret
+        finally:
+            for loader in loaders:
+                loader.close()
     else:
         raise ValueError(f"unsupported system {system_type}")
 
@@ -1953,7 +1963,7 @@ def main(args):
                 system_type=system_type,
                 batch_size=args.batch_size,
                 loader_chunk_size=args.loader_chunk_size,
-                base_logger=logger,
+                base_logger=logger.getChild("train_loaders"),
                 np_rng=np_rng,
                 required_fields=required_fields,
                 noise_weight=args.live_gen_noise_weight,
@@ -1964,6 +1974,7 @@ def main(args):
                 file_path=val_path,
                 required_fields=required_fields,
                 system_type=system_type,
+                base_logger=logger.getChild("val_loaders"),
             )
         )
 
