@@ -675,6 +675,8 @@ def make_live_gen_func_ns(
                     )
                 )(init_state)
 
+            # *very* important to call this resulting function only under a JIT decorator!
+            # (due to hacky temporary gin config above)
             return vec_fn(ns_packed_net, init_state)
 
     # Account for base dataset subsampling and user-specified time_multiplier
