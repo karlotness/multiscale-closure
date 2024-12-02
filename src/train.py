@@ -1687,8 +1687,8 @@ def make_train_loader(
     else:
         noise_weights = None
     if system_type == "qg":
+        loaders = []
         try:
-            loaders = []
             loaders.append(
                 ThreadedPreShuffledSnapshotLoader(
                     file_path=train_path,
@@ -1722,8 +1722,8 @@ def make_train_loader(
             for loader in loaders:
                 loader.close()
     elif system_type == "ns":
+        loaders = []
         try:
-            loaders = []
             loaders.append(
                 ns_loader.NSThreadedPreShuffledSnapshotLoader(
                     file_path=train_path,
