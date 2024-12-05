@@ -34,7 +34,9 @@ def clear_global_delay(key):
 def subprocess_retry(*args, retries=5, retry_delay=5.0, **kwargs):
     for try_count in range(retries):
         try:
-            proc = subprocess.run(*args, **kwargs, check=True, capture_output=True)
+            kwargs["check"] = True
+            kwargs["capture_output"] = True
+            proc = subprocess.run(*args, **kwargs)
         except subprocess.CalledProcessError as e:
             print(f"# WARNING failed to launch try {try_count + 1} of {retries}")
             stdout = codecs.decode(e.stdout, encoding="utf8").strip()
