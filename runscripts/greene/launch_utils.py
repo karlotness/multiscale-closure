@@ -26,6 +26,33 @@ def global_delay(delay, key):
     global_delays[key] = time.monotonic()
 
 
+def clear_global_delay(key):
+    global global_delays
+    global_delays.pop(key, None)
+
+
+def subprocess_retry(*args, retries=5, retry_delay=5.0, **kwargs):
+    for try_count in range(retries):
+        try:
+            proc = subprocess.run(*args, **kwargs, check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            print(f"# WARNING failed to launch try {try_count + 1} of {retries}")
+            stdout = codecs.decode(e.stdout, encoding="utf8").strip()
+            stderr = codecs.decode(e.stderr, encoding="utf8").strip()
+            for line in filter(bool, stdout.split("\n")):
+                print(f"# stdout: {line}")
+            for line in filter(bool, stderr.split("\n")):
+                print(f"# stderr: {line}")
+            if try_count >= retries - 1:
+                # This was the last try
+                raise
+            else:
+                global_delay(retry_delay, "subprocess_retry")
+        else:
+            clear_global_delay("subprocess_retry")
+            return proc
+
+
 def sbatch_launch(args, *, dependency_ids=None, time_limit=None, job_name=None, cpus=1, gpus=0, mem_gb=25):
     global dry_run_counter
     extra_sbatch_args = []
@@ -48,7 +75,7 @@ def sbatch_launch(args, *, dependency_ids=None, time_limit=None, job_name=None, 
     print("sbatch", " ".join(f"'{a}'" for a in args))
     if not DRY_RUN:
         global_delay(0.5, "sbatch")
-        proc = subprocess.run(["sbatch"] + args, check=True, capture_output=True)
+        proc = subprocess_retry(["sbatch"] + args, check=True, capture_output=True, retries=10, retry_delay=5.0)
         output = codecs.decode(proc.stdout, encoding="utf8").strip()
         m = re.match(r"^\s*(?P<jobid>[^;]+)(?:;|$)", output)
         if m:
