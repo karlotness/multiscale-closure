@@ -17,11 +17,13 @@ def enable_real_launch():
 global_delays = {}
 def global_delay(delay, key):
     global global_delays
-    now = time.monotonic()
     prev = global_delays.get(key)
-    global_delays[key] = now
     if prev is not None:
-        time.sleep(max(0, delay - (now - prev)))
+        elapsed = time.monotonic() - prev
+    else:
+        elapsed = 0
+    time.sleep(max(0, delay - elapsed))
+    global_delays[key] = time.monotonic()
 
 
 def sbatch_launch(args, *, dependency_ids=None, time_limit=None, job_name=None, cpus=1, gpus=0, mem_gb=25):
