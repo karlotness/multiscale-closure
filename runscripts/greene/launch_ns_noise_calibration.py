@@ -135,7 +135,7 @@ def launch_training(
         args.extend(["--output_channels", f"ns_uv_corr_{scale:d}"])
     if processing_size is not None:
         args.extend([f"--processing_size={processing_size:d}"])
-    return lu.container_cmd_launch(args, time_limit="15:00:00", job_name="train", cpus=2, gpus=1, mem_gb=32, dependency_ids=dependency_ids)
+    return lu.container_cmd_launch(args, time_limit="15:00:00", job_name="train", cpus=2, gpus=1, mem_gb=12, dependency_ids=dependency_ids)
 
 
 def launch_sequential_training(
@@ -219,7 +219,7 @@ def launch_sequential_training(
             time_limit="15:00:00",
             job_name="seq-train",
             cpus=2,
-            mem_gb=32,
+            mem_gb=12,
             gpus=1,
             dependency_ids=dependency_ids,
         )
