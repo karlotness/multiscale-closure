@@ -3,6 +3,7 @@ import pathlib
 import re
 import subprocess
 import time
+import shlex
 
 
 DRY_RUN = True
@@ -74,7 +75,7 @@ def sbatch_launch(args, *, dependency_ids=None, time_limit=None, job_name=None, 
         extra_sbatch_args.extend([f"--gres=gpu:{gpus:d}"])
     extra_sbatch_args.append(f"--mem={mem_gb:d}GB")
     args = ["--parsable"] + extra_sbatch_args + [str(a) for a in args]
-    print("sbatch", " ".join(f"'{a}'" for a in args))
+    print(shlex.join(["sbatch"] + args))
     if not DRY_RUN:
         global_delay(0.5, "sbatch")
         proc = subprocess_retry(["sbatch"] + args, check=True, capture_output=True, retries=10, retry_delay=5.0)
@@ -92,7 +93,7 @@ def sbatch_launch(args, *, dependency_ids=None, time_limit=None, job_name=None, 
 
 
 def raw_cmd_launch(args, *, dependency_ids=None, time_limit=None, job_name=None, cpus=1, gpus=0, mem_gb=2):
-    cmd_str = " ".join(str(a) for a in args)
+    cmd_str = shlex.join([str(a) for a in args])
     return sbatch_launch(
         ["--wrap", cmd_str],
         dependency_ids=dependency_ids,
@@ -108,7 +109,7 @@ def copy_dir_launch(src, dst, *, dependency_ids=None, job_name=None):
     src = pathlib.Path(src).absolute()
     dst = pathlib.Path(dst).absolute()
     return raw_cmd_launch(
-        [f"cp -a \"{src}\" \"{dst}\""],
+        ["cp", "-a", src, dst],
         dependency_ids=dependency_ids,
         time_limit="00:30:00",
         job_name=job_name,
@@ -131,6 +132,7 @@ def container_cmd_launch(args, *, dependency_ids=None, time_limit=None, job_name
 
 
 def dry_run_mkdir(dir_path):
-    print("mkdir -p", f"'{pathlib.Path(dir_path).resolve()}'")
+    dir_path = pathlib.Path(dir_path).absolute()
+    print(shlex.join(["mkdir", "-p", str(dir_path)]))
     if not DRY_RUN:
-        pathlib.Path(dir_path).mkdir(parents=True, exist_ok=True)
+        dir_path.mkdir(parents=True, exist_ok=True)
