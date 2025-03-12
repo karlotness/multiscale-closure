@@ -20,9 +20,6 @@ readonly TRAIN_STEP="$3"
 readonly PROCESSING_LEVELS="$4"
 
 # Begin execution
-module purge
-module load git/2.31.0
-
 # Make Bash more strict
 shopt -s failglob
 set -euo pipefail

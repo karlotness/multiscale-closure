@@ -19,8 +19,6 @@ readonly ORIGIN_REPO_DIR="${HOME}/repos/closure.git"
 readonly CHECKOUT_DIR="${JOBTMP_DIR}/Closure/"
 
 # Clone Repository
-module purge
-module load git/2.31.0
 mkdir -p "$CHECKOUT_DIR"
 git clone "$ORIGIN_REPO_DIR" "$CHECKOUT_DIR"
 
