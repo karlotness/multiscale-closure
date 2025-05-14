@@ -1,4 +1,4 @@
-# Data-driven multiscale modeling of subgrid parameterizations in climate models
+# Data-driven multiscale modeling for correcting dynamical systems
 
 This repository stores the code associated with our paper available
 from [arXiv][arxiv] and appeared at an earlier stage at the [ICLR 2023
@@ -26,9 +26,9 @@ If you make use of this software, please cite the associated paper:
 ```bibtex
 @article{multiscaleclosure24,
   author={Karl Otness and Laure Zanna and Joan Bruna},
-  title={Data-driven multiscale modeling of subgrid parameterizations in climate models},
+  title={Data-driven multiscale modeling for correcting dynamical systems},
   journal={arXiv Preprint},
-  year={2024},
+  year={2025},
   url = {https://arxiv.org/abs/2303.17496}
 }
 ```
