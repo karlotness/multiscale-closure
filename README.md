@@ -1,5 +1,7 @@
 # Data-driven multiscale modeling for correcting dynamical systems
 
+[![Zenodo](https://zenodo.org/badge/983620273.svg)][zenodo]
+
 This repository stores the code associated with [our paper][mlst] also
 available on [arXiv][arxiv] and which appeared at an earlier stage at
 the [ICLR 2023 workshop][ccai] on Tackling Climate Change with Machine
@@ -46,3 +48,4 @@ the MIT license. See [LICENSE.txt](LICENSE.txt) for details.
 [apptainer]: https://apptainer.org/
 [pip]: https://pip.pypa.io/
 [pyqgjax]: https://github.com/karlotness/pyqg-jax
+[zenodo]: https://doi.org/10.5281/zenodo.17645365
