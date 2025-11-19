@@ -1,8 +1,9 @@
 # Data-driven multiscale modeling for correcting dynamical systems
 
-This repository stores the code associated with our paper available
-from [arXiv][arxiv] and appeared at an earlier stage at the [ICLR 2023
-workshop][ccai] on Tackling Climate Change with Machine Learning.
+This repository stores the code associated with [our paper][mlst] also
+available on [arXiv][arxiv] and which appeared at an earlier stage at
+the [ICLR 2023 workshop][ccai] on Tackling Climate Change with Machine
+Learning where it won "Best ML Innovation".
 
 The code in this repository can be used to recreate our experiments or
 to modify our approach to work with additional systems. During our own
@@ -24,12 +25,12 @@ our software. For manual environment setup, dependencies are listed in
 
 If you make use of this software, please cite the associated paper:
 ```bibtex
-@article{multiscaleclosure24,
+@article{multiscaleclosure25,
   author={Karl Otness and Laure Zanna and Joan Bruna},
   title={Data-driven multiscale modeling for correcting dynamical systems},
-  journal={arXiv Preprint},
+  journal={Machine Learning: Science and Technology},
   year={2025},
-  url = {https://arxiv.org/abs/2303.17496}
+  doi={10.1088/2632-2153/ae1a36}
 }
 ```
 
@@ -38,6 +39,7 @@ If you make use of this software, please cite the associated paper:
 The software in this repository is made available under the terms of
 the MIT license. See [LICENSE.txt](LICENSE.txt) for details.
 
+[mlst]: https://doi.org/10.1088/2632-2153/ae1a36
 [arxiv]: https://arxiv.org/abs/2303.17496
 [ccai]: https://www.climatechange.ai/papers/iclr2023/60
 [singularity]: https://sylabs.io/docs/
